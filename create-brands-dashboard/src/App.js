@@ -54225,8 +54225,10 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
   const labourBreakdown = useMemo(() => {
     const deptOf = (empId) => { const m = memberOf(empId); return (m?.department || "").trim() || "No department"; };
     const sName = (id) => (stores || []).find(s => s.id === id)?.shortName || (stores || []).find(s => s.id === id)?.name || "—";
-    // Only the selected day's punches, within the store filter.
-    const todays = punchRecords.filter(p => p.date === dayStr && inStore(p.storeId) && p.punchIn);
+    // Selected day's punches PLUS any still-open punch when viewing today.
+    const todays = punchRecords.filter(p =>
+      p.punchIn && inStore(p.storeId) && (p.date === dayStr || (isToday && p.status === "open"))
+    );
     const byStore = {};
     todays.forEach(p => {
       const sid = p.storeId || "—";
@@ -54238,18 +54240,16 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
       if (!st.depts[dept]) st.depts[dept] = { name: dept, total: 0, people: 0, hours: Array.from({length:24},()=>0) };
       st.depts[dept].total += cost;
       st.depts[dept].people += 1;
-      // Spread each punch's cost across the hours it spans (for the time profile).
       const startMs = new Date(p.punchIn).getTime();
       const endMs = p.punchOut ? new Date(p.punchOut).getTime() : Date.now();
       const rate = rateOf(p.employeeId);
       if (rate > 0 && endMs > startMs) {
-        let cursor = startMs;
-        while (cursor < endMs) {
+        let cursor = startMs, guard = 0;
+        while (cursor < endMs && guard++ < 48) {
           const h = new Date(cursor).getHours();
           const nextHour = new Date(cursor); nextHour.setMinutes(60,0,0);
           const segEnd = Math.min(nextHour.getTime(), endMs);
-          const segHrs = (segEnd - cursor) / 3600000;
-          const segCost = Math.round(segHrs * rate * 100) / 100;
+          const segCost = Math.round(((segEnd - cursor) / 3600000) * rate * 100) / 100;
           st.hours[h] += segCost;
           st.depts[dept].hours[h] += segCost;
           cursor = segEnd;
@@ -54262,7 +54262,7 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
       peakHour: s.hours.reduce((best,v,h)=> v>best.v?{h,v}:best, {h:-1,v:0}),
     })).sort((a,b)=>b.total-a.total);
     return stores_;
-  }, [punchRecords, dayStr, storeSel, opsTeam, stores]);
+  }, [punchRecords, dayStr, storeSel, opsTeam, stores, isToday]);
 
 
   const TILES = [
@@ -54515,12 +54515,12 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
       </div>
 
       {/* Store → Department → Time labour breakdown (selected day) */}
-      {labourBreakdown.length > 0 && (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-sm font-bold text-white">Labour breakdown · {dayDate.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}</h3>
             <span className="text-[11px] text-slate-500">by store → department → time</span>
           </div>
+          {labourBreakdown.length === 0 && <div className="text-center py-8 text-sm text-slate-500">No clock-in data for this day and store selection.</div>}
           <div className="space-y-3">
             {labourBreakdown.map(store => {
               const maxDept = Math.max(...store.depts.map(d=>d.total), 1);
@@ -54567,8 +54567,7 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
               );
             })}
           </div>
-        </div>
-      )}
+      </div>
 
       {editPunch && (
         <PunchEditModal
