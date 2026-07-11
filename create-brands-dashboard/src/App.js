@@ -46269,7 +46269,7 @@ function StaffPickerModal({ roster, alreadyOn, storeId, storeName, stores = [], 
   );
 }
 
-function ShiftFormModal({ date, slot, brandId, storeId, memberId, memberName, filterRole, filterDept, opsTeam, availability, shiftPresets, schedules = [], currentUser, onSave, onDelete, onClose }) {
+function ShiftFormModal({ date, slot, brandId, storeId, memberId, memberName, filterRole, filterDept, opsTeam, availability, shiftPresets, schedules = [], currentUser, onSave, onDelete, onRelease, onClose }) {
   const isEdit = !!slot;
   const brandPresets = shiftPresets.filter(p => p.brandId === brandId);
 
@@ -46390,6 +46390,12 @@ function ShiftFormModal({ date, slot, brandId, storeId, memberId, memberName, fi
           <button onClick={() => { onDelete(slot.id); onClose(); }}
             className="p-2.5 rounded-xl bg-red-950/20 border border-red-500/30 text-red-400 hover:bg-red-950/20/60 transition-colors" title="Delete shift">
             <Trash2 size={16}/>
+          </button>
+        )}
+        {isEdit && onRelease && slot?.employeeId && (
+          <button onClick={() => { onRelease(slot); onClose(); }}
+            className="px-3 py-2.5 rounded-xl bg-amber-950/20 border border-amber-500/30 text-amber-400 hover:bg-amber-950/40 transition-colors text-sm font-semibold" title="Unassign and return to open slots">
+            Release
           </button>
         )}
         <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
@@ -47928,6 +47934,11 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
             setShiftModal(null);
           }}
           onDelete={id=>{onDelete(id);setShiftModal(null);}}
+          onRelease={(s)=>{
+            // Unassign the person but KEEP the slot — it returns to the open pool.
+            onAdd({ ...s, employeeId: null, employeeName: "" });
+            setShiftModal(null);
+          }}
           onClose={()=>setShiftModal(null)}
         />
       )}
