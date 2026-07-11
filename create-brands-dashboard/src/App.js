@@ -47998,7 +47998,31 @@ function PlanByRoleModal({ weekDays, weekDayStrs, brandId, storeId, roleNames = 
   // generate that many OPEN shift rows (employeeId empty) to be filled later.
   const presets = (shiftPresets || []).filter(p => !p.archivedAt);
   const defPreset = presets[0] || null;
-  const newRow = () => ({ role: roleNames[0] || "", qty: 1, presetId: defPreset?.id || "", startTime: defPreset?.startTime || "08:00", endTime: defPreset?.endTime || "16:00", days: new Set() });
+
+  // Roles come from the parent, but that list can be stale (e.g. roles were
+  // un-archived after the app loaded). Fetch fresh for THIS store on open and
+  // merge, so the picker always reflects the current Structure roles.
+  const [freshRoles, setFreshRoles] = useState([]);
+  useEffect(() => {
+    let alive = true;
+    if (!storeId) return;
+    fetchStoreRoles()
+      .then(all => {
+        if (!alive) return;
+        const names = (all || [])
+          .filter(r => !r.archivedAt && (!r.storeId || r.storeId === storeId))
+          .map(r => r.name).filter(Boolean);
+        setFreshRoles(names);
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [storeId]);
+  const effectiveRoleNames = useMemo(
+    () => [...new Set([...(freshRoles || []), ...(roleNames || [])])].sort((a,b)=>a.localeCompare(b)),
+    [freshRoles, roleNames]
+  );
+
+  const newRow = () => ({ role: effectiveRoleNames[0] || "", qty: 1, presetId: defPreset?.id || "", startTime: defPreset?.startTime || "08:00", endTime: defPreset?.endTime || "16:00", days: new Set() });
   const [needs, setNeeds] = useState([newRow()]);
   const [busy, setBusy] = useState(false);
 
@@ -48090,7 +48114,7 @@ function PlanByRoleModal({ weekDays, weekDayStrs, brandId, storeId, roleNames = 
 
         {/* Body */}
         <div className="px-6 py-4 space-y-3 overflow-y-auto flex-1">
-          {roleNames.length === 0 && (
+          {effectiveRoleNames.length === 0 && (
             <div className="flex items-start gap-2 text-xs text-[#8a5a1e] bg-[#FBF3E4] border border-[#EFE0C4] rounded-xl px-3 py-2.5">
               <AlertTriangle size={15} className="flex-shrink-0 mt-0.5 text-[#C9854F]"/>
               <span>No roles are set up for this store yet, so you can type a role name freely below. To get the "has role" matching when filling slots, add roles under Team &amp; Roles.</span>
@@ -48106,12 +48130,12 @@ function PlanByRoleModal({ weekDays, weekDayStrs, brandId, storeId, roleNames = 
                 <div className="flex flex-wrap items-end gap-2.5 mb-3">
                   <div className="flex-1 min-w-[140px]">
                     <label className="block text-[10px] uppercase tracking-wide text-[#A8835C] font-bold mb-1">Role</label>
-                    {roleNames.length > 0 ? (
+                    {effectiveRoleNames.length > 0 ? (
                       <select ref={i === 0 ? firstFieldRef : null} value={r.role} onChange={e => updateRow(i, { role: e.target.value })}
                         aria-label="Role"
                         className="w-full bg-white border border-[#E2CFBC] rounded-lg px-2.5 py-2 text-sm text-[#3A2E26] focus:outline-none focus:ring-2 focus:ring-[#C9854F]/40 focus:border-[#C9854F]">
-                        {!roleNames.includes(r.role) && r.role && <option value={r.role}>{r.role}</option>}
-                        {roleNames.map(rn => <option key={rn} value={rn}>{rn}</option>)}
+                        {!effectiveRoleNames.includes(r.role) && r.role && <option value={r.role}>{r.role}</option>}
+                        {effectiveRoleNames.map(rn => <option key={rn} value={rn}>{rn}</option>)}
                       </select>
                     ) : (
                       <input ref={i === 0 ? firstFieldRef : null} value={r.role} onChange={e => updateRow(i, { role: e.target.value })} placeholder="e.g. Barista"
