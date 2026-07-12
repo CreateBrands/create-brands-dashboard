@@ -12955,7 +12955,8 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   const [browseMode, setBrowseMode] = useState("collection"); // nav is collection-based
   const [deptId, setDeptId] = useState("all");           // active Department (top nav), "all" = everything
   const [viewMode, setViewMode] = useState("card");      // "card" | "list"
-  const [groupBy, setGroupBy] = useState("collection");  // collection | supplier | frequency | location | category
+  const [tagFilters, setTagFilters] = useState({ supplier: [], frequency: [], location: [], category: [] });
+  const [filterPanelOpen, setFilterPanelOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
@@ -13069,15 +13070,48 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
+    // A tag filter is active only if that tag has ≥1 selected value. An item
+    // must match at least one selected value WITHIN each active tag (OR within a
+    // tag), and satisfy ALL active tags (AND across tags).
+    const activeTag = (arr) => Array.isArray(arr) && arr.length > 0;
+    const matchesTags = (i) => {
+      if (activeTag(tagFilters.supplier)  && !tagFilters.supplier.includes((i.supplier || "").trim()))     return false;
+      if (activeTag(tagFilters.frequency) && !tagFilters.frequency.includes((i.tagFrequency || "").trim())) return false;
+      if (activeTag(tagFilters.location)  && !tagFilters.location.includes((i.location || "").trim()))      return false;
+      if (activeTag(tagFilters.category)  && !tagFilters.category.includes((i.tagCategory || "").trim()))   return false;
+      return true;
+    };
     return catalogue.filter(i => {
       if (!itemInDept(i)) return false;
-      // Nav is by COLLECTION now. "All" = whole department; otherwise the active
-      // collection. Category is no longer a nav axis (but still searchable below).
       const inFilter = cat === "All" ? true : (i.collectionIds || []).includes(cat);
-      // Search still matches category text as a hidden fallback.
+      if (!matchesTags(i)) return false;
       return inFilter && (!q || `${i.name} ${i.sku} ${i.category}`.toLowerCase().includes(q));
     });
-  }, [catalogue, cat, search, activeDept]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [catalogue, cat, search, activeDept, tagFilters]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Distinct values available for each tag (from the catalogue) — powers the
+  // filter panel's checkboxes.
+  const tagOptions = useMemo(() => {
+    const collect = (getter) => {
+      const s = new Set();
+      catalogue.forEach(i => { const v = (getter(i) || "").trim(); if (v) s.add(v); });
+      return Array.from(s).sort((a, b) => a.localeCompare(b));
+    };
+    return {
+      supplier:  collect(i => i.supplier),
+      frequency: collect(i => i.tagFrequency),
+      location:  collect(i => i.location),
+      category:  collect(i => i.tagCategory),
+    };
+  }, [catalogue]);
+
+  const activeFilterCount = (tagFilters.supplier.length + tagFilters.frequency.length + tagFilters.location.length + tagFilters.category.length);
+  const toggleTagValue = (tag, value) => setTagFilters(prev => {
+    const cur = prev[tag] || [];
+    return { ...prev, [tag]: cur.includes(value) ? cur.filter(v => v !== value) : [...cur, value] };
+  });
+  const clearTagFilters = () => setTagFilters({ supplier: [], frequency: [], location: [], category: [] });
+
 
   // When browsing a whole department ("All" collections), group the visible
   // products by collection so the page shows every collection stacked with a
@@ -13085,28 +13119,6 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   // a time. A product can sit in multiple collections; it appears under each.
   // Anything with no collection falls into a trailing "Other" group.
   const groupedVisible = useMemo(() => {
-    // Tag-based grouping: section the visible items by the chosen tag's value.
-    if (groupBy !== "collection") {
-      const tagOf = (i) => {
-        if (groupBy === "supplier")  return (i.supplier || "").trim();
-        if (groupBy === "frequency") return (i.tagFrequency || "").trim();
-        if (groupBy === "location")  return (i.location || "").trim();
-        if (groupBy === "category")  return (i.tagCategory || "").trim();
-        return "";
-      };
-      const map = new Map();
-      visible.forEach(i => {
-        const key = tagOf(i) || "Untagged";
-        if (!map.has(key)) map.set(key, { id: `tag-${key}`, name: key, items: [] });
-        map.get(key).items.push(i);
-      });
-      // Sort groups alphabetically, but push "Untagged" to the end.
-      const arr = Array.from(map.values()).sort((a, b) => {
-        if (a.name === "Untagged") return 1; if (b.name === "Untagged") return -1;
-        return a.name.localeCompare(b.name);
-      });
-      return arr.length ? arr : null;
-    }
     if (cat !== "All") return null; // a specific collection is selected → flat grid
     if (!activeCollections.length) return null; // no collections → flat grid
     const groups = activeCollections.map(c => ({ id: c.id, name: c.name, items: [] }));
@@ -13120,7 +13132,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
     const result = groups.filter(g => g.items.length > 0);
     if (other.items.length > 0) result.push(other);
     return result;
-  }, [visible, cat, activeCollections, groupBy]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [visible, cat, activeCollections]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // "Buy again": items this customer has ordered before, ranked by how many
   // separate orders they appear in (frequency), then most-recent. Mapped to the
@@ -13279,16 +13291,12 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
           ) : customers.length === 1 ? <div className="text-sm self-center" style={{ color: "#9A8770" }}>{customers[0].name}</div> : null}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Group by: collection (default) or a tag */}
-          <select value={groupBy} onChange={e => setGroupBy(e.target.value)} title="Group items by"
-            className="px-2.5 py-2 rounded-xl text-xs font-semibold"
-            style={{ backgroundColor: groupBy !== "collection" ? "#844429" : "#FDF2E0", color: groupBy !== "collection" ? "#FDF2E0" : "#844429", border: "1px solid #E8DCC6" }}>
-            <option value="collection">Group: Collection</option>
-            <option value="supplier">Group: Supplier</option>
-            <option value="frequency">Group: Daily/Weekly</option>
-            <option value="location">Group: Location</option>
-            <option value="category">Group: Dessert/Café</option>
-          </select>
+          {/* Tag filter: multi-select values; hides non-matching items but keeps structure */}
+          <button onClick={() => setFilterPanelOpen(v => !v)} title="Filter by tags"
+            className="px-3 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5"
+            style={{ backgroundColor: activeFilterCount > 0 ? "#844429" : "#FDF2E0", color: activeFilterCount > 0 ? "#FDF2E0" : "#844429", border: "1px solid #E8DCC6" }}>
+            <Filter size={14}/> Filter{activeFilterCount > 0 ? ` · ${activeFilterCount}` : ""}
+          </button>
           {/* View mode: card vs list */}
           <div className="flex items-center rounded-xl p-0.5" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6" }}>
             <button onClick={() => setViewMode("card")} title="Card view" className="px-2.5 py-1.5 rounded-lg transition-colors" style={viewMode==="card" ? { backgroundColor: "#844429", color: "#FDF2E0" } : { color: "#9A8770" }}><LayoutGrid size={15}/></button>
@@ -13299,6 +13307,43 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
           <button onClick={() => onNavigate ? onNavigate("dist-dashboard") : window.history.back()} className="p-2 rounded-xl" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }} title="Close"><X size={18}/></button>
         </div>
       </div>
+      {/* Tag filter panel — multi-select; hides non-matching items, keeps structure */}
+      {filterPanelOpen && (
+        <div className="px-6 py-3" style={{ backgroundColor: "#FBF6EC", borderBottom: "1px solid #E8DCC6" }}>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-bold uppercase tracking-wide" style={{ color: "#9A8770" }}>Filter items by tag</span>
+            {activeFilterCount > 0 && <button onClick={clearTagFilters} className="text-xs font-semibold" style={{ color: "#844429" }}>Clear all ({activeFilterCount})</button>}
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            {[
+              { key: "supplier",  label: "Supplier",     opts: tagOptions.supplier },
+              { key: "frequency", label: "Daily/Weekly", opts: tagOptions.frequency },
+              { key: "location",  label: "Location",     opts: tagOptions.location },
+              { key: "category",  label: "Dessert/Café", opts: tagOptions.category },
+            ].map(group => (
+              <div key={group.key}>
+                <div className="text-[11px] font-bold mb-1.5" style={{ color: "#6B5D4F" }}>{group.label}</div>
+                {group.opts.length === 0 ? (
+                  <div className="text-[11px]" style={{ color: "#B7A78F" }}>No values</div>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {group.opts.map(val => {
+                      const on = (tagFilters[group.key] || []).includes(val);
+                      return (
+                        <button key={val} onClick={() => toggleTagValue(group.key, val)}
+                          className="px-2 py-1 rounded-lg text-[11px] font-semibold transition-colors"
+                          style={on ? { backgroundColor: "#844429", color: "#FDF2E0" } : { backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#6B5D4F" }}>
+                          {val}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {err && err !== "no-link" && <div className="px-6 py-2 text-xs" style={{ color: "#b91c1c" }}>{err}</div>}
 
 
