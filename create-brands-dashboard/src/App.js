@@ -153,7 +153,7 @@ import {
   fetchInventoryForStore, setStoreItemOverride, clearStoreItemOverride,
   searchStoreInventory, detectInvoicePriceChanges, fetchPriceChanges, applyPriceChange, dismissPriceChange,
   fetchDistTaxRates, fetchDistContacts, upsertDistContact,
-  fetchDistItems, upsertDistItem, deleteDistItem, previewDeleteInactiveDistItems, bulkDeleteInactiveDistItems, fetchStoreItemTags, setStoreItemTag, fetchStoreItemStock, saveStoreItemStock, computeStoreItemUsage, fetchDistBatches, createDistBatch,
+  fetchDistItems, upsertDistItem, deleteDistItem, previewDeleteInactiveDistItems, bulkDeleteInactiveDistItems, fetchStoreItemTags, setStoreItemTag, fetchStoreItemStock, saveStoreItemStock, computeStoreItemUsage, computeStoreItemConsumption, fetchDistBatches, createDistBatch,
   PACKORDER_STAGES, PACKSHIP_STAGES, fetchPackagingOrders, fetchPackagingOrderDetail, upsertPackagingOrder, deletePackagingOrder,
   upsertPackagingLine, deletePackagingLine, upsertPackagingShipment, deletePackagingShipment, receivePackagingShipment,
   addPackagingPayment, deletePackagingPayment, computePackLineStatus, fetchPackagingDashboard,
@@ -13074,9 +13074,8 @@ function AgentAutonomyModal({ autonomy, stores = [], onClose, onSave }) {
 // Item stock-planning popup on the store order page. Shows Stock in hand, Par
 // level, Required stock (manual, saved per store) plus Daily/Weekly requirement
 // calculated from the store's Flipdish sales history.
-function StockDetailModal({ storeId, item, cleanName, unitLabel, onClose, onAddToCart, currentQty }) {
+function StockDetailModal({ storeId, item, usage, usageDays, cleanName, unitLabel, onClose, onAddToCart, currentQty }) {
   const [stock, setStock] = useState({ stockInHand: "", parLevel: "", requiredStock: "" });
-  const [usage, setUsage] = useState(null);       // { dailyAvg, weeklyAvg, days, matchedName } | null
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState("");
@@ -13086,25 +13085,19 @@ function StockDetailModal({ storeId, item, cleanName, unitLabel, onClose, onAddT
     (async () => {
       setLoading(true);
       try {
-        const [s, u] = await Promise.all([
-          fetchStoreItemStock(storeId, item.id).catch(() => null),
-          computeStoreItemUsage(storeId, item.name, { days: 28 }).catch(() => null),
-        ]);
+        const s = await fetchStoreItemStock(storeId, item.id).catch(() => null);
         if (!alive) return;
         if (s) setStock({
           stockInHand:   s.stockInHand   ?? "",
           parLevel:      s.parLevel      ?? "",
           requiredStock: s.requiredStock ?? "",
         });
-        setUsage(u);
       } finally { if (alive) setLoading(false); }
     })();
     return () => { alive = false; };
   }, [storeId, item.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const saveField = async (field, value) => {
-    setStock(prev => ({ ...prev, [field]: value }));
-  };
+  const saveField = (field, value) => setStock(prev => ({ ...prev, [field]: value }));
   const persist = async () => {
     setSaving(true); setSavedMsg("");
     try {
@@ -13152,8 +13145,8 @@ function StockDetailModal({ storeId, item, cleanName, unitLabel, onClose, onAddT
             <>
               {/* Calculated from Flipdish sales */}
               <div className="grid grid-cols-2 gap-2">
-                {calcCard("Daily requirement", usage ? usage.dailyAvg : "—", usage ? `avg/day · last ${usage.days}d` : "no sales match")}
-                {calcCard("Weekly requirement", usage ? usage.weeklyAvg : "—", usage ? "≈ daily × 7" : "no sales match")}
+                {calcCard("Daily requirement", usage ? usage.dailyAvg : "—", usage ? `avg/day · last ${usageDays}d` : "not used in recipes")}
+                {calcCard("Weekly requirement", usage ? usage.weeklyAvg : "—", usage ? "≈ daily × 7" : "no consumption")}
               </div>
               {/* Manual per-store fields */}
               <div className="grid grid-cols-3 gap-2">
@@ -13211,12 +13204,34 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   const [cartOpen, setCartOpen] = useState(false);   // mobile cart drawer
   const [placed, setPlaced] = useState(null);
   const [detailItem, setDetailItem] = useState(null);  // item whose stock popup is open
+  const [consumption, setConsumption] = useState(null); // { byDist, days } from recipe-based usage
 
   const storeIds = currentUser?.storeIds || [];
   // The store whose sales history to use = the SELECTED customer's store (each
   // distribution customer is linked to one store). Falls back to the user's
   // first store. This is what item_day_aggregates.store_id matches.
   const activeStoreId = (customers.find(c => c.id === customerId)?.storeId) || storeIds[0] || "";
+
+  // Recipe-based consumption for the active store (last 28 days), computed once
+  // and looked up per item in the stock popup. Uses the COGS chain: sale →
+  // product → recipe → inventory item → dist item.
+  useEffect(() => {
+    if (!activeStoreId) { setConsumption(null); return; }
+    let alive = true;
+    (async () => {
+      try {
+        const to = new Date();
+        const from = new Date(); from.setDate(from.getDate() - 27);
+        const res = await computeStoreItemConsumption({
+          storeId: activeStoreId,
+          from: from.toISOString().slice(0, 10),
+          to: to.toISOString().slice(0, 10),
+        });
+        if (alive) setConsumption(res);
+      } catch { if (alive) setConsumption(null); }
+    })();
+    return () => { alive = false; };
+  }, [activeStoreId]);
 
   useEffect(() => {
     (async () => {
@@ -13843,6 +13858,8 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
         <StockDetailModal
           storeId={activeStoreId}
           item={detailItem}
+          usage={consumption?.byDist?.[detailItem.id] || null}
+          usageDays={consumption?.days || 28}
           cleanName={cleanName}
           unitLabel={unitLabel}
           currentQty={cart[detailItem.id] || 0}

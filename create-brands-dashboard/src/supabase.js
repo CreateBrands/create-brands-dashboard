@@ -6359,6 +6359,7 @@ const _invMap = (r) => ({
   id: r.id, name: r.name, category: r.category, supplier: r.supplier,
   packDesc: r.pack_desc, packQty: r.pack_qty, baseUnit: r.base_unit, packPrice: r.pack_price,
   costPerBaseUnit: r.cost_per_base_unit, notes: r.notes, location: r.location || null,
+  distItemId: r.dist_item_id || null,
   allergens: r.allergens || [], reorderPoint: r.reorder_point != null ? Number(r.reorder_point) : null,
   siteId: r.site_id || null, archivedAt: r.archived_at || null,
 });
@@ -9234,6 +9235,103 @@ export async function computeStoreTheoreticalCogs({ storeId, from, to } = {}) {
     coverage,                          // 0..1 share of revenue that is costed
     cogsPctOfCosted: costedRevenue > 0 ? cogs / costedRevenue : 0,
     lines: lines.sort((a, b) => b.revenue - a.revenue),
+  };
+}
+
+// Per-distribution-item CONSUMPTION for a store over a period, derived from the
+// same chain as theoretical COGS: sale → POS mapping → product → recipe
+// components (incl. nested preps) → inventory items → dist_item_id. Returns a
+// map { distItemId: { qtyBaseUnit, dailyAvg, weeklyAvg } } plus meta. Because it
+// uses recipes, it covers BOTH finished goods and ingredients that never appear
+// in sales directly (they're consumed when other products sell).
+export async function computeStoreItemConsumption({ storeId, from, to, days } = {}) {
+  if (!storeId) throw new Error("storeId required");
+  const [inv, rec, mapsRaw, salesRaw, ignoredRaw] = await Promise.all([
+    fetchInventory(),
+    fetchRecipes(),
+    fetchPosMappings(storeId),
+    (async () => {
+      let q = supabase.from("item_day_aggregates").select("item, qty, business_date").eq("store_id", storeId);
+      if (from) q = q.gte("business_date", from);
+      if (to)   q = q.lte("business_date", to);
+      const { data, error } = await q; if (error) throw error; return data || [];
+    })(),
+    fetchIgnoredTillNames(storeId).catch(() => []),
+  ]);
+  const ignoredSet = new Set((ignoredRaw || []).map(i => (i.posName || "").trim().toLowerCase()));
+
+  // inventory item key -> distItemId (only STORE items carry dist links; CK is a
+  // separate entity and must never be treated as store distribution stock).
+  const distIdByKey = new Map();
+  (inv.store || []).forEach(x => { if (x.distItemId) distIdByKey.set("store:" + x.id, x.distItemId); });
+
+  const prepById = new Map((rec.preps || []).map(p => [p.id, p]));
+
+  // Accumulate base-unit quantity consumed per inventory item key, for `mult`
+  // servings of a product. Recurses through preps. (Mirrors prepCost/productCost
+  // traversal but sums quantities, not cost.)
+  const consumeInto = (acc, scope, id, kind, subPrepId, portionQty, unit, mult, _seen) => {
+    const qty = portionQty == null || portionQty === "" ? 0 : Number(portionQty);
+    if (kind === "prep" && subPrepId) {
+      const sub = prepById.get(subPrepId);
+      if (!sub) return;
+      const seen = _seen || new Set();
+      if (seen.has(sub.id)) return; // circular guard
+      seen.add(sub.id);
+      const useBatch = !unit || String(unit).trim().toLowerCase() === "batch";
+      // batches of the sub-prep this component uses:
+      const batches = useBatch ? qty : (sub.yieldQty ? qty / Number(sub.yieldQty) : 0);
+      const comps = (rec.prepComponents || []).filter(c => c.prepId === sub.id);
+      comps.forEach(c => consumeInto(acc, c.itemScope, c.itemId, c.kind, c.subPrepId, c.portionQty, c.unit, mult * batches, seen));
+      seen.delete(sub.id);
+    } else {
+      const key = scope + ":" + id;
+      acc.set(key, (acc.get(key) || 0) + qty * mult);
+    }
+  };
+
+  const mapByName = new Map();
+  (mapsRaw || []).forEach(m => { if (m.posName && m.productId) mapByName.set(m.posName.trim().toLowerCase(), m.productId); });
+
+  // Sales aggregated by item name across the range.
+  const byItem = {};
+  (salesRaw || []).forEach(r => {
+    const name = (r.item || "").trim(); if (!name) return;
+    byItem[name] = (byItem[name] || 0) + (Number(r.qty) || 0);
+  });
+
+  // Consume per inventory item across all sold products.
+  const invConsumed = new Map();  // "scope:id" -> base-unit qty
+  let mappedSalesQty = 0, unmappedSalesQty = 0;
+  Object.entries(byItem).forEach(([name, qty]) => {
+    if (ignoredSet.has(name.toLowerCase())) return;
+    const pid = mapByName.get(name.toLowerCase());
+    if (!pid) { unmappedSalesQty += qty; return; }
+    mappedSalesQty += qty;
+    const comps = (rec.productComponents || []).filter(c => c.productId === pid && c.variantId == null);
+    comps.forEach(c => consumeInto(invConsumed, c.itemScope, c.itemId, c.kind, c.subPrepId ?? c.prepId, c.portionQty, c.unit, qty, null));
+  });
+
+  // Roll inventory consumption up to distribution items.
+  const nDays = days || (from && to ? (Math.max(1, Math.round((new Date(to) - new Date(from)) / 86400000) + 1)) : 28);
+  const byDist = {};
+  invConsumed.forEach((qtyBase, key) => {
+    const distId = distIdByKey.get(key);
+    if (!distId) return; // inventory item not linked to a dist item — skip
+    if (!byDist[distId]) byDist[distId] = { distItemId: distId, qtyBaseUnit: 0 };
+    byDist[distId].qtyBaseUnit += qtyBase;
+  });
+  Object.values(byDist).forEach(d => {
+    d.qtyBaseUnit = Math.round(d.qtyBaseUnit * 1000) / 1000;
+    d.dailyAvg = Math.round((d.qtyBaseUnit / nDays) * 1000) / 1000;
+    d.weeklyAvg = Math.round((d.qtyBaseUnit / nDays) * 7 * 1000) / 1000;
+  });
+
+  return {
+    storeId, from: from || null, to: to || null, days: nDays,
+    byDist,                       // { distItemId: { qtyBaseUnit, dailyAvg, weeklyAvg } }
+    mappedSalesQty, unmappedSalesQty,
+    linkedDistItems: Object.keys(byDist).length,
   };
 }
 
