@@ -13128,6 +13128,19 @@ function StockDetailModal({ storeId, item, usage, usageDays, cleanName, unitLabe
 
   const suggested = usage ? Math.max(0, Math.ceil((usage.weeklyAvg || 0) - (Number(stock.stockInHand) || 0))) : null;
 
+  // Consumption comes in the inventory BASE unit (each, g, ml). Convert to the
+  // ORDERING unit (box/pack) using the dist item's pack size so the numbers are
+  // directly usable for ordering. packSizeTotal = how many base units per pack.
+  const packSizeTotal = (Number(item.packCount) || 1) * (Number(item.packSize) || 1);
+  const packUnit = item.packUnit || "pack";
+  const toPacks = (v) => (v == null || packSizeTotal <= 0) ? null : v / packSizeTotal;
+  const dailyPacks  = usage ? toPacks(usage.dailyAvg) : null;
+  const weeklyPacks = usage ? toPacks(usage.weeklyAvg) : null;
+  // Suggested order in packs: (weekly need − stock in hand), rounded UP to whole packs.
+  const stockInHandPacks = Number(stock.stockInHand) || 0; // stock entered in packs
+  const suggestedPacks = usage ? Math.max(0, Math.ceil((weeklyPacks || 0) - stockInHandPacks)) : null;
+  const fmtNum = (v) => v == null ? "—" : (Math.round(v * 100) / 100);
+
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{ backgroundColor: "rgba(58,46,38,0.4)" }} onClick={onClose}>
       <div className="w-full max-w-md rounded-2xl overflow-hidden" style={{ backgroundColor: "#FBF6EC", border: "1px solid #E8DCC6" }} onClick={e => e.stopPropagation()}>
@@ -13143,31 +13156,37 @@ function StockDetailModal({ storeId, item, usage, usageDays, cleanName, unitLabe
             <div className="py-8 text-center text-sm" style={{ color: "#9A8770" }}>Loading…</div>
           ) : (
             <>
-              {/* Calculated from Flipdish sales */}
+              {/* Requirements — shown in ORDERING units (packs/boxes), with the
+                  raw consumption in base units underneath for transparency. */}
               <div className="grid grid-cols-2 gap-2">
-                {calcCard("Daily requirement", usage ? usage.dailyAvg : "—", usage ? `avg/day · last ${usageDays}d` : "not used in recipes")}
-                {calcCard("Weekly requirement", usage ? usage.weeklyAvg : "—", usage ? "≈ daily × 7" : "no consumption")}
+                {calcCard("Daily requirement",
+                  usage ? `${fmtNum(dailyPacks)} ${packUnit}` : "—",
+                  usage ? `${fmtNum(usage.dailyAvg)}/day · last ${usageDays}d` : "not used in recipes")}
+                {calcCard("Weekly requirement",
+                  usage ? `${fmtNum(weeklyPacks)} ${packUnit}` : "—",
+                  usage ? `${fmtNum(usage.weeklyAvg)} units · ÷${packSizeTotal}/pack` : "no consumption")}
               </div>
-              {/* Manual per-store fields */}
+              {/* Manual per-store fields — entered in ordering units (packs/boxes) */}
               <div className="grid grid-cols-3 gap-2">
-                {numField("Stock in hand", "stockInHand")}
+                {numField(`Stock in hand`, "stockInHand")}
                 {numField("Par level", "parLevel")}
                 {numField("Required stock", "requiredStock")}
               </div>
+              <div className="text-[10px] -mt-2" style={{ color: "#9A8770" }}>Quantities in {packUnit}s (1 {packUnit} = {packSizeTotal} {/* base unit */}units)</div>
               {savedMsg && <div className="text-[11px] font-semibold" style={{ color: savedMsg.startsWith("Failed") ? "#A23B2E" : "#3F6B3A" }}>{savedMsg}</div>}
-              {/* Suggested order = weekly requirement − stock in hand */}
+              {/* Suggested order = weekly requirement − stock in hand, in packs */}
               {usage && (
                 <div className="rounded-lg p-2.5 flex items-center justify-between" style={{ backgroundColor: "#EDF3E7", border: "1px solid #CFE0C2" }}>
                   <div>
                     <div className="text-[11px] font-semibold" style={{ color: "#4A6B3A" }}>Suggested to order (week)</div>
                     <div className="text-[10px]" style={{ color: "#6B8757" }}>weekly need − stock in hand</div>
                   </div>
-                  <div className="text-2xl font-black tabular-nums" style={{ color: "#3F6B3A" }}>{suggested}</div>
+                  <div className="text-2xl font-black tabular-nums" style={{ color: "#3F6B3A" }}>{suggestedPacks} <span className="text-sm font-semibold">{packUnit}</span></div>
                 </div>
               )}
-              <button onClick={() => { onAddToCart(item.id, (Number(stock.requiredStock) || suggested || 1)); onClose(); }}
+              <button onClick={() => { onAddToCart(item.id, (Number(stock.requiredStock) || suggestedPacks || 1)); onClose(); }}
                 className="w-full py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-1.5" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>
-                <Plus size={15}/> Add {stock.requiredStock ? `${stock.requiredStock}` : (suggested || "")} to order
+                <Plus size={15}/> Add {stock.requiredStock ? `${stock.requiredStock}` : (suggestedPacks || "")} to order
               </button>
               {currentQty > 0 && <div className="text-[11px] text-center" style={{ color: "#9A8770" }}>{currentQty} already in your order</div>}
             </>
