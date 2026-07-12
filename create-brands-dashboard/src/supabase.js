@@ -9746,6 +9746,8 @@ const mapDistItem = (i) => ({
   ckProductId: i.ck_product_id || null,
   reorderPoint: i.reorder_point != null ? Number(i.reorder_point) : 0, imageUrl: i.image_url || "",
   itemType: i.item_type || "warehouse", // "warehouse" (stocked) | "ck" | "fresh" (non-stocked)
+  location: i.location || "", supplier: i.supplier || "",
+  tagFrequency: i.tag_frequency || "", tagCategory: i.tag_category || "",
   active: i.active !== false, createdAt: i.created_at,
 });
 const mapDistBatch = (b) => ({
@@ -9840,6 +9842,8 @@ export async function upsertDistItem(i) {
     income_account_code: i.incomeAccountCode || null, expense_account_code: i.expenseAccountCode || null,
     ck_product_id: i.ckProductId || null,
     item_type: i.itemType || (i.ckProductId ? "ck" : "warehouse"),
+    location: i.location || null, supplier: i.supplier || null,
+    tag_frequency: i.tagFrequency || null, tag_category: i.tagCategory || null,
     reorder_point: i.reorderPoint != null && i.reorderPoint !== "" ? Number(i.reorderPoint) : 0, image_url: i.imageUrl || null,
     active: i.active !== false,
   };

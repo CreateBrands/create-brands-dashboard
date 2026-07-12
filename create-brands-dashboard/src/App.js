@@ -11689,6 +11689,92 @@ function DistOrderBuilderView() {
     setMsg(`Exported ${rows.length} rows.`);
   };
 
+  // ── Import items from Excel (match by SKU; update existing + add new) ────────
+  // No data loss: existing item fields are preserved and only overlaid by the
+  // columns present in the sheet. Tag values are normalised (case + known typos).
+  const [importing, setImporting] = useState(false);
+  const [importReport, setImportReport] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const normLocation = (v) => {
+    const s = String(v || "").trim();
+    if (!s) return "";
+    const low = s.toLowerCase().replace(/\s+/g, "");
+    if (low === "freezer") return "Freezer";
+    if (low === "fridge") return "Fridge";
+    // any fridge+freezer combination (incl. typos) → canonical
+    if (low.includes("fridge") && (low.includes("freezer") || low.includes("freezere"))) return "Fridge/Freezer";
+    return s;
+  };
+  const normFrequency = (v) => {
+    const s = String(v || "").trim();
+    if (!s) return "";
+    const low = s.toLowerCase();
+    if (low === "weekly") return "Weekly";
+    if (low === "daily") return "Daily";
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  };
+  const normCategory = (v) => {
+    const s = String(v || "").trim();
+    if (!s) return "";
+    const low = s.toLowerCase();
+    if (low === "café" || low === "cafe") return "Café";
+    if (low === "dessert") return "Dessert";
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  };
+
+  const handleImportFile = async (file) => {
+    if (!file) return;
+    if (!XLSX) { setMsg("Excel still loading — try again in a moment."); return; }
+    setImporting(true); setMsg(""); setImportReport(null);
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { defval: "" });
+      // Freshest item list so SKU matching is against current data.
+      const current = await fetchDistItems();
+      const bySku = new Map();
+      current.forEach(it => { const k = String(it.sku || "").trim().toLowerCase(); if (k) bySku.set(k, it); });
+
+      let updated = 0, added = 0, skipped = 0;
+      const errors = [];
+      for (const r of rows) {
+        const name = String(r.Item || "").trim();
+        if (!name || name === "(no items)") { skipped++; continue; }
+        const sku = String(r.SKU || "").trim();
+        if (!sku) { skipped++; errors.push(`No SKU: "${name}"`); continue; }
+        const existing = bySku.get(sku.toLowerCase()) || null;
+        // Merge: start from existing (preserve all its fields), overlay sheet cols.
+        const merged = { ...(existing || {}) };
+        merged.sku = sku;
+        merged.name = name.replace(/-\(.*\)$/, "").trim() || name; // strip pack suffix if present
+        if (r.Category !== undefined && r.Category !== "") merged.category = String(r.Category).trim();
+        if (r["Buy £"] !== undefined && r["Buy £"] !== "") merged.purchaseRate = Number(r["Buy £"]);
+        if (r["Sell £"] !== undefined && r["Sell £"] !== "") merged.sellRate = Number(r["Sell £"]);
+        if (r.Type !== undefined && r.Type !== "") merged.itemType = String(r.Type).trim();
+        // The 4 tag columns (normalised).
+        if (r.Location     !== undefined) merged.location     = normLocation(r.Location);
+        if (r.Supplier     !== undefined) merged.supplier     = String(r.Supplier || "").trim();
+        if (r["Daily/Weekly"] !== undefined) merged.tagFrequency = normFrequency(r["Daily/Weekly"]);
+        if (r["Dessert/Café"] !== undefined) merged.tagCategory  = normCategory(r["Dessert/Café"]);
+        merged.changedBy = "order-page-import";
+        try {
+          await upsertDistItem(merged);
+          if (existing) updated++; else added++;
+        } catch (e) { errors.push(`${name}: ${e.message}`); }
+      }
+      setImportReport({ updated, added, skipped, errors });
+      setMsg(`Imported: ${updated} updated, ${added} added${skipped ? `, ${skipped} skipped` : ""}.`);
+      await reload();
+    } catch (e) {
+      setMsg(`Import failed: ${e.message}`);
+    } finally {
+      setImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
 
   const deptList = cfg.departments || [];
   const assignedCollIds = useMemo(() => {
@@ -11919,6 +12005,8 @@ function DistOrderBuilderView() {
           {msg && <span className="text-xs font-semibold" style={{ color: msg.startsWith("Save failed") ? "#A23B2E" : "#3F6B3A" }}>{msg}</span>}
           {dirty && <span className="text-[11px] font-semibold px-2 py-1 rounded-lg" style={{ background: "#F7EBD4", color: "#8A5A12" }}>Unsaved changes</span>}
           <button onClick={exportItems} disabled={loading} className="px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1" style={{ background: C.surfaceAlt, color: C.accent, border: `1px solid ${C.line}` }}><FileText size={14}/> Export items</button>
+          <input ref={fileInputRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={e => handleImportFile(e.target.files?.[0])}/>
+          <button onClick={() => fileInputRef.current?.click()} disabled={importing || loading} className="px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1" style={{ background: C.surfaceAlt, color: C.accent, border: `1px solid ${C.line}` }}><FileText size={14}/> {importing ? "Importing…" : "Import items"}</button>
           <button onClick={reload} disabled={saving} className="px-3 py-2 rounded-xl text-sm font-semibold" style={{ background: C.surfaceAlt, color: C.accent, border: `1px solid ${C.line}` }}>Reset</button>
           <button onClick={saveAll} disabled={saving || !dirty} className="px-4 py-2 rounded-xl text-sm font-bold text-white" style={{ background: dirty ? "#3F6B3A" : "#B7C4AE", cursor: dirty ? "pointer" : "default" }}>{saving ? "Saving…" : "Save layout"}</button>
         </div>
