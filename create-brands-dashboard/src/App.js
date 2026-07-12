@@ -13213,6 +13213,10 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   const [detailItem, setDetailItem] = useState(null);  // item whose stock popup is open
 
   const storeIds = currentUser?.storeIds || [];
+  // The store whose sales history to use = the SELECTED customer's store (each
+  // distribution customer is linked to one store). Falls back to the user's
+  // first store. This is what item_day_aggregates.store_id matches.
+  const activeStoreId = (customers.find(c => c.id === customerId)?.storeId) || storeIds[0] || "";
 
   useEffect(() => {
     (async () => {
@@ -13258,7 +13262,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
         // Overlay this store's per-store Daily/Weekly cadence onto the catalogue
         // (falls back to the item's global tag_frequency when not set for the store).
         let finalRows = rows;
-        const sid = storeIds[0];
+        const sid = (customers.find(c => c.id === customerId)?.storeId) || storeIds[0];
         if (sid) {
           try {
             const stTags = await fetchStoreItemTags(sid);
@@ -13837,7 +13841,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
       )}
       {detailItem && (
         <StockDetailModal
-          storeId={storeIds[0]}
+          storeId={activeStoreId}
           item={detailItem}
           cleanName={cleanName}
           unitLabel={unitLabel}
