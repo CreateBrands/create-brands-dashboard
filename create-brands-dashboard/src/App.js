@@ -11645,16 +11645,38 @@ function DistOrderBuilderView({ stores = [] }) {
 
   // Effective Daily/Weekly for an item at the selected store: store override if
   // set, else the item's global tag_frequency (fallback).
-  const effFrequency = (it) => storeTags[it.id]?.tagFrequency || it.tagFrequency || "";
-  const saveStoreFreq = async (itemId, value) => {
+  // Effective value of a tag for an item at the selected store: store override
+  // if set, else the item's global value. `field`: tagFrequency|supplier|location|tagCategory.
+  const GLOBAL_TAG = { tagFrequency: "tagFrequency", supplier: "supplier", location: "location", tagCategory: "tagCategory" };
+  const effTag = (it, field) => (storeTags[it.id]?.[field]) || it[GLOBAL_TAG[field]] || "";
+  const hasOverride = (it, field) => !!(storeTags[it.id]?.[field]);
+  const saveStoreTag = async (itemId, field, value) => {
     if (!tagStoreId) return;
-    setSavingTag(itemId);
+    setSavingTag(itemId + ":" + field);
     try {
-      await setStoreItemTag(tagStoreId, itemId, value);
-      setStoreTags(prev => ({ ...prev, [itemId]: { tagFrequency: value } }));
+      await setStoreItemTag(tagStoreId, itemId, field, value);
+      setStoreTags(prev => ({ ...prev, [itemId]: { ...(prev[itemId] || {}), [field]: value } }));
     } catch (e) { setMsg(`Save failed: ${e.message}`); }
     setSavingTag("");
   };
+  // Distinct existing values for each tag, drawn from all items' global values
+  // AND any per-store overrides already set — powers the dropdowns.
+  const tagValueOptions = useMemo(() => {
+    const pull = (globalField) => {
+      const s = new Set();
+      items.forEach(it => { const v = (it[globalField] || "").trim(); if (v) s.add(v); });
+      Object.values(storeTags).forEach(t => {
+        const v = (t[globalField] || "").trim(); if (v) s.add(v);
+      });
+      return Array.from(s).sort((a, b) => a.localeCompare(b));
+    };
+    return {
+      tagFrequency: pull("tagFrequency"),
+      supplier: pull("supplier"),
+      location: pull("location"),
+      tagCategory: pull("tagCategory"),
+    };
+  }, [items, storeTags]);
 
   const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
   const markDirty = () => setDirty(true);
@@ -11916,6 +11938,64 @@ function DistOrderBuilderView({ stores = [] }) {
     </span>
   );
 
+  // Per-store tag picker: shows the effective value, opens a dropdown of existing
+  // values + "add new". Choosing a value saves it for the selected store; "Use
+  // global" clears the override (falls back to the item's global tag).
+  const TagPicker = ({ label, field, it }) => {
+    const [open, setOpen] = useState(false);
+    const [adding, setAdding] = useState(false);
+    const [newVal, setNewVal] = useState("");
+    const eff = effTag(it, field);
+    const override = hasOverride(it, field);
+    const opts = tagValueOptions[field] || [];
+    const isSaving = savingTag === (it.id + ":" + field);
+    return (
+      <div className="relative">
+        <button onClick={() => setOpen(o => !o)} disabled={isSaving}
+          className="px-2 py-1 rounded-md text-[11px] font-semibold flex items-center gap-1 transition-colors"
+          style={eff
+            ? { background: override ? "#844429" : C.surfaceAlt, color: override ? "#FDF2E0" : C.inkSoft, border: override ? "none" : `1px solid ${C.line}` }
+            : { background: C.surface, color: C.inkFaint, border: `1px dashed ${C.line}` }}
+          title={`${label}${override ? " (store-specific)" : eff ? " (global)" : ""}`}>
+          <span className="opacity-60">{label}:</span>{eff || "—"}
+        </button>
+        {open && (
+          <>
+            <div className="fixed inset-0 z-20" onClick={() => { setOpen(false); setAdding(false); }}/>
+            <div className="absolute right-0 mt-1 z-30 rounded-lg shadow-lg py-1 min-w-[140px]" style={{ background: C.surface, border: `1px solid ${C.line}` }}>
+              <button onClick={() => { saveStoreTag(it.id, field, ""); setOpen(false); }}
+                className="w-full text-left px-3 py-1.5 text-[11px] hover:opacity-80" style={{ color: C.inkSoft }}>
+                Use global{it[GLOBAL_TAG[field]] ? ` (${it[GLOBAL_TAG[field]]})` : ""}
+              </button>
+              <div style={{ borderTop: `1px solid ${C.line}` }}/>
+              {opts.map(v => (
+                <button key={v} onClick={() => { saveStoreTag(it.id, field, v); setOpen(false); }}
+                  className="w-full text-left px-3 py-1.5 text-[11px] hover:opacity-80 flex items-center justify-between"
+                  style={{ color: C.ink }}>
+                  {v}{eff === v && <Check size={12} style={{ color: C.accent }}/>}
+                </button>
+              ))}
+              <div style={{ borderTop: `1px solid ${C.line}` }}/>
+              {adding ? (
+                <div className="px-2 py-1.5 flex items-center gap-1">
+                  <input autoFocus value={newVal} onChange={e => setNewVal(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter" && newVal.trim()) { saveStoreTag(it.id, field, newVal.trim()); setOpen(false); setAdding(false); setNewVal(""); } }}
+                    placeholder="New value" className="flex-1 px-2 py-1 rounded text-[11px] w-24" style={{ background: C.surfaceAlt, border: `1px solid ${C.line}`, color: C.ink }}/>
+                  <button onClick={() => { if (newVal.trim()) { saveStoreTag(it.id, field, newVal.trim()); setOpen(false); setAdding(false); setNewVal(""); } }}
+                    className="px-2 py-1 rounded text-[11px] font-semibold" style={{ background: "#844429", color: "#FDF2E0" }}>Add</button>
+                </div>
+              ) : (
+                <button onClick={() => setAdding(true)} className="w-full text-left px-3 py-1.5 text-[11px] font-semibold flex items-center gap-1" style={{ color: C.accent }}>
+                  <Plus size={11}/> Add new
+                </button>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    );
+  };
+
   const ItemRow = ({ itemId, collId }) => {
     const it = itemById.get(itemId);
     if (!it) return null;
@@ -11935,29 +12015,21 @@ function DistOrderBuilderView({ stores = [] }) {
           <div className="text-sm font-medium truncate" style={{ color: C.ink }}>{cleanName(it.name)}</div>
           {it.category && <div className="text-[10px] truncate" style={{ color: C.inkFaint }}>{it.category}</div>}
         </div>
-        {/* Daily/Weekly cadence: per-store editable when a store is selected,
-            else the global value shown read-only. */}
-        {tagStoreId ? (() => {
-          const eff = effFrequency(it);
-          const override = storeTags[it.id]?.tagFrequency;
-          const isSaving = savingTag === it.id;
-          return (
-            <div className="flex items-center gap-1 flex-shrink-0" title={override ? "Store-specific" : "Falling back to global"}>
-              {["Daily","Weekly"].map(opt => (
-                <button key={opt} disabled={isSaving}
-                  onClick={() => saveStoreFreq(it.id, eff === opt ? "" : opt)}
-                  className="px-2 py-1 rounded-md text-[11px] font-semibold transition-colors"
-                  style={eff === opt
-                    ? { background: "#844429", color: "#FDF2E0" }
-                    : { background: C.surfaceAlt, color: C.inkSoft, border: `1px solid ${C.line}` }}>
-                  {opt.charAt(0)}
-                </button>
-              ))}
-              {!override && eff && <span className="text-[9px]" style={{ color: C.inkFaint }}>(global)</span>}
-            </div>
-          );
-        })() : (
-          it.tagFrequency && <div className="text-[10px] font-semibold flex-shrink-0 px-1.5 py-0.5 rounded" style={{ background: C.surfaceAlt, color: C.inkSoft }}>{it.tagFrequency}</div>
+        {/* Per-store tags: all 4 editable when a store is selected, else the
+            item's global values shown read-only. */}
+        {tagStoreId ? (
+          <div className="flex items-center gap-1.5 flex-shrink-0 flex-wrap justify-end" style={{ maxWidth: 420 }}>
+            <TagPicker label="Freq"     field="tagFrequency" it={it}/>
+            <TagPicker label="Supplier" field="supplier"     it={it}/>
+            <TagPicker label="Loc"      field="location"     it={it}/>
+            <TagPicker label="Cat"      field="tagCategory"  it={it}/>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1 flex-shrink-0 flex-wrap justify-end" style={{ maxWidth: 340 }}>
+            {[it.tagFrequency, it.supplier, it.location, it.tagCategory].filter(Boolean).map((v, n) => (
+              <span key={n} className="text-[10px] font-semibold px-1.5 py-0.5 rounded" style={{ background: C.surfaceAlt, color: C.inkSoft }}>{v}</span>
+            ))}
+          </div>
         )}
         <div className="text-xs font-semibold flex-shrink-0" style={{ color: C.accent }}>{gbp(it.price)}</div>
       </div>
@@ -13076,8 +13148,16 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
           try {
             const stTags = await fetchStoreItemTags(sid);
             finalRows = rows.map(it => {
-              const ov = stTags[it.id]?.tagFrequency;
-              return ov ? { ...it, tagFrequency: ov } : it;
+              const ov = stTags[it.id];
+              if (!ov) return it;
+              // Apply each per-store override that's set; otherwise keep global.
+              return {
+                ...it,
+                tagFrequency: ov.tagFrequency || it.tagFrequency,
+                supplier:     ov.supplier     || it.supplier,
+                location:     ov.location     || it.location,
+                tagCategory:  ov.tagCategory  || it.tagCategory,
+              };
             });
           } catch { /* non-fatal — fall back to global tags */ }
         }
