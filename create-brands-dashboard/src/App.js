@@ -54255,12 +54255,37 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
     const todays = punchRecords.filter(p =>
       p.punchIn && inStore(p.storeId) && (p.date === dayStr || (isToday && p.status === "open"))
     );
+    // Pre-pass: total hours per salaried person that day (all stores) so we can
+    // split their fixed daily salary proportionally, like the drill-down does.
+    const salDayHours = {};
+    todays.forEach(p => {
+      const m = memberOf(p.employeeId);
+      if (!isSalaried(m)) return;
+      const end = p.punchOut ? new Date(p.punchOut).getTime() : Date.now();
+      const start = new Date(p.punchIn).getTime();
+      const h = Math.max(0, (end - start) / 3600000);
+      salDayHours[p.employeeId] = (salDayHours[p.employeeId] || 0) + h;
+    });
+    // Cost of a single punch: hourly = hours×rate; salaried = daily salary × this
+    // store's share of the person's hours that day.
+    const costOfPunch = (p) => {
+      const m = memberOf(p.employeeId);
+      if (isSalaried(m)) {
+        const end = p.punchOut ? new Date(p.punchOut).getTime() : Date.now();
+        const start = new Date(p.punchIn).getTime();
+        const h = Math.max(0, (end - start) / 3600000);
+        const dayTotal = salDayHours[p.employeeId] || 0;
+        const share = dayTotal > 0 ? (h / dayTotal) : 1;
+        return Math.round(salariedDailyCost(m) * share * 100) / 100;
+      }
+      return punchCostOf(p);
+    };
     const byStore = {};
     todays.forEach(p => {
       const sid = p.storeId || "—";
       if (!byStore[sid]) byStore[sid] = { sid, name: sName(sid), total: 0, depts: {}, hours: Array.from({length:24},()=>0) };
       const st = byStore[sid];
-      const cost = punchCostOf(p);
+      const cost = costOfPunch(p);
       st.total += cost;
       const dept = deptOf(p.employeeId);
       if (!st.depts[dept]) st.depts[dept] = { name: dept, total: 0, people: 0, hours: Array.from({length:24},()=>0) };
@@ -54268,14 +54293,19 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
       st.depts[dept].people += 1;
       const startMs = new Date(p.punchIn).getTime();
       const endMs = p.punchOut ? new Date(p.punchOut).getTime() : Date.now();
-      const rate = rateOf(p.employeeId);
-      if (rate > 0 && endMs > startMs) {
+      // Time profile: hourly staff use their rate; salaried spread their slice
+      // evenly across the hours they worked at this store.
+      const m = memberOf(p.employeeId);
+      const salaried = isSalaried(m);
+      const spanHrs = Math.max(0, (endMs - startMs)/3600000);
+      const perHourCost = salaried ? (spanHrs > 0 ? cost / spanHrs : 0) : rateOf(p.employeeId);
+      if (perHourCost > 0 && endMs > startMs) {
         let cursor = startMs, guard = 0;
         while (cursor < endMs && guard++ < 48) {
           const h = new Date(cursor).getHours();
           const nextHour = new Date(cursor); nextHour.setMinutes(60,0,0);
           const segEnd = Math.min(nextHour.getTime(), endMs);
-          const segCost = Math.round(((segEnd - cursor) / 3600000) * rate * 100) / 100;
+          const segCost = Math.round(((segEnd - cursor) / 3600000) * perHourCost * 100) / 100;
           st.hours[h] += segCost;
           st.depts[dept].hours[h] += segCost;
           cursor = segEnd;
