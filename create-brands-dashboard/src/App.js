@@ -26467,33 +26467,42 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         if (!groups.has(dept)) groups.set(dept, { hours: 0, cost: 0, rows: [] });
         const g = groups.get(dept); g.hours += h; g.cost += c; g.rows.push(row);
       };
-      // Track salaried staff already costed for a given day, so a person who
-      // clocked in at MULTIPLE stores in one day is charged their fixed daily
-      // salary ONCE (at their first punch), not once per store/punch.
-      const salariedDayCharged = new Set();
+      // Pre-pass: for each salaried person per day, total the hours they worked
+      // ACROSS ALL stores. Their fixed daily salary is then split between stores
+      // in proportion to hours worked at each (e.g. 4h London + 6h Narborough on
+      // an £85/day salary → £34 + £51). This replaces charging the full salary at
+      // every store, which double-counted multi-store salaried staff.
+      const salDayHours = {};   // `${empId}|${date}` -> total hours that day (ALL stores)
+      (data.curPunch || []).forEach(p => {
+        const member = (opsTeam || []).find(m => m.id === p.employeeId);
+        if (!isSalaried(member)) return;
+        const open = (p.status === "open" || !p.punchOut);
+        const h = open ? punchHours(p) : (p.hoursWorked || 0);
+        const k = `${p.employeeId}|${p.date}`;
+        salDayHours[k] = (salDayHours[k] || 0) + h;
+      });
       punches.forEach(p => {
         const open = (p.status === "open" || !p.punchOut);
         const member = (opsTeam || []).find(m => m.id === p.employeeId);
         const salaried = isSalaried(member);
         const h = open ? punchHours(p) : (p.hoursWorked || 0);
         totHours += h;
-        // Salaried daily cost is charged once per person per day.
-        let salDayKey = null, alreadyCharged = false;
+        // Salaried: split the daily salary across this person's stores in
+        // proportion to hours. If day-hours are 0 (edge case), attribute in full.
+        let rowCost, salShare = 0;
         if (salaried) {
-          salDayKey = `${p.employeeId}|${p.date}`;
-          alreadyCharged = salariedDayCharged.has(salDayKey);
-          if (!alreadyCharged) salariedDayCharged.add(salDayKey);
+          const dayTotal = salDayHours[`${p.employeeId}|${p.date}`] || 0;
+          salShare = dayTotal > 0 ? (h / dayTotal) : 1;
+          rowCost = Math.round(salariedDailyCost(member) * salShare * 100) / 100;
+        } else {
+          rowCost = open ? punchCost(p) : (p.grossPay || 0);
         }
-        const rowCost = salaried
-          ? (alreadyCharged ? 0 : salariedDailyCost(member))
-          : (open ? punchCost(p) : (p.grossPay || 0));
         totCost += rowCost;
         const implausible = !open && (p.hoursWorked || 0) > 16;
         const hoursCell = open ? `${punchHours(p).toFixed(2)}h (live)` : `${(p.hoursWorked||0).toFixed(2)}h${implausible ? " ⚠ check punch" : ""}`;
-        // Salaried: cost is the fixed daily slice, not hours×rate. Second+ store
-        // of the day shows £0 with a note (already counted).
+        // Salaried: show the store's proportional slice, flagged when it's a split.
         const costCell = salaried
-          ? (alreadyCharged ? "£0 (already counted today)" : `${fmtCurrency(salariedDailyCost(member))} /day (salaried)`)
+          ? `${fmtCurrency(rowCost)}${salShare < 0.999 ? ` (salaried · ${Math.round(salShare*100)}% of day)` : " /day (salaried)"}`
           : (open ? `${fmtCurrency(punchCost(p))} (live)` : fmtCurrency(p.grossPay || 0));
         addTo(deptOf(member), [ p.employeeName || "—", nameOfStore(p.storeId), p.date || "—", hoursCell, costCell ], h, rowCost);
       });
