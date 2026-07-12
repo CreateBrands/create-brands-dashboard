@@ -26467,19 +26467,33 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         if (!groups.has(dept)) groups.set(dept, { hours: 0, cost: 0, rows: [] });
         const g = groups.get(dept); g.hours += h; g.cost += c; g.rows.push(row);
       };
+      // Track salaried staff already costed for a given day, so a person who
+      // clocked in at MULTIPLE stores in one day is charged their fixed daily
+      // salary ONCE (at their first punch), not once per store/punch.
+      const salariedDayCharged = new Set();
       punches.forEach(p => {
         const open = (p.status === "open" || !p.punchOut);
         const member = (opsTeam || []).find(m => m.id === p.employeeId);
         const salaried = isSalaried(member);
         const h = open ? punchHours(p) : (p.hoursWorked || 0);
         totHours += h;
-        const rowCost = salaried ? salariedDailyCost(member) : (open ? punchCost(p) : (p.grossPay || 0));
+        // Salaried daily cost is charged once per person per day.
+        let salDayKey = null, alreadyCharged = false;
+        if (salaried) {
+          salDayKey = `${p.employeeId}|${p.date}`;
+          alreadyCharged = salariedDayCharged.has(salDayKey);
+          if (!alreadyCharged) salariedDayCharged.add(salDayKey);
+        }
+        const rowCost = salaried
+          ? (alreadyCharged ? 0 : salariedDailyCost(member))
+          : (open ? punchCost(p) : (p.grossPay || 0));
         totCost += rowCost;
         const implausible = !open && (p.hoursWorked || 0) > 16;
         const hoursCell = open ? `${punchHours(p).toFixed(2)}h (live)` : `${(p.hoursWorked||0).toFixed(2)}h${implausible ? " ⚠ check punch" : ""}`;
-        // Salaried: cost is the fixed daily slice, not hours×rate.
+        // Salaried: cost is the fixed daily slice, not hours×rate. Second+ store
+        // of the day shows £0 with a note (already counted).
         const costCell = salaried
-          ? `${fmtCurrency(salariedDailyCost(member))} /day (salaried)`
+          ? (alreadyCharged ? "£0 (already counted today)" : `${fmtCurrency(salariedDailyCost(member))} /day (salaried)`)
           : (open ? `${fmtCurrency(punchCost(p))} (live)` : fmtCurrency(p.grossPay || 0));
         addTo(deptOf(member), [ p.employeeName || "—", nameOfStore(p.storeId), p.date || "—", hoursCell, costCell ], h, rowCost);
       });
