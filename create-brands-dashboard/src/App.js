@@ -13260,6 +13260,34 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   });
   const clearTagFilters = () => setTagFilters({ supplier: [], frequency: [], location: [], category: [] });
 
+  // Which facet dropdown is open (only one at a time). null = none.
+  const [openFacet, setOpenFacet] = useState(null);
+  // Count of items matching each facet VALUE, given the OTHER active facets
+  // (faceted counts: selecting Supplier updates Location counts, etc.).
+  const facetCounts = useMemo(() => {
+    const inDeptItems = catalogue.filter(itemInDept);
+    const matchExcept = (i, exceptTag) => {
+      const chk = (tag, get) => {
+        if (tag === exceptTag) return true;
+        const sel = tagFilters[tag] || [];
+        return sel.length === 0 || sel.includes((get(i) || "").trim());
+      };
+      return chk("supplier", x => x.supplier) && chk("frequency", x => x.tagFrequency)
+        && chk("location", x => x.location) && chk("category", x => x.tagCategory);
+    };
+    const countFor = (tag, get) => {
+      const m = {};
+      inDeptItems.forEach(i => { if (matchExcept(i, tag)) { const v = (get(i) || "").trim(); if (v) m[v] = (m[v] || 0) + 1; } });
+      return m;
+    };
+    return {
+      supplier:  countFor("supplier",  x => x.supplier),
+      frequency: countFor("frequency", x => x.tagFrequency),
+      location:  countFor("location",  x => x.location),
+      category:  countFor("category",  x => x.tagCategory),
+    };
+  }, [catalogue, tagFilters, activeDept]); // eslint-disable-line react-hooks/exhaustive-deps
+
 
   // When browsing a whole department ("All" collections), group the visible
   // products by collection so the page shows every collection stacked with a
@@ -13455,43 +13483,84 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
           <button onClick={() => onNavigate ? onNavigate("dist-dashboard") : window.history.back()} className="p-2 rounded-xl" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }} title="Close"><X size={18}/></button>
         </div>
       </div>
-      {/* Tag filter panel — multi-select; hides non-matching items, keeps structure */}
-      {filterPanelOpen && (
-        <div className="px-6 py-3" style={{ backgroundColor: "#FBF6EC", borderBottom: "1px solid #E8DCC6" }}>
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs font-bold uppercase tracking-wide" style={{ color: "#9A8770" }}>Filter items by tag</span>
-            {activeFilterCount > 0 && <button onClick={clearTagFilters} className="text-xs font-semibold" style={{ color: "#844429" }}>Clear all ({activeFilterCount})</button>}
-          </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-            {[
-              { key: "supplier",  label: "Supplier",     opts: tagOptions.supplier },
-              { key: "frequency", label: "Daily/Weekly", opts: tagOptions.frequency },
-              { key: "location",  label: "Location",     opts: tagOptions.location },
-              { key: "category",  label: "Dessert/Café", opts: tagOptions.category },
-            ].map(group => (
-              <div key={group.key}>
-                <div className="text-[11px] font-bold mb-1.5" style={{ color: "#6B5D4F" }}>{group.label}</div>
-                {group.opts.length === 0 ? (
-                  <div className="text-[11px]" style={{ color: "#B7A78F" }}>No values</div>
-                ) : (
-                  <div className="flex flex-wrap gap-1.5">
-                    {group.opts.map(val => {
-                      const on = (tagFilters[group.key] || []).includes(val);
-                      return (
-                        <button key={val} onClick={() => toggleTagValue(group.key, val)}
-                          className="px-2 py-1 rounded-lg text-[11px] font-semibold transition-colors"
-                          style={on ? { backgroundColor: "#844429", color: "#FDF2E0" } : { backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#6B5D4F" }}>
-                          {val}
-                        </button>
-                      );
-                    })}
+      {/* Faceted filter bar: one dropdown per facet + active-filter chips.
+          OR within a facet, AND across facets. Hides non-matching items but
+          keeps the collection structure intact. */}
+      {filterPanelOpen && (() => {
+        const FACETS = [
+          { key: "supplier",  label: "Supplier",     opts: tagOptions.supplier,  counts: facetCounts.supplier },
+          { key: "frequency", label: "Daily/Weekly", opts: tagOptions.frequency, counts: facetCounts.frequency },
+          { key: "location",  label: "Location",     opts: tagOptions.location,  counts: facetCounts.location },
+          { key: "category",  label: "Dessert/Café", opts: tagOptions.category,  counts: facetCounts.category },
+        ];
+        return (
+          <div className="px-6 py-2.5" style={{ backgroundColor: "#FBF6EC", borderBottom: "1px solid #E8DCC6" }}>
+            {/* Facet dropdown toggles */}
+            <div className="flex items-center gap-2 flex-wrap">
+              {FACETS.map(f => {
+                const sel = tagFilters[f.key] || [];
+                const isOpen = openFacet === f.key;
+                return (
+                  <div key={f.key} className="relative">
+                    <button onClick={() => setOpenFacet(isOpen ? null : f.key)}
+                      className="px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
+                      style={sel.length > 0
+                        ? { backgroundColor: "#844429", color: "#FDF2E0" }
+                        : { backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#6B5D4F" }}>
+                      {f.label}
+                      {sel.length > 0 && <span className="px-1.5 rounded-full text-[10px]" style={{ backgroundColor: "#FDF2E0", color: "#844429" }}>{sel.length}</span>}
+                      <ChevronDown size={13} style={{ transform: isOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }}/>
+                    </button>
+                    {isOpen && (
+                      <>
+                        <div className="fixed inset-0 z-30" onClick={() => setOpenFacet(null)}/>
+                        <div className="absolute left-0 mt-1 z-40 rounded-xl shadow-lg py-1.5 max-h-72 overflow-y-auto min-w-[200px]" style={{ backgroundColor: "#FBF6EC", border: "1px solid #E8DCC6" }}>
+                          {f.opts.length === 0 ? (
+                            <div className="px-3 py-2 text-[11px]" style={{ color: "#B7A78F" }}>No values yet</div>
+                          ) : f.opts.map(val => {
+                            const on = sel.includes(val);
+                            const cnt = f.counts[val] || 0;
+                            return (
+                              <button key={val} onClick={() => toggleTagValue(f.key, val)}
+                                className="w-full px-3 py-1.5 text-xs flex items-center gap-2 hover:opacity-80"
+                                style={{ color: cnt === 0 && !on ? "#C4B69E" : "#3A2E26" }}>
+                                <span className="w-4 h-4 rounded flex items-center justify-center flex-shrink-0"
+                                  style={on ? { backgroundColor: "#844429" } : { border: "1.5px solid #C9B79A" }}>
+                                  {on && <Check size={11} style={{ color: "#FDF2E0" }}/>}
+                                </span>
+                                <span className="flex-1 text-left truncate">{val}</span>
+                                <span className="text-[10px] tabular-nums" style={{ color: "#9A8770" }}>{cnt}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </>
+                    )}
                   </div>
-                )}
+                );
+              })}
+              {activeFilterCount > 0 && (
+                <button onClick={clearTagFilters} className="px-2.5 py-1.5 rounded-lg text-xs font-semibold" style={{ color: "#A23B2E" }}>
+                  Clear all
+                </button>
+              )}
+            </div>
+            {/* Active-filter chips (always show what's applied) */}
+            {activeFilterCount > 0 && (
+              <div className="flex items-center gap-1.5 flex-wrap mt-2">
+                {FACETS.flatMap(f => (tagFilters[f.key] || []).map(val => (
+                  <button key={`${f.key}:${val}`} onClick={() => toggleTagValue(f.key, val)}
+                    className="px-2 py-0.5 rounded-full text-[11px] font-semibold flex items-center gap-1"
+                    style={{ backgroundColor: "#EFE3CE", color: "#6B5D4F" }}>
+                    <span className="opacity-60">{f.label}:</span>{val}
+                    <X size={11}/>
+                  </button>
+                )))}
               </div>
-            ))}
+            )}
           </div>
-        </div>
-      )}
+        );
+      })()}
       {err && err !== "no-link" && <div className="px-6 py-2 text-xs" style={{ color: "#b91c1c" }}>{err}</div>}
 
 
