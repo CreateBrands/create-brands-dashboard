@@ -9926,6 +9926,71 @@ export async function setStoreItemTag(storeId, itemId, field, value) {
   };
 }
 
+// ── Per-store stock planning (stock in hand / par / required) ────────────────
+export async function fetchStoreItemStock(storeId, itemId) {
+  if (!storeId || !itemId) return null;
+  const { data, error } = await supabase.from("dist_item_store_stock")
+    .select("stock_in_hand, par_level, required_stock")
+    .eq("store_id", storeId).eq("item_id", itemId).maybeSingle();
+  if (error) throw error;
+  if (!data) return { stockInHand: null, parLevel: null, requiredStock: null };
+  return {
+    stockInHand:   data.stock_in_hand   != null ? Number(data.stock_in_hand)   : null,
+    parLevel:      data.par_level        != null ? Number(data.par_level)        : null,
+    requiredStock: data.required_stock   != null ? Number(data.required_stock)   : null,
+  };
+}
+
+export async function saveStoreItemStock(storeId, itemId, patch) {
+  if (!storeId || !itemId) throw new Error("store and item required");
+  const num = (v) => (v === "" || v == null || isNaN(Number(v))) ? null : Number(v);
+  const row = { store_id: storeId, item_id: itemId, updated_at: new Date().toISOString() };
+  if ("stockInHand"   in patch) row.stock_in_hand  = num(patch.stockInHand);
+  if ("parLevel"      in patch) row.par_level      = num(patch.parLevel);
+  if ("requiredStock" in patch) row.required_stock = num(patch.requiredStock);
+  const { data, error } = await supabase.from("dist_item_store_stock")
+    .upsert(row, { onConflict: "store_id,item_id" }).select().maybeSingle();
+  if (error) throw error;
+  return {
+    stockInHand:   data?.stock_in_hand   != null ? Number(data.stock_in_hand)   : null,
+    parLevel:      data?.par_level        != null ? Number(data.par_level)        : null,
+    requiredStock: data?.required_stock   != null ? Number(data.required_stock)   : null,
+  };
+}
+
+// Average daily units sold for an item at a store, from Flipdish item sales
+// (item_day_aggregates) over a trailing window. Matches by item name (case-
+// insensitive, ignoring a trailing "-(1*30pcs)" pack suffix). Returns
+// { dailyAvg, weeklyAvg, days, matchedName, totalQty } or null if no match.
+export async function computeStoreItemUsage(storeId, itemName, { days = 28 } = {}) {
+  if (!storeId || !itemName) return null;
+  const to = new Date();
+  const from = new Date(); from.setDate(from.getDate() - days);
+  const fromStr = from.toISOString().slice(0, 10);
+  const toStr = to.toISOString().slice(0, 10);
+  const { data, error } = await supabase.from("item_day_aggregates")
+    .select("item, qty, business_date")
+    .eq("store_id", storeId)
+    .gte("business_date", fromStr).lte("business_date", toStr);
+  if (error) throw error;
+  const rows = data || [];
+  // Normalise names for matching: lowercase, strip pack suffix + punctuation.
+  const norm = (s) => String(s || "").toLowerCase().replace(/-?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").replace(/[^a-z0-9]+/g, " ").trim();
+  const target = norm(itemName);
+  if (!target) return null;
+  let totalQty = 0; let matchedName = null;
+  rows.forEach(r => {
+    if (norm(r.item) === target) { totalQty += Number(r.qty) || 0; matchedName = matchedName || r.item; }
+  });
+  if (matchedName == null) return null;   // no sales match → caller shows "—"
+  const dailyAvg = totalQty / days;
+  return {
+    dailyAvg: Math.round(dailyAvg * 100) / 100,
+    weeklyAvg: Math.round(dailyAvg * 7 * 100) / 100,
+    days, matchedName, totalQty,
+  };
+}
+
 // Human-readable diff between the old DB row and the new row for history.
 function describeDistItemChanges(before, after) {
   const fields = [

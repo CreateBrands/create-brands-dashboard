@@ -153,7 +153,7 @@ import {
   fetchInventoryForStore, setStoreItemOverride, clearStoreItemOverride,
   searchStoreInventory, detectInvoicePriceChanges, fetchPriceChanges, applyPriceChange, dismissPriceChange,
   fetchDistTaxRates, fetchDistContacts, upsertDistContact,
-  fetchDistItems, upsertDistItem, deleteDistItem, previewDeleteInactiveDistItems, bulkDeleteInactiveDistItems, fetchStoreItemTags, setStoreItemTag, fetchDistBatches, createDistBatch,
+  fetchDistItems, upsertDistItem, deleteDistItem, previewDeleteInactiveDistItems, bulkDeleteInactiveDistItems, fetchStoreItemTags, setStoreItemTag, fetchStoreItemStock, saveStoreItemStock, computeStoreItemUsage, fetchDistBatches, createDistBatch,
   PACKORDER_STAGES, PACKSHIP_STAGES, fetchPackagingOrders, fetchPackagingOrderDetail, upsertPackagingOrder, deletePackagingOrder,
   upsertPackagingLine, deletePackagingLine, upsertPackagingShipment, deletePackagingShipment, receivePackagingShipment,
   addPackagingPayment, deletePackagingPayment, computePackLineStatus, fetchPackagingDashboard,
@@ -13071,6 +13071,120 @@ function AgentAutonomyModal({ autonomy, stores = [], onClose, onSave }) {
   );
 }
 
+// Item stock-planning popup on the store order page. Shows Stock in hand, Par
+// level, Required stock (manual, saved per store) plus Daily/Weekly requirement
+// calculated from the store's Flipdish sales history.
+function StockDetailModal({ storeId, item, cleanName, unitLabel, onClose, onAddToCart, currentQty }) {
+  const [stock, setStock] = useState({ stockInHand: "", parLevel: "", requiredStock: "" });
+  const [usage, setUsage] = useState(null);       // { dailyAvg, weeklyAvg, days, matchedName } | null
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [savedMsg, setSavedMsg] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true);
+      try {
+        const [s, u] = await Promise.all([
+          fetchStoreItemStock(storeId, item.id).catch(() => null),
+          computeStoreItemUsage(storeId, item.name, { days: 28 }).catch(() => null),
+        ]);
+        if (!alive) return;
+        if (s) setStock({
+          stockInHand:   s.stockInHand   ?? "",
+          parLevel:      s.parLevel      ?? "",
+          requiredStock: s.requiredStock ?? "",
+        });
+        setUsage(u);
+      } finally { if (alive) setLoading(false); }
+    })();
+    return () => { alive = false; };
+  }, [storeId, item.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const saveField = async (field, value) => {
+    setStock(prev => ({ ...prev, [field]: value }));
+  };
+  const persist = async () => {
+    setSaving(true); setSavedMsg("");
+    try {
+      await saveStoreItemStock(storeId, item.id, {
+        stockInHand: stock.stockInHand, parLevel: stock.parLevel, requiredStock: stock.requiredStock,
+      });
+      setSavedMsg("Saved");
+      setTimeout(() => setSavedMsg(""), 2000);
+    } catch (e) { setSavedMsg(`Failed: ${e.message}`); }
+    setSaving(false);
+  };
+
+  const numField = (label, field) => (
+    <div>
+      <label className="text-[11px] font-semibold" style={{ color: "#6B5D4F" }}>{label}</label>
+      <input type="number" value={stock[field]} onChange={e => saveField(field, e.target.value)} onBlur={persist}
+        placeholder="—" className="mt-1 w-full px-3 py-2 rounded-lg text-sm tabular-nums"
+        style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
+    </div>
+  );
+  const calcCard = (label, value, sub) => (
+    <div className="rounded-lg p-2.5" style={{ backgroundColor: "#F3EADA", border: "1px solid #E8DCC6" }}>
+      <div className="text-[11px] font-semibold" style={{ color: "#6B5D4F" }}>{label}</div>
+      <div className="text-xl font-black tabular-nums mt-0.5" style={{ color: "#844429" }}>{value}</div>
+      {sub && <div className="text-[10px]" style={{ color: "#9A8770" }}>{sub}</div>}
+    </div>
+  );
+
+  const suggested = usage ? Math.max(0, Math.ceil((usage.weeklyAvg || 0) - (Number(stock.stockInHand) || 0))) : null;
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{ backgroundColor: "rgba(58,46,38,0.4)" }} onClick={onClose}>
+      <div className="w-full max-w-md rounded-2xl overflow-hidden" style={{ backgroundColor: "#FBF6EC", border: "1px solid #E8DCC6" }} onClick={e => e.stopPropagation()}>
+        <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid #E8DCC6" }}>
+          <div className="min-w-0">
+            <div className="text-sm font-bold truncate" style={{ color: "#3A2E26" }}>{cleanName(item.name)}</div>
+            <div className="text-[11px]" style={{ color: "#9A8770" }}>{unitLabel(item)}{item.sku ? ` · ${item.sku}` : ""}</div>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded-lg flex-shrink-0" style={{ color: "#844429" }}><X size={18}/></button>
+        </div>
+        <div className="p-4 space-y-4">
+          {loading ? (
+            <div className="py-8 text-center text-sm" style={{ color: "#9A8770" }}>Loading…</div>
+          ) : (
+            <>
+              {/* Calculated from Flipdish sales */}
+              <div className="grid grid-cols-2 gap-2">
+                {calcCard("Daily requirement", usage ? usage.dailyAvg : "—", usage ? `avg/day · last ${usage.days}d` : "no sales match")}
+                {calcCard("Weekly requirement", usage ? usage.weeklyAvg : "—", usage ? "≈ daily × 7" : "no sales match")}
+              </div>
+              {/* Manual per-store fields */}
+              <div className="grid grid-cols-3 gap-2">
+                {numField("Stock in hand", "stockInHand")}
+                {numField("Par level", "parLevel")}
+                {numField("Required stock", "requiredStock")}
+              </div>
+              {savedMsg && <div className="text-[11px] font-semibold" style={{ color: savedMsg.startsWith("Failed") ? "#A23B2E" : "#3F6B3A" }}>{savedMsg}</div>}
+              {/* Suggested order = weekly requirement − stock in hand */}
+              {usage && (
+                <div className="rounded-lg p-2.5 flex items-center justify-between" style={{ backgroundColor: "#EDF3E7", border: "1px solid #CFE0C2" }}>
+                  <div>
+                    <div className="text-[11px] font-semibold" style={{ color: "#4A6B3A" }}>Suggested to order (week)</div>
+                    <div className="text-[10px]" style={{ color: "#6B8757" }}>weekly need − stock in hand</div>
+                  </div>
+                  <div className="text-2xl font-black tabular-nums" style={{ color: "#3F6B3A" }}>{suggested}</div>
+                </div>
+              )}
+              <button onClick={() => { onAddToCart(item.id, (Number(stock.requiredStock) || suggested || 1)); onClose(); }}
+                className="w-full py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-1.5" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>
+                <Plus size={15}/> Add {stock.requiredStock ? `${stock.requiredStock}` : (suggested || "")} to order
+              </button>
+              {currentQty > 0 && <div className="text-[11px] text-center" style={{ color: "#9A8770" }}>{currentQty} already in your order</div>}
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function DistOrderPortalView({ currentUser, onNavigate }) {
   const [customers, setCustomers] = useState([]);
   const [customerId, setCustomerId] = useState("");
@@ -13096,6 +13210,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [cartOpen, setCartOpen] = useState(false);   // mobile cart drawer
   const [placed, setPlaced] = useState(null);
+  const [detailItem, setDetailItem] = useState(null);  // item whose stock popup is open
 
   const storeIds = currentUser?.storeIds || [];
 
@@ -13354,7 +13469,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
           {qty > 0 && <span className="absolute -top-1.5 -right-1.5 min-w-6 h-6 px-1.5 rounded-full text-xs font-bold flex items-center justify-center shadow-lg" style={{ backgroundColor: "#5C9442", color: "#fff" }}>{qty}</span>}
         </div>
         <div className="mt-3 flex-1">
-          <div className="text-sm font-semibold leading-snug line-clamp-2" style={{ color: "#3A2E26" }}>{cleanName(i.name)}</div>
+          <button onClick={() => setDetailItem(i)} className="text-sm font-semibold leading-snug line-clamp-2 text-left hover:underline" style={{ color: "#3A2E26" }}>{cleanName(i.name)}</button>
           <div className="text-[11px] mt-1 flex items-center gap-1" style={{ color: "#9A8770" }}><Package size={11}/> {unitLabel(i)}</div>
         </div>
         <div className="mt-2.5 flex items-end justify-between gap-2">
@@ -13379,7 +13494,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
       <div key={i.id} className="flex items-center gap-3 px-3 py-2.5" style={qty>0 ? { backgroundColor: "#E4EFD9", borderBottom: "1px solid #F0E4D2" } : { borderBottom: "1px solid #F0E4D2" }}>
         <div className="w-10 h-10 rounded-lg overflow-hidden flex-shrink-0" style={{ backgroundColor: "#F0E4D2" }}><ProductImage i={i} size="h-10"/></div>
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold truncate" style={{ color: "#3A2E26" }}>{cleanName(i.name)}</div>
+          <button onClick={() => setDetailItem(i)} className="text-sm font-semibold truncate text-left hover:underline block w-full" style={{ color: "#3A2E26" }}>{cleanName(i.name)}</button>
           <div className="text-[11px] flex items-center gap-2" style={{ color: "#9A8770" }}><span className="flex items-center gap-1"><Package size={10}/> {unitLabel(i)}</span>{i.sku && <span style={{ color: "#A8835C" }}>{i.sku}</span>}</div>
         </div>
         <div className="text-sm font-bold w-16 text-right flex-shrink-0" style={{ color: "#844429" }}>{gbp(i.price)}</div>
@@ -13719,6 +13834,17 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
             <div className="flex justify-end gap-2"><button onClick={() => setConfirmOpen(false)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Keep editing</button><button onClick={placeOrder} disabled={placing} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold">{placing?"Placing…":"Confirm & place order"}</button></div>
           </div>
         </Modal>
+      )}
+      {detailItem && (
+        <StockDetailModal
+          storeId={storeIds[0]}
+          item={detailItem}
+          cleanName={cleanName}
+          unitLabel={unitLabel}
+          currentQty={cart[detailItem.id] || 0}
+          onAddToCart={(id, q) => setQty(id, q)}
+          onClose={() => setDetailItem(null)}
+        />
       )}
     </div>
   );
