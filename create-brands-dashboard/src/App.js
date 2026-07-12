@@ -26499,9 +26499,12 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
       });
       // Salaried staff who didn't punch — included so the popup total reconciles
       // with the wage-cost tile; grouped into their own department too.
-      const shownIds = new Set(punches.map(p => p.employeeId));
+      // A salaried person who clocked in ANYWHERE that day is already costed at
+      // the store they actually worked — don't also charge them at other stores
+      // in their profile. Only add salaried staff with NO punch at all.
+      const punchedAnywhereIds = new Set((data.curPunch || []).map(p => p.employeeId));
       scopedSalaried.forEach(m => {
-        if (shownIds.has(m.id)) return;
+        if (punchedAnywhereIds.has(m.id)) return;
         const dayCost = salariedDailyCost(m) * daysInPeriod(period.from, period.to);
         totCost += dayCost;
         addTo(deptOf(m), [
