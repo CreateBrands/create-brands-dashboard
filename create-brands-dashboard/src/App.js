@@ -11748,7 +11748,9 @@ function DistOrderBuilderView() {
         // Merge: start from existing (preserve all its fields), overlay sheet cols.
         const merged = { ...(existing || {}) };
         merged.sku = sku;
-        merged.name = name.replace(/-\(.*\)$/, "").trim() || name; // strip pack suffix if present
+        // Never rename an existing item — only set the name when CREATING a new
+        // one (a SKU not already in the system). Existing names stay untouched.
+        if (!existing) merged.name = name;
         if (r.Category !== undefined && r.Category !== "") merged.category = String(r.Category).trim();
         if (r["Buy £"] !== undefined && r["Buy £"] !== "") merged.purchaseRate = Number(r["Buy £"]);
         if (r["Sell £"] !== undefined && r["Sell £"] !== "") merged.sellRate = Number(r["Sell £"]);
