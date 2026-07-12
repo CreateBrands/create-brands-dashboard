@@ -13079,6 +13079,19 @@ function StockDetailModal({ storeId, item, usage, usageDays, cleanName, unitLabe
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [savedMsg, setSavedMsg] = useState("");
+  const [diag, setDiag] = useState(null);
+  const [diagLoading, setDiagLoading] = useState(false);
+  const runDiag = async () => {
+    setDiagLoading(true);
+    try {
+      const to = new Date(); const from = new Date(); from.setDate(from.getDate() - 27);
+      const res = await computeStoreItemConsumptionV2({
+        storeId, from: from.toISOString().slice(0,10), to: to.toISOString().slice(0,10), debugDistId: item.id,
+      });
+      setDiag(res.debug || { note: "no debug" });
+    } catch (e) { setDiag({ error: e.message }); }
+    setDiagLoading(false);
+  };
 
   useEffect(() => {
     let alive = true;
@@ -13128,16 +13141,30 @@ function StockDetailModal({ storeId, item, usage, usageDays, cleanName, unitLabe
 
   const suggested = usage ? Math.max(0, Math.ceil((usage.weeklyAvg || 0) - (Number(stock.stockInHand) || 0))) : null;
 
-  // Consumption comes in the inventory BASE unit (each, g, ml). Convert to the
-  // ORDERING unit (box/pack) using the dist item's pack size so the numbers are
-  // directly usable for ordering. packSizeTotal = how many base units per pack.
-  const packSizeTotal = (Number(item.packCount) || 1) * (Number(item.packSize) || 1);
-  const packUnit = item.packUnit || "pack";
-  const toPacks = (v) => (v == null || packSizeTotal <= 0) ? null : v / packSizeTotal;
+  // Two distinct units are in play:
+  //  • measureUnit — how consumption is measured (g / ml / ea), from the item's
+  //    pack_unit. Used to show the raw usage sensibly (large grams → kg).
+  //  • one ORDER PACK = packSize measureUnits (e.g. a 400g pack). Order figures
+  //    are in whole packs, never in the raw measure unit.
+  const measureUnit = (item.packUnit || "ea").toString();
+  const packSize = Number(item.packSize) || 1;                 // measure-units per pack
+  const packCount = Number(item.packCount) || 1;               // packs per order case
+  const unitsPerCase = packSize * packCount;                   // measure-units per case
+  const isWeight = /^(g|gram|grams)$/i.test(measureUnit);
+  const isVolume = /^(ml|milliliter|millilitre)$/i.test(measureUnit);
+  // Pretty raw usage: convert large g→kg, ml→L for readability.
+  const prettyRaw = (v) => {
+    if (v == null) return "—";
+    if (isWeight && v >= 1000) return `${(v/1000).toFixed(2)} kg`;
+    if (isVolume && v >= 1000) return `${(v/1000).toFixed(2)} L`;
+    return `${Math.round(v*10)/10} ${measureUnit}`;
+  };
+  // Order units = raw consumption ÷ measure-units per pack.
+  const toPacks = (v) => (v == null || packSize <= 0) ? null : v / packSize;
   const dailyPacks  = usage ? toPacks(usage.dailyAvg) : null;
   const weeklyPacks = usage ? toPacks(usage.weeklyAvg) : null;
-  // Suggested order in packs: (weekly need − stock in hand), rounded UP to whole packs.
-  const stockInHandPacks = Number(stock.stockInHand) || 0; // stock entered in packs
+  const packWord = packCount > 1 ? "case" : "pack";           // label for the order unit
+  const stockInHandPacks = Number(stock.stockInHand) || 0;    // stock entered in packs
   const suggestedPacks = usage ? Math.max(0, Math.ceil((weeklyPacks || 0) - stockInHandPacks)) : null;
   const fmtNum = (v) => v == null ? "—" : (Math.round(v * 100) / 100);
 
@@ -13156,15 +13183,15 @@ function StockDetailModal({ storeId, item, usage, usageDays, cleanName, unitLabe
             <div className="py-8 text-center text-sm" style={{ color: "#9A8770" }}>Loading…</div>
           ) : (
             <>
-              {/* Requirements — shown in ORDERING units (packs/boxes), with the
-                  raw consumption in base units underneath for transparency. */}
+              {/* Requirements — shown in ORDER units (packs), with the raw
+                  consumption (kg/L/ea) underneath for transparency. */}
               <div className="grid grid-cols-2 gap-2">
                 {calcCard("Daily requirement",
-                  usage ? `${fmtNum(dailyPacks)} ${packUnit}` : "—",
-                  usage ? `${fmtNum(usage.dailyAvg)}/day · last ${usageDays}d` : "not used in recipes")}
+                  usage ? `${fmtNum(dailyPacks)} ${packWord}` : "—",
+                  usage ? `${prettyRaw(usage.dailyAvg)}/day · last ${usageDays}d` : "not used in recipes")}
                 {calcCard("Weekly requirement",
-                  usage ? `${fmtNum(weeklyPacks)} ${packUnit}` : "—",
-                  usage ? `${fmtNum(usage.weeklyAvg)} units · ÷${packSizeTotal}/pack` : "no consumption")}
+                  usage ? `${fmtNum(weeklyPacks)} ${packWord}` : "—",
+                  usage ? `${prettyRaw(usage.weeklyAvg)} · ${packSize}${measureUnit}/${packWord}` : "no consumption")}
               </div>
               {/* Manual per-store fields — entered in ordering units (packs/boxes) */}
               <div className="grid grid-cols-3 gap-2">
@@ -13172,7 +13199,7 @@ function StockDetailModal({ storeId, item, usage, usageDays, cleanName, unitLabe
                 {numField("Par level", "parLevel")}
                 {numField("Required stock", "requiredStock")}
               </div>
-              <div className="text-[10px] -mt-2" style={{ color: "#9A8770" }}>Quantities in {packUnit}s (1 {packUnit} = {packSizeTotal} {/* base unit */}units)</div>
+              <div className="text-[10px] -mt-2" style={{ color: "#9A8770" }}>Order quantities in {packWord}s (1 {packWord} = {packSize}{measureUnit}{packCount > 1 ? ` × ${packCount}` : ""})</div>
               {savedMsg && <div className="text-[11px] font-semibold" style={{ color: savedMsg.startsWith("Failed") ? "#A23B2E" : "#3F6B3A" }}>{savedMsg}</div>}
               {/* Suggested order = weekly requirement − stock in hand, in packs */}
               {usage && (
@@ -13181,7 +13208,7 @@ function StockDetailModal({ storeId, item, usage, usageDays, cleanName, unitLabe
                     <div className="text-[11px] font-semibold" style={{ color: "#4A6B3A" }}>Suggested to order (week)</div>
                     <div className="text-[10px]" style={{ color: "#6B8757" }}>weekly need − stock in hand</div>
                   </div>
-                  <div className="text-2xl font-black tabular-nums" style={{ color: "#3F6B3A" }}>{suggestedPacks} <span className="text-sm font-semibold">{packUnit}</span></div>
+                  <div className="text-2xl font-black tabular-nums" style={{ color: "#3F6B3A" }}>{suggestedPacks} <span className="text-sm font-semibold">{packWord}{suggestedPacks === 1 ? "" : "s"}</span></div>
                 </div>
               )}
               <button onClick={() => { onAddToCart(item.id, (Number(stock.requiredStock) || suggestedPacks || 1)); onClose(); }}
@@ -13189,6 +13216,23 @@ function StockDetailModal({ storeId, item, usage, usageDays, cleanName, unitLabe
                 <Plus size={15}/> Add {stock.requiredStock ? `${stock.requiredStock}` : (suggestedPacks || "")} to order
               </button>
               {currentQty > 0 && <div className="text-[11px] text-center" style={{ color: "#9A8770" }}>{currentQty} already in your order</div>}
+              {/* Diagnostic (temporary): shows where consumption comes from */}
+              <div className="pt-1">
+                <button onClick={runDiag} className="text-[11px] font-semibold" style={{ color: "#9A8770" }}>{diagLoading ? "Analysing…" : "🔍 Why this number?"}</button>
+                {diag && (
+                  <div className="mt-2 p-2 rounded-lg text-[10px] max-h-52 overflow-y-auto" style={{ backgroundColor: "#F3EADA", color: "#6B5D4F" }}>
+                    {diag.error ? <div style={{ color: "#A23B2E" }}>{diag.error}</div> : (
+                      <>
+                        <div className="font-bold">Total 28d: {diag.totalForItem} (base {diag.fromBase} + modifiers {diag.fromModifiers})</div>
+                        <div className="mt-1 font-semibold">By product:</div>
+                        {(diag.byProduct || []).map((r, i) => <div key={i}>{r.product}: {r.qty}</div>)}
+                        <div className="mt-1 font-semibold">Top UNMAPPED sale lines (lost):</div>
+                        {(diag.topUnmapped || []).slice(0, 12).map((r, i) => <div key={i} style={{ color: "#A23B2E" }}>{r.caption}: {r.lines} lines</div>)}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
             </>
           )}
         </div>

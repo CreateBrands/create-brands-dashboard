@@ -9557,7 +9557,7 @@ export async function computeStoreCogsV2({ storeId, from, to } = {}) {
 // consumption source (includes modifiers/add-ons that the product-base recipe
 // alone misses). Returns { byDist: { distItemId: { qtyBaseUnit, dailyAvg,
 // weeklyAvg } }, days, ... }.
-export async function computeStoreItemConsumptionV2({ storeId, from, to, days } = {}) {
+export async function computeStoreItemConsumptionV2({ storeId, from, to, days, debugDistId } = {}) {
   if (!storeId) throw new Error("storeId required");
   const fromD = from || new Date(Date.now() - 27 * 864e5).toISOString().slice(0, 10);
   const toD   = to   || new Date().toISOString().slice(0, 10);
@@ -9681,7 +9681,23 @@ export async function computeStoreItemConsumptionV2({ storeId, from, to, days } 
   // Walk actual sold lines + chosen modifiers, accumulating item consumption.
   const invConsumed = new Map();
   let mappedLines = 0, unmappedLines = 0;
-  const addUsage = (useMap, mult) => { useMap.forEach((v, k) => invConsumed.set(k, (invConsumed.get(k) || 0) + v * mult)); };
+  // Debug: for one target DIST item, track consumption per product and the
+  // top unmapped sale captions, to locate where consumption is lost. A dist item
+  // may map to several inventory keys.
+  const debugKeys = new Set();
+  if (debugDistId) distIdByKey.forEach((distId, key) => { if (distId === debugDistId) debugKeys.add(key); });
+  const dbg = debugDistId ? { byProduct: {}, unmapped: {}, fromBase: 0, fromMod: 0 } : null;
+  const productNameById = (id) => (rec.products || []).find(p => p.id === id)?.name || `#${id}`;
+  const addUsage = (useMap, mult, ctx) => {
+    useMap.forEach((v, k) => {
+      invConsumed.set(k, (invConsumed.get(k) || 0) + v * mult);
+      if (dbg && debugKeys.has(k)) {
+        const pn = ctx?.product || "—";
+        dbg.byProduct[pn] = (dbg.byProduct[pn] || 0) + v * mult;
+        if (ctx?.isMod) dbg.fromMod += v * mult; else dbg.fromBase += v * mult;
+      }
+    });
+  };
 
   sales.forEach(s => {
     if (s.is_cancelled) return;
@@ -9690,14 +9706,16 @@ export async function computeStoreItemConsumptionV2({ storeId, from, to, days } 
       if (!li || li.isRefunded || li.isComplimented) return;
       const qty = Number(li.quantity) || 1;
       const pid = mapByName.get(norm(li.caption));
-      if (!pid) { unmappedLines += qty; return; }
+      if (!pid) {
+        unmappedLines += qty;
+        if (dbg) dbg.unmapped[norm(li.caption)] = (dbg.unmapped[norm(li.caption)] || 0) + qty;
+        return;
+      }
       mappedLines += qty;
-      // base recipe
-      addUsage(productBaseUsage(pid), qty);
-      // modifiers (same matching + collapse-to-max as V2, but on quantities)
+      const pn = productNameById(pid);
+      addUsage(productBaseUsage(pid), qty, { product: pn, isMod: false });
       const kids = Array.isArray(li.saleItems) ? li.saleItems : [];
-      const collapseGroups = {}; // group -> { key -> qty } of the single most "expensive"? For qty we take the chosen one; collapse = one per group.
-      const collapseChosen = {}; // group -> useMap (we keep the LAST/only; collapse means one applies)
+      const collapseChosen = {};
       kids.forEach(ch => {
         const cn = norm(ch && ch.caption);
         if (!cn || cn === "none") return;
@@ -9706,14 +9724,13 @@ export async function computeStoreItemConsumptionV2({ storeId, from, to, days } 
         const use = modUsageOf(m);
         if (!use.size) return;
         if (m.collapseToMax) {
-          // fixed-portion group: only ONE modifier's consumption counts per group.
           const g = m.groupLabel || "_collapse";
-          if (!collapseChosen[g]) collapseChosen[g] = use; // first chosen represents the group
+          if (!collapseChosen[g]) collapseChosen[g] = use;
         } else {
-          addUsage(use, qty);
+          addUsage(use, qty, { product: pn, isMod: true });
         }
       });
-      Object.values(collapseChosen).forEach(use => addUsage(use, qty));
+      Object.values(collapseChosen).forEach(use => addUsage(use, qty, { product: pn, isMod: true }));
     });
   });
 
@@ -9736,6 +9753,15 @@ export async function computeStoreItemConsumptionV2({ storeId, from, to, days } 
     storeId, from: fromD, to: toD, days: nDays, source: "flipdish_sales.sale_items",
     byDist, mappedLines, unmappedLines,
     linkedDistItems: Object.keys(byDist).length,
+    debug: dbg ? {
+      distId: debugDistId,
+      invKeys: Array.from(debugKeys),
+      totalForItem: Math.round(Array.from(debugKeys).reduce((a, k) => a + (invConsumed.get(k) || 0), 0) * 10) / 10,
+      fromBase: Math.round(dbg.fromBase * 10) / 10,
+      fromModifiers: Math.round(dbg.fromMod * 10) / 10,
+      byProduct: Object.entries(dbg.byProduct).sort((a, b) => b[1] - a[1]).slice(0, 25).map(([p, v]) => ({ product: p, qty: Math.round(v * 10) / 10 })),
+      topUnmapped: Object.entries(dbg.unmapped).sort((a, b) => b[1] - a[1]).slice(0, 25).map(([c, n]) => ({ caption: c, lines: n })),
+    } : undefined,
   };
 }
 
