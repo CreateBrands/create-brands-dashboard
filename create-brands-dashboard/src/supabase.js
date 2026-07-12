@@ -9734,7 +9734,12 @@ export async function computeStoreItemConsumptionV2({ storeId, from, to, days, d
     });
   });
 
-  // Roll up to dist items.
+  // Roll up to dist items. Also attach the INVENTORY item's base unit + case
+  // size (pack_qty), which is the accurate basis for converting consumption
+  // (in base units) to order units. dist_items' own pack fields can differ, so
+  // the recipe/inventory pack_qty is authoritative for the conversion.
+  const invByDist = new Map();
+  (inv.store || []).forEach(x => { if (x.distItemId && !invByDist.has(x.distItemId)) invByDist.set(x.distItemId, x); });
   const nDays = days || (Math.max(1, Math.round((new Date(toD) - new Date(fromD)) / 864e5) + 1));
   const byDist = {};
   invConsumed.forEach((qtyBase, key) => {
@@ -9744,6 +9749,9 @@ export async function computeStoreItemConsumptionV2({ storeId, from, to, days, d
     byDist[distId].qtyBaseUnit += qtyBase;
   });
   Object.values(byDist).forEach(d => {
+    const invItem = invByDist.get(d.distItemId);
+    d.baseUnit = invItem?.baseUnit || null;         // g / ml / ea
+    d.packQty = invItem?.packQty != null ? Number(invItem.packQty) : null; // base-units per order case
     d.qtyBaseUnit = Math.round(d.qtyBaseUnit * 1000) / 1000;
     d.dailyAvg = Math.round((d.qtyBaseUnit / nDays) * 1000) / 1000;
     d.weeklyAvg = Math.round((d.qtyBaseUnit / nDays) * 7 * 1000) / 1000;

@@ -13141,15 +13141,14 @@ function StockDetailModal({ storeId, item, usage, usageDays, cleanName, unitLabe
 
   const suggested = usage ? Math.max(0, Math.ceil((usage.weeklyAvg || 0) - (Number(stock.stockInHand) || 0))) : null;
 
-  // Two distinct units are in play:
-  //  • measureUnit — how consumption is measured (g / ml / ea), from the item's
-  //    pack_unit. Used to show the raw usage sensibly (large grams → kg).
-  //  • one ORDER PACK = packSize measureUnits (e.g. a 400g pack). Order figures
-  //    are in whole packs, never in the raw measure unit.
-  const measureUnit = (item.packUnit || "ea").toString();
-  const packSize = Number(item.packSize) || 1;                 // measure-units per pack
-  const packCount = Number(item.packCount) || 1;               // packs per order case
-  const unitsPerCase = packSize * packCount;                   // measure-units per case
+  // Consumption is measured in the INVENTORY base unit (g/ml/ea), and the
+  // accurate case size is the inventory item's pack_qty (base-units per order
+  // case), returned by the consumption engine. Fall back to dist-item pack
+  // fields only if the engine didn't supply them.
+  const measureUnit = (usage?.baseUnit || item.packUnit || "ea").toString();
+  const unitsPerCase = (usage?.packQty && usage.packQty > 0)
+    ? Number(usage.packQty)
+    : ((Number(item.packSize) || 1) * (Number(item.packCount) || 1));
   const isWeight = /^(g|gram|grams)$/i.test(measureUnit);
   const isVolume = /^(ml|milliliter|millilitre)$/i.test(measureUnit);
   // Pretty raw usage: convert large g→kg, ml→L for readability.
@@ -13159,12 +13158,12 @@ function StockDetailModal({ storeId, item, usage, usageDays, cleanName, unitLabe
     if (isVolume && v >= 1000) return `${(v/1000).toFixed(2)} L`;
     return `${Math.round(v*10)/10} ${measureUnit}`;
   };
-  // Order units = raw consumption ÷ measure-units per pack.
-  const toPacks = (v) => (v == null || packSize <= 0) ? null : v / packSize;
+  // Order units = raw consumption ÷ base-units per case.
+  const toPacks = (v) => (v == null || unitsPerCase <= 0) ? null : v / unitsPerCase;
   const dailyPacks  = usage ? toPacks(usage.dailyAvg) : null;
   const weeklyPacks = usage ? toPacks(usage.weeklyAvg) : null;
-  const packWord = packCount > 1 ? "case" : "pack";           // label for the order unit
-  const stockInHandPacks = Number(stock.stockInHand) || 0;    // stock entered in packs
+  const packWord = "case";                                    // order unit label
+  const stockInHandPacks = Number(stock.stockInHand) || 0;    // stock entered in cases
   const suggestedPacks = usage ? Math.max(0, Math.ceil((weeklyPacks || 0) - stockInHandPacks)) : null;
   const fmtNum = (v) => v == null ? "—" : (Math.round(v * 100) / 100);
 
@@ -13191,7 +13190,7 @@ function StockDetailModal({ storeId, item, usage, usageDays, cleanName, unitLabe
                   usage ? `${prettyRaw(usage.dailyAvg)}/day · last ${usageDays}d` : "not used in recipes")}
                 {calcCard("Weekly requirement",
                   usage ? `${fmtNum(weeklyPacks)} ${packWord}` : "—",
-                  usage ? `${prettyRaw(usage.weeklyAvg)} · ${packSize}${measureUnit}/${packWord}` : "no consumption")}
+                  usage ? `${prettyRaw(usage.weeklyAvg)} · ${unitsPerCase}${measureUnit}/${packWord}` : "no consumption")}
               </div>
               {/* Manual per-store fields — entered in ordering units (packs/boxes) */}
               <div className="grid grid-cols-3 gap-2">
@@ -13199,7 +13198,7 @@ function StockDetailModal({ storeId, item, usage, usageDays, cleanName, unitLabe
                 {numField("Par level", "parLevel")}
                 {numField("Required stock", "requiredStock")}
               </div>
-              <div className="text-[10px] -mt-2" style={{ color: "#9A8770" }}>Order quantities in {packWord}s (1 {packWord} = {packSize}{measureUnit}{packCount > 1 ? ` × ${packCount}` : ""})</div>
+              <div className="text-[10px] -mt-2" style={{ color: "#9A8770" }}>Order quantities in {packWord}s (1 {packWord} = {unitsPerCase}{measureUnit})</div>
               {savedMsg && <div className="text-[11px] font-semibold" style={{ color: savedMsg.startsWith("Failed") ? "#A23B2E" : "#3F6B3A" }}>{savedMsg}</div>}
               {/* Suggested order = weekly requirement − stock in hand, in packs */}
               {usage && (
