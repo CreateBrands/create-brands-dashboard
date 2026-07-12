@@ -12955,6 +12955,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   const [browseMode, setBrowseMode] = useState("collection"); // nav is collection-based
   const [deptId, setDeptId] = useState("all");           // active Department (top nav), "all" = everything
   const [viewMode, setViewMode] = useState("card");      // "card" | "list"
+  const [groupBy, setGroupBy] = useState("collection");  // collection | supplier | frequency | location | category
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
@@ -13084,6 +13085,28 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   // a time. A product can sit in multiple collections; it appears under each.
   // Anything with no collection falls into a trailing "Other" group.
   const groupedVisible = useMemo(() => {
+    // Tag-based grouping: section the visible items by the chosen tag's value.
+    if (groupBy !== "collection") {
+      const tagOf = (i) => {
+        if (groupBy === "supplier")  return (i.supplier || "").trim();
+        if (groupBy === "frequency") return (i.tagFrequency || "").trim();
+        if (groupBy === "location")  return (i.location || "").trim();
+        if (groupBy === "category")  return (i.tagCategory || "").trim();
+        return "";
+      };
+      const map = new Map();
+      visible.forEach(i => {
+        const key = tagOf(i) || "Untagged";
+        if (!map.has(key)) map.set(key, { id: `tag-${key}`, name: key, items: [] });
+        map.get(key).items.push(i);
+      });
+      // Sort groups alphabetically, but push "Untagged" to the end.
+      const arr = Array.from(map.values()).sort((a, b) => {
+        if (a.name === "Untagged") return 1; if (b.name === "Untagged") return -1;
+        return a.name.localeCompare(b.name);
+      });
+      return arr.length ? arr : null;
+    }
     if (cat !== "All") return null; // a specific collection is selected → flat grid
     if (!activeCollections.length) return null; // no collections → flat grid
     const groups = activeCollections.map(c => ({ id: c.id, name: c.name, items: [] }));
@@ -13097,7 +13120,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
     const result = groups.filter(g => g.items.length > 0);
     if (other.items.length > 0) result.push(other);
     return result;
-  }, [visible, cat, activeCollections]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [visible, cat, activeCollections, groupBy]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // "Buy again": items this customer has ordered before, ranked by how many
   // separate orders they appear in (frequency), then most-recent. Mapped to the
@@ -13256,6 +13279,16 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
           ) : customers.length === 1 ? <div className="text-sm self-center" style={{ color: "#9A8770" }}>{customers[0].name}</div> : null}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Group by: collection (default) or a tag */}
+          <select value={groupBy} onChange={e => setGroupBy(e.target.value)} title="Group items by"
+            className="px-2.5 py-2 rounded-xl text-xs font-semibold"
+            style={{ backgroundColor: groupBy !== "collection" ? "#844429" : "#FDF2E0", color: groupBy !== "collection" ? "#FDF2E0" : "#844429", border: "1px solid #E8DCC6" }}>
+            <option value="collection">Group: Collection</option>
+            <option value="supplier">Group: Supplier</option>
+            <option value="frequency">Group: Daily/Weekly</option>
+            <option value="location">Group: Location</option>
+            <option value="category">Group: Dessert/Café</option>
+          </select>
           {/* View mode: card vs list */}
           <div className="flex items-center rounded-xl p-0.5" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6" }}>
             <button onClick={() => setViewMode("card")} title="Card view" className="px-2.5 py-1.5 rounded-lg transition-colors" style={viewMode==="card" ? { backgroundColor: "#844429", color: "#FDF2E0" } : { color: "#9A8770" }}><LayoutGrid size={15}/></button>

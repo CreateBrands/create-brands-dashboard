@@ -10853,6 +10853,8 @@ export async function fetchDistPortalCatalogue(customerId) {
       id: i.id, sku: i.sku, name: i.name, category: i.category || "Uncategorised",
       packCount: i.packCount, packSize: i.packSize, packUnit: i.packUnit,
       taxRateId: i.taxRateId, imageUrl: i.imageUrl || "",
+      supplier: i.supplier || "", location: i.location || "",
+      tagFrequency: i.tagFrequency || "", tagCategory: i.tagCategory || "",
       collectionIds,
       price: priceByItem.has(i.id) ? priceByItem.get(i.id) : (i.sellRate != null ? Number(i.sellRate) : 0),
     };
