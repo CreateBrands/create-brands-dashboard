@@ -153,7 +153,7 @@ import {
   fetchInventoryForStore, setStoreItemOverride, clearStoreItemOverride,
   searchStoreInventory, detectInvoicePriceChanges, fetchPriceChanges, applyPriceChange, dismissPriceChange,
   fetchDistTaxRates, fetchDistContacts, upsertDistContact,
-  fetchDistItems, upsertDistItem, deleteDistItem, previewDeleteInactiveDistItems, bulkDeleteInactiveDistItems, fetchStoreItemTags, setStoreItemTag, fetchStoreItemStock, saveStoreItemStock, computeStoreItemUsage, computeStoreItemConsumption, fetchDistBatches, createDistBatch,
+  fetchDistItems, upsertDistItem, deleteDistItem, previewDeleteInactiveDistItems, bulkDeleteInactiveDistItems, fetchStoreItemTags, setStoreItemTag, fetchStoreItemStock, saveStoreItemStock, computeStoreItemUsage, computeStoreItemConsumption, computeStoreItemConsumptionV2, fetchDistBatches, createDistBatch,
   PACKORDER_STAGES, PACKSHIP_STAGES, fetchPackagingOrders, fetchPackagingOrderDetail, upsertPackagingOrder, deletePackagingOrder,
   upsertPackagingLine, deletePackagingLine, upsertPackagingShipment, deletePackagingShipment, receivePackagingShipment,
   addPackagingPayment, deletePackagingPayment, computePackLineStatus, fetchPackagingDashboard,
@@ -13241,7 +13241,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
       try {
         const to = new Date();
         const from = new Date(); from.setDate(from.getDate() - 27);
-        const res = await computeStoreItemConsumption({
+        const res = await computeStoreItemConsumptionV2({
           storeId: activeStoreId,
           from: from.toISOString().slice(0, 10),
           to: to.toISOString().slice(0, 10),

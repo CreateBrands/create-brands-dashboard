@@ -9260,36 +9260,75 @@ export async function computeStoreItemConsumption({ storeId, from, to, days } = 
   ]);
   const ignoredSet = new Set((ignoredRaw || []).map(i => (i.posName || "").trim().toLowerCase()));
 
-  // inventory item key -> distItemId (only STORE items carry dist links; CK is a
-  // separate entity and must never be treated as store distribution stock).
+  // inventory item key ("scope:id") -> distItemId. Only STORE items carry dist
+  // links; CK is a separate entity (its costs/stock are never store distribution).
   const distIdByKey = new Map();
   (inv.store || []).forEach(x => { if (x.distItemId) distIdByKey.set("store:" + x.id, x.distItemId); });
 
   const prepById = new Map((rec.preps || []).map(p => [p.id, p]));
 
-  // Accumulate base-unit quantity consumed per inventory item key, for `mult`
-  // servings of a product. Recurses through preps. (Mirrors prepCost/productCost
-  // traversal but sums quantities, not cost.)
-  const consumeInto = (acc, scope, id, kind, subPrepId, portionQty, unit, mult, _seen) => {
-    const qty = portionQty == null || portionQty === "" ? 0 : Number(portionQty);
-    if (kind === "prep" && subPrepId) {
-      const sub = prepById.get(subPrepId);
-      if (!sub) return;
-      const seen = _seen || new Set();
-      if (seen.has(sub.id)) return; // circular guard
-      seen.add(sub.id);
-      const useBatch = !unit || String(unit).trim().toLowerCase() === "batch";
-      // batches of the sub-prep this component uses:
-      const batches = useBatch ? qty : (sub.yieldQty ? qty / Number(sub.yieldQty) : 0);
-      const comps = (rec.prepComponents || []).filter(c => c.prepId === sub.id);
-      comps.forEach(c => consumeInto(acc, c.itemScope, c.itemId, c.kind, c.subPrepId, c.portionQty, c.unit, mult * batches, seen));
-      seen.delete(sub.id);
-    } else {
-      const key = scope + ":" + id;
-      acc.set(key, (acc.get(key) || 0) + qty * mult);
-    }
+  // prepUsage(prepId) -> Map(itemKey -> base-unit qty consumed PER 1 YIELD-UNIT
+  // of the prep). This mirrors prepCost() exactly, but accumulates quantities of
+  // raw inventory items instead of cost. Cost model reference:
+  //   prepCost = (Σ componentCost) / yieldQty, where an item component costs
+  //   itemCost*portionQty and a nested-prep component costs (per-unit or per-batch)*qty.
+  // So usage per yield-unit = (Σ componentItemQty) / yieldQty.
+  const prepUsageCache = new Map();
+  const prepUsage = (prepId, _seen) => {
+    if (prepUsageCache.has(prepId)) return prepUsageCache.get(prepId);
+    const prep = prepById.get(prepId);
+    const out = new Map();
+    if (!prep || !prep.yieldQty) { prepUsageCache.set(prepId, out); return out; }
+    const seen = _seen || new Set();
+    if (seen.has(prep.id)) return out; // circular guard
+    seen.add(prep.id);
+    const comps = (rec.prepComponents || []).filter(c => c.prepId === prep.id);
+    comps.forEach(c => {
+      if (c.kind === "prep" && c.subPrepId) {
+        const sub = prepById.get(c.subPrepId);
+        if (!sub) return;
+        const qty = c.portionQty == null || c.portionQty === "" ? 1 : Number(c.portionQty);
+        const useBatch = !c.unit || String(c.unit).trim().toLowerCase() === "batch";
+        // yield-units of the sub-prep consumed by this component (in the batch):
+        const subYieldUnits = useBatch ? qty * Number(sub.yieldQty || 0) : qty;
+        const subUse = prepUsage(sub.id, seen); // per 1 sub yield-unit
+        subUse.forEach((v, k) => out.set(k, (out.get(k) || 0) + v * subYieldUnits));
+      } else {
+        const key = c.itemScope + ":" + c.itemId;
+        const qty = c.portionQty == null ? 0 : Number(c.portionQty);
+        out.set(key, (out.get(key) || 0) + qty);
+      }
+    });
+    // Divide the whole batch by yield to get per-yield-unit usage.
+    const y = Number(prep.yieldQty);
+    out.forEach((v, k) => out.set(k, v / y));
+    seen.delete(prep.id);
+    prepUsageCache.set(prepId, out);
+    return out;
   };
 
+  // productUsage(productId) -> Map(itemKey -> base-unit qty PER 1 PRODUCT sold).
+  const productUsageCache = new Map();
+  const productUsage = (productId) => {
+    if (productUsageCache.has(productId)) return productUsageCache.get(productId);
+    const out = new Map();
+    const comps = (rec.productComponents || []).filter(c => c.productId === productId && c.variantId == null);
+    comps.forEach(c => {
+      const portion = c.portionQty == null ? 0 : Number(c.portionQty);
+      if (c.kind === "prep" && c.prepId) {
+        // Product-level prep component: portionQty is in the prep's YIELD units.
+        const use = prepUsage(c.prepId); // per 1 yield-unit
+        use.forEach((v, k) => out.set(k, (out.get(k) || 0) + v * portion));
+      } else {
+        const key = c.itemScope + ":" + c.itemId;
+        out.set(key, (out.get(key) || 0) + portion);
+      }
+    });
+    productUsageCache.set(productId, out);
+    return out;
+  };
+
+  // POS name (normalised) -> productId.
   const mapByName = new Map();
   (mapsRaw || []).forEach(m => { if (m.posName && m.productId) mapByName.set(m.posName.trim().toLowerCase(), m.productId); });
 
@@ -9300,16 +9339,17 @@ export async function computeStoreItemConsumption({ storeId, from, to, days } = 
     byItem[name] = (byItem[name] || 0) + (Number(r.qty) || 0);
   });
 
-  // Consume per inventory item across all sold products.
+  // Accumulate inventory-item consumption across all sold products.
   const invConsumed = new Map();  // "scope:id" -> base-unit qty
-  let mappedSalesQty = 0, unmappedSalesQty = 0;
+  let mappedSalesQty = 0, unmappedSalesQty = 0, uncostedProducts = 0;
   Object.entries(byItem).forEach(([name, qty]) => {
     if (ignoredSet.has(name.toLowerCase())) return;
     const pid = mapByName.get(name.toLowerCase());
     if (!pid) { unmappedSalesQty += qty; return; }
     mappedSalesQty += qty;
-    const comps = (rec.productComponents || []).filter(c => c.productId === pid && c.variantId == null);
-    comps.forEach(c => consumeInto(invConsumed, c.itemScope, c.itemId, c.kind, c.subPrepId ?? c.prepId, c.portionQty, c.unit, qty, null));
+    const use = productUsage(pid);
+    if (!use.size) { uncostedProducts += qty; return; }
+    use.forEach((perProduct, key) => invConsumed.set(key, (invConsumed.get(key) || 0) + perProduct * qty));
   });
 
   // Roll inventory consumption up to distribution items.
@@ -9317,7 +9357,7 @@ export async function computeStoreItemConsumption({ storeId, from, to, days } = 
   const byDist = {};
   invConsumed.forEach((qtyBase, key) => {
     const distId = distIdByKey.get(key);
-    if (!distId) return; // inventory item not linked to a dist item — skip
+    if (!distId) return;
     if (!byDist[distId]) byDist[distId] = { distItemId: distId, qtyBaseUnit: 0 };
     byDist[distId].qtyBaseUnit += qtyBase;
   });
@@ -9329,8 +9369,8 @@ export async function computeStoreItemConsumption({ storeId, from, to, days } = 
 
   return {
     storeId, from: from || null, to: to || null, days: nDays,
-    byDist,                       // { distItemId: { qtyBaseUnit, dailyAvg, weeklyAvg } }
-    mappedSalesQty, unmappedSalesQty,
+    byDist,
+    mappedSalesQty, unmappedSalesQty, uncostedProducts,
     linkedDistItems: Object.keys(byDist).length,
   };
 }
@@ -9507,6 +9547,195 @@ export async function computeStoreCogsV2({ storeId, from, to } = {}) {
     coverage: totalRevenue > 0 ? costedRevenue / totalRevenue : 0,
     cogsPctOfCosted: costedRevenue > 0 ? cogs / costedRevenue : 0,
     byProduct: Object.values(lineAgg).sort((a, b) => b.revenue - a.revenue),
+  };
+}
+
+// ── ITEM CONSUMPTION V2 — accurate, from flipdish_sales.sale_items ──────────
+// Mirrors computeStoreCogsV2 EXACTLY (base recipe + matched modifiers, collapse
+// groups, refund/comp exclusion) but accumulates base-unit QUANTITY of each
+// inventory item, then rolls up to distribution items. This is the accurate
+// consumption source (includes modifiers/add-ons that the product-base recipe
+// alone misses). Returns { byDist: { distItemId: { qtyBaseUnit, dailyAvg,
+// weeklyAvg } }, days, ... }.
+export async function computeStoreItemConsumptionV2({ storeId, from, to, days } = {}) {
+  if (!storeId) throw new Error("storeId required");
+  const fromD = from || new Date(Date.now() - 27 * 864e5).toISOString().slice(0, 10);
+  const toD   = to   || new Date().toISOString().slice(0, 10);
+  const [inv, rec, mapsRaw, sales] = await Promise.all([
+    fetchInventory(), fetchRecipes(), fetchPosMappings(storeId),
+    (async () => {
+      const PAGE = 1000, MAX_PAGES = 200;
+      let all = [], pageStart = 0;
+      for (let p = 0; p < MAX_PAGES; p++) {
+        const { data, error } = await supabase.from("flipdish_sales")
+          .select("sale_items, is_cancelled")
+          .eq("store_id", storeId).gte("business_date", fromD).lte("business_date", toD)
+          .order("sale_id", { ascending: true })
+          .range(pageStart, pageStart + PAGE - 1);
+        if (error) throw error;
+        const batch = data || [];
+        all = all.concat(batch);
+        if (batch.length < PAGE) break;
+        pageStart += PAGE;
+      }
+      return all;
+    })(),
+  ]);
+  const norm = (s) => (s || "").toString().trim().toLowerCase().replace(/\s+/g, " ").replace(/\.+$/, "");
+
+  // store inventory item key -> distItemId (CK excluded — separate entity).
+  const distIdByKey = new Map();
+  (inv.store || []).forEach(x => { if (x.distItemId) distIdByKey.set("store:" + x.id, x.distItemId); });
+
+  const prepById = new Map((rec.preps || []).map(p => [p.id, p]));
+
+  // prepUsage(prepId) -> Map(itemKey -> base-unit qty per 1 YIELD-UNIT of prep).
+  // Mirrors prepCost(): batch usage / yieldQty. Nested prep in "batch" unit =
+  // qty*sub.yieldQty yield-units of the sub; other units = qty yield-units.
+  const prepUsageCache = new Map();
+  const prepUsage = (prepId, _seen) => {
+    if (prepUsageCache.has(prepId)) return prepUsageCache.get(prepId);
+    const prep = prepById.get(prepId);
+    const out = new Map();
+    if (!prep || !prep.yieldQty) { prepUsageCache.set(prepId, out); return out; }
+    const seen = _seen || new Set();
+    if (seen.has(prep.id)) return out;
+    seen.add(prep.id);
+    const comps = (rec.prepComponents || []).filter(c => c.prepId === prep.id);
+    comps.forEach(c => {
+      if (c.kind === "prep" && c.subPrepId) {
+        const sub = prepById.get(c.subPrepId);
+        if (!sub) return;
+        const qty = c.portionQty == null || c.portionQty === "" ? 1 : Number(c.portionQty);
+        const useBatch = !c.unit || String(c.unit).trim().toLowerCase() === "batch";
+        const subYieldUnits = useBatch ? qty * Number(sub.yieldQty || 0) : qty;
+        const subUse = prepUsage(sub.id, seen);
+        subUse.forEach((v, k) => out.set(k, (out.get(k) || 0) + v * subYieldUnits));
+      } else {
+        const key = c.itemScope + ":" + c.itemId;
+        const qty = c.portionQty == null ? 0 : Number(c.portionQty);
+        if (qty) out.set(key, (out.get(key) || 0) + qty);
+      }
+    });
+    const y = Number(prep.yieldQty);
+    out.forEach((v, k) => out.set(k, v / y));
+    seen.delete(prep.id);
+    prepUsageCache.set(prepId, out);
+    return out;
+  };
+
+  // productBaseUsage(productId) -> Map(itemKey -> base-unit qty per 1 product).
+  const productUsageCache = new Map();
+  const productBaseUsage = (productId) => {
+    if (productUsageCache.has(productId)) return productUsageCache.get(productId);
+    const out = new Map();
+    const comps = (rec.productComponents || []).filter(c => c.productId === productId && c.variantId == null);
+    comps.forEach(c => {
+      const portion = c.portionQty == null ? 0 : Number(c.portionQty);
+      if (c.kind === "prep" && c.prepId) {
+        const use = prepUsage(c.prepId);
+        use.forEach((v, k) => out.set(k, (out.get(k) || 0) + v * portion));
+      } else {
+        const key = c.itemScope + ":" + c.itemId;
+        if (portion) out.set(key, (out.get(key) || 0) + portion);
+      }
+    });
+    productUsageCache.set(productId, out);
+    return out;
+  };
+
+  // modUsage(modifier) -> Map(itemKey -> base-unit qty for one modifier hit).
+  const modUsageOf = (m) => {
+    const out = new Map();
+    if (!m) return out;
+    if (m.sourceType === "prep") {
+      if (m.prepId != null && m.prepPortion != null) {
+        const use = prepUsage(m.prepId);
+        use.forEach((v, k) => out.set(k, (out.get(k) || 0) + v * Number(m.prepPortion)));
+      }
+    } else if (m.itemScope && m.itemId != null && m.portionQty != null) {
+      out.set(m.itemScope + ":" + m.itemId, Number(m.portionQty));
+    }
+    return out;
+  };
+
+  // modifier lookups (identical to V2)
+  const modById = new Map((rec.modifiers || []).map(m => [m.id, m]));
+  const scopedByProduct = new Map();
+  (rec.productModifiers || []).forEach(pm => {
+    const m = modById.get(pm.modifierId); if (!m || m.isGlobal) return;
+    if (!scopedByProduct.has(pm.productId)) scopedByProduct.set(pm.productId, new Map());
+    const key = m.tillCaption ? norm(m.tillCaption)
+      : (m.groupLabel ? norm((m.name || "").replace(new RegExp(m.groupLabel, "i"), "")) : norm(m.name));
+    scopedByProduct.get(pm.productId).set(key, m);
+  });
+  const globalByCaption = new Map();
+  (rec.modifiers || []).forEach(m => { if (m.isGlobal) globalByCaption.set(norm(m.tillCaption || m.name), m); });
+  const modMaps = await fetchModifierMappings(storeId).catch(() => []);
+  const mappingByCaption = new Map();
+  (modMaps || []).forEach(mm => { const m = modById.get(mm.modifierId); if (m) mappingByCaption.set(norm(mm.caption), m); });
+
+  const mapByName = new Map();
+  (mapsRaw || []).forEach(m => { if (m.posName && m.productId) mapByName.set(norm(m.posName), m.productId); });
+
+  // Walk actual sold lines + chosen modifiers, accumulating item consumption.
+  const invConsumed = new Map();
+  let mappedLines = 0, unmappedLines = 0;
+  const addUsage = (useMap, mult) => { useMap.forEach((v, k) => invConsumed.set(k, (invConsumed.get(k) || 0) + v * mult)); };
+
+  sales.forEach(s => {
+    if (s.is_cancelled) return;
+    const items = Array.isArray(s.sale_items) ? s.sale_items : [];
+    items.forEach(li => {
+      if (!li || li.isRefunded || li.isComplimented) return;
+      const qty = Number(li.quantity) || 1;
+      const pid = mapByName.get(norm(li.caption));
+      if (!pid) { unmappedLines += qty; return; }
+      mappedLines += qty;
+      // base recipe
+      addUsage(productBaseUsage(pid), qty);
+      // modifiers (same matching + collapse-to-max as V2, but on quantities)
+      const kids = Array.isArray(li.saleItems) ? li.saleItems : [];
+      const collapseGroups = {}; // group -> { key -> qty } of the single most "expensive"? For qty we take the chosen one; collapse = one per group.
+      const collapseChosen = {}; // group -> useMap (we keep the LAST/only; collapse means one applies)
+      kids.forEach(ch => {
+        const cn = norm(ch && ch.caption);
+        if (!cn || cn === "none") return;
+        const m = mappingByCaption.get(cn) || (scopedByProduct.get(pid) && scopedByProduct.get(pid).get(cn)) || globalByCaption.get(cn);
+        if (!m) return;
+        const use = modUsageOf(m);
+        if (!use.size) return;
+        if (m.collapseToMax) {
+          // fixed-portion group: only ONE modifier's consumption counts per group.
+          const g = m.groupLabel || "_collapse";
+          if (!collapseChosen[g]) collapseChosen[g] = use; // first chosen represents the group
+        } else {
+          addUsage(use, qty);
+        }
+      });
+      Object.values(collapseChosen).forEach(use => addUsage(use, qty));
+    });
+  });
+
+  // Roll up to dist items.
+  const nDays = days || (Math.max(1, Math.round((new Date(toD) - new Date(fromD)) / 864e5) + 1));
+  const byDist = {};
+  invConsumed.forEach((qtyBase, key) => {
+    const distId = distIdByKey.get(key);
+    if (!distId) return;
+    if (!byDist[distId]) byDist[distId] = { distItemId: distId, qtyBaseUnit: 0 };
+    byDist[distId].qtyBaseUnit += qtyBase;
+  });
+  Object.values(byDist).forEach(d => {
+    d.qtyBaseUnit = Math.round(d.qtyBaseUnit * 1000) / 1000;
+    d.dailyAvg = Math.round((d.qtyBaseUnit / nDays) * 1000) / 1000;
+    d.weeklyAvg = Math.round((d.qtyBaseUnit / nDays) * 7 * 1000) / 1000;
+  });
+
+  return {
+    storeId, from: fromD, to: toD, days: nDays, source: "flipdish_sales.sale_items",
+    byDist, mappedLines, unmappedLines,
+    linkedDistItems: Object.keys(byDist).length,
   };
 }
 
