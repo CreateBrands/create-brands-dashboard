@@ -9865,6 +9865,37 @@ export async function upsertDistItem(i) {
   return data ? mapDistItem(data) : null;
 }
 
+// ── Per-store item tags (e.g. Daily/Weekly stock cadence) ────────────────────
+// Global tags (supplier/location/category) live on dist_items; the Daily/Weekly
+// cadence can differ per store, stored in dist_item_store_tags. Absence of a row
+// means "fall back to the item's global tag_frequency".
+export async function fetchStoreItemTags(storeId) {
+  if (!storeId) return {};
+  const { data, error } = await supabase
+    .from("dist_item_store_tags").select("item_id, tag_frequency").eq("store_id", storeId);
+  if (error) throw error;
+  const map = {};
+  (data || []).forEach(r => { map[r.item_id] = { tagFrequency: r.tag_frequency || "" }; });
+  return map;   // { itemId: { tagFrequency } }
+}
+
+export async function setStoreItemTag(storeId, itemId, tagFrequency) {
+  if (!storeId || !itemId) throw new Error("store and item required");
+  const val = (tagFrequency || "").trim();
+  if (!val) {
+    // Empty = clear the per-store override (falls back to global).
+    const { error } = await supabase.from("dist_item_store_tags")
+      .delete().eq("store_id", storeId).eq("item_id", itemId);
+    if (error) throw error;
+    return { storeId, itemId, tagFrequency: "" };
+  }
+  const { data, error } = await supabase.from("dist_item_store_tags")
+    .upsert({ store_id: storeId, item_id: itemId, tag_frequency: val, updated_at: new Date().toISOString() }, { onConflict: "store_id,item_id" })
+    .select().maybeSingle();
+  if (error) throw error;
+  return { storeId, itemId, tagFrequency: data?.tag_frequency || val };
+}
+
 // Human-readable diff between the old DB row and the new row for history.
 function describeDistItemChanges(before, after) {
   const fields = [

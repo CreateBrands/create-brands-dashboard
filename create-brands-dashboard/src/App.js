@@ -153,7 +153,7 @@ import {
   fetchInventoryForStore, setStoreItemOverride, clearStoreItemOverride,
   searchStoreInventory, detectInvoicePriceChanges, fetchPriceChanges, applyPriceChange, dismissPriceChange,
   fetchDistTaxRates, fetchDistContacts, upsertDistContact,
-  fetchDistItems, upsertDistItem, deleteDistItem, previewDeleteInactiveDistItems, bulkDeleteInactiveDistItems, fetchDistBatches, createDistBatch,
+  fetchDistItems, upsertDistItem, deleteDistItem, previewDeleteInactiveDistItems, bulkDeleteInactiveDistItems, fetchStoreItemTags, setStoreItemTag, fetchDistBatches, createDistBatch,
   PACKORDER_STAGES, PACKSHIP_STAGES, fetchPackagingOrders, fetchPackagingOrderDetail, upsertPackagingOrder, deletePackagingOrder,
   upsertPackagingLine, deletePackagingLine, upsertPackagingShipment, deletePackagingShipment, receivePackagingShipment,
   addPackagingPayment, deletePackagingPayment, computePackLineStatus, fetchPackagingDashboard,
@@ -11585,12 +11585,16 @@ function DistReorderReport() {
 //   • collection order within a dept   → cfg.departments[].collectionIds order
 //   • department order                  → cfg.departments order
 // ============================================================================
-function DistOrderBuilderView() {
+function DistOrderBuilderView({ stores = [] }) {
   const XLSX = useXLSX();
   const [collections, setCollections] = useState([]);
   const [itemsByColl, setItemsByColl] = useState({}); // collId -> [itemId] (ordered)
   const [items, setItems] = useState([]);
   const [cfg, setCfg] = useState({ departments: [], collectionOrder: [] });
+  // Per-store Daily/Weekly tag editing: pick a store, edit each item's cadence.
+  const [tagStoreId, setTagStoreId] = useState("");
+  const [storeTags, setStoreTags] = useState({});   // itemId -> { tagFrequency }
+  const [savingTag, setSavingTag] = useState("");    // itemId currently saving
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
@@ -11629,6 +11633,28 @@ function DistOrderBuilderView() {
     setLoading(false);
   };
   useEffect(() => { reload(); }, []);
+
+  // Load the selected store's per-store Daily/Weekly overrides.
+  useEffect(() => {
+    if (!tagStoreId) { setStoreTags({}); return; }
+    (async () => {
+      try { setStoreTags(await fetchStoreItemTags(tagStoreId)); }
+      catch (e) { setMsg(`Tags load failed: ${e.message}`); }
+    })();
+  }, [tagStoreId]);
+
+  // Effective Daily/Weekly for an item at the selected store: store override if
+  // set, else the item's global tag_frequency (fallback).
+  const effFrequency = (it) => storeTags[it.id]?.tagFrequency || it.tagFrequency || "";
+  const saveStoreFreq = async (itemId, value) => {
+    if (!tagStoreId) return;
+    setSavingTag(itemId);
+    try {
+      await setStoreItemTag(tagStoreId, itemId, value);
+      setStoreTags(prev => ({ ...prev, [itemId]: { tagFrequency: value } }));
+    } catch (e) { setMsg(`Save failed: ${e.message}`); }
+    setSavingTag("");
+  };
 
   const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
   const markDirty = () => setDirty(true);
@@ -11909,6 +11935,30 @@ function DistOrderBuilderView() {
           <div className="text-sm font-medium truncate" style={{ color: C.ink }}>{cleanName(it.name)}</div>
           {it.category && <div className="text-[10px] truncate" style={{ color: C.inkFaint }}>{it.category}</div>}
         </div>
+        {/* Daily/Weekly cadence: per-store editable when a store is selected,
+            else the global value shown read-only. */}
+        {tagStoreId ? (() => {
+          const eff = effFrequency(it);
+          const override = storeTags[it.id]?.tagFrequency;
+          const isSaving = savingTag === it.id;
+          return (
+            <div className="flex items-center gap-1 flex-shrink-0" title={override ? "Store-specific" : "Falling back to global"}>
+              {["Daily","Weekly"].map(opt => (
+                <button key={opt} disabled={isSaving}
+                  onClick={() => saveStoreFreq(it.id, eff === opt ? "" : opt)}
+                  className="px-2 py-1 rounded-md text-[11px] font-semibold transition-colors"
+                  style={eff === opt
+                    ? { background: "#844429", color: "#FDF2E0" }
+                    : { background: C.surfaceAlt, color: C.inkSoft, border: `1px solid ${C.line}` }}>
+                  {opt.charAt(0)}
+                </button>
+              ))}
+              {!override && eff && <span className="text-[9px]" style={{ color: C.inkFaint }}>(global)</span>}
+            </div>
+          );
+        })() : (
+          it.tagFrequency && <div className="text-[10px] font-semibold flex-shrink-0 px-1.5 py-0.5 rounded" style={{ background: C.surfaceAlt, color: C.inkSoft }}>{it.tagFrequency}</div>
+        )}
         <div className="text-xs font-semibold flex-shrink-0" style={{ color: C.accent }}>{gbp(it.price)}</div>
       </div>
     );
@@ -12006,6 +12056,11 @@ function DistOrderBuilderView() {
         <div className="flex items-center gap-2">
           {msg && <span className="text-xs font-semibold" style={{ color: msg.startsWith("Save failed") ? "#A23B2E" : "#3F6B3A" }}>{msg}</span>}
           {dirty && <span className="text-[11px] font-semibold px-2 py-1 rounded-lg" style={{ background: "#F7EBD4", color: "#8A5A12" }}>Unsaved changes</span>}
+          <select value={tagStoreId} onChange={e => setTagStoreId(e.target.value)} title="Edit Daily/Weekly per store"
+            className="px-3 py-2 rounded-xl text-sm font-semibold" style={{ background: tagStoreId ? "#844429" : C.surfaceAlt, color: tagStoreId ? "#FDF2E0" : C.accent, border: `1px solid ${C.line}` }}>
+            <option value="">Daily/Weekly: global</option>
+            {(stores || []).map(s => <option key={s.id} value={s.id}>Editing: {s.shortName || s.name}</option>)}
+          </select>
           <button onClick={exportItems} disabled={loading} className="px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1" style={{ background: C.surfaceAlt, color: C.accent, border: `1px solid ${C.line}` }}><FileText size={14}/> Export items</button>
           <input ref={fileInputRef} type="file" accept=".xlsx,.xls" style={{ display: "none" }} onChange={e => handleImportFile(e.target.files?.[0])}/>
           <button onClick={() => fileInputRef.current?.click()} disabled={importing || loading} className="px-3 py-2 rounded-xl text-sm font-semibold flex items-center gap-1" style={{ background: C.surfaceAlt, color: C.accent, border: `1px solid ${C.line}` }}><FileText size={14}/> {importing ? "Importing…" : "Import items"}</button>
@@ -13013,7 +13068,20 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
         const [rows, orders] = await Promise.all([
           fetchDistPortalCatalogue(customerId), fetchDistSalesOrders({ customerId }),
         ]);
-        setCatalogue(rows);
+        // Overlay this store's per-store Daily/Weekly cadence onto the catalogue
+        // (falls back to the item's global tag_frequency when not set for the store).
+        let finalRows = rows;
+        const sid = storeIds[0];
+        if (sid) {
+          try {
+            const stTags = await fetchStoreItemTags(sid);
+            finalRows = rows.map(it => {
+              const ov = stTags[it.id]?.tagFrequency;
+              return ov ? { ...it, tagFrequency: ov } : it;
+            });
+          } catch { /* non-fatal — fall back to global tags */ }
+        }
+        setCatalogue(finalRows);
         const valid = (orders || []).filter(o => o.status !== "cancelled");
         setLastOrder(valid[0] || null);
         setOrderHistory(valid);
@@ -57312,7 +57380,7 @@ export default function App() {
             {effectiveActiveView === "setup" && setupPanel === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
             {effectiveActiveView === "setup" && setupPanel === "dist-order-setup" && currentUser.role === "owner" && <DistOrderSetupView/>}
             {effectiveActiveView === "setup" && setupPanel === "salescats" && <SalesCategoryMapView/>}
-            {effectiveActiveView === "setup" && setupPanel === "dist-order-builder" && currentUser.role === "owner" && <DistOrderBuilderView/>}
+            {effectiveActiveView === "setup" && setupPanel === "dist-order-builder" && currentUser.role === "owner" && <DistOrderBuilderView stores={stores}/>}
             {effectiveActiveView === "setup" && setupPanel === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms} brands={brands} stores={stores} opsTeam={opsTeam} entityOverrides={entityOverrides} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} defaultStoreScope={defaultStoreScope} onSaveDefaultScope={async (role, scope) => { try { const next = await setDefaultStoreScopeForRole(role, scope); setDefaultStoreScope(next); } catch (e) { console.error(e); } }}/>}
             {effectiveActiveView === "invoices" && canSeeView("invoices") && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "setup" && setupPanel === "cogs" && canSeeView("cogs") && <CogsView stores={stores} canFeature={canFeature} initialTab={setupSubtab} initialSub={setupSubsub} hideTabs={true}/>}
