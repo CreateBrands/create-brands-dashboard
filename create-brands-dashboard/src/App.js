@@ -146,7 +146,7 @@ import {
   fetchStoreTillNames, fetchPosMappings, setPosMapping, deletePosMapping, copyPosMappings,
   fetchIgnoredTillNames, ignoreTillName, unignoreTillName, simulateFlipdishOrders,
   discoverModifierCandidates, createModifierFromCaption,
-  computeStoreCogsV2, auditTillOrders,
+  computeStoreCogsV2, auditTillOrders, auditTillConsumption,
   fetchModifierMappings, setModifierMapping, deleteModifierMapping, fetchModifierCaptions,
   fetchStockCounts, fetchStockCount, createStockCount, setStockCountLine, finaliseStockCount, deleteStockCount, fetchStoreCountVariance,
   fetchPurchases, addPurchase, deletePurchase, computeActualCogs,
@@ -17407,6 +17407,7 @@ function TillAudit({ stores = [] }) {
   const [storeId, setStoreId] = useState(activeStores[0]?.id || null);
   const [date, setDate] = useState(new Date().toISOString().slice(0,10));
   const [channel, setChannel] = useState("POS");
+  const [mode, setMode] = useState("cost");   // "cost" (COGS) | "consumption"
   const [res, setRes] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
@@ -17415,11 +17416,16 @@ function TillAudit({ stores = [] }) {
   const money = (n) => n==null ? "—" : `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
   const money4 = (n) => n==null ? "—" : `£${Number(n).toFixed(4)}`;
   const pct = (n) => n==null ? "—" : `${(n*100).toFixed(1)}%`;
+  const qtyFmt = (n, unit) => n==null ? "—" : `${(Math.round(Number(n)*100)/100).toLocaleString("en-GB")}${unit?` ${unit}`:""}`;
 
   const run = async () => {
     if (!storeId || !date) return;
     setLoading(true); setErr(null); setRes(null); setOpenId(null);
-    try { setRes(await auditTillOrders({ storeId, date, channel })); }
+    try {
+      setRes(mode === "consumption"
+        ? await auditTillConsumption({ storeId, date, channel })
+        : await auditTillOrders({ storeId, date, channel }));
+    }
     catch (e) { setErr(e.message || String(e)); }
     finally { setLoading(false); }
   };
@@ -17445,9 +17451,22 @@ function TillAudit({ stores = [] }) {
             <option value="JustEats">JustEat</option>
             <option value="all">All channels</option>
           </select></div>
+        <div>
+          <label className="block text-[11px] text-slate-500 mb-1">View</label>
+          <div className="flex rounded-lg overflow-hidden border border-slate-700">
+            {["cost","consumption"].map(m => (
+              <button key={m} onClick={()=>{ setMode(m); setRes(null); setOpenId(null); }}
+                className={`px-3 py-2 text-sm font-semibold ${mode===m?"bg-indigo-600 text-white":"bg-slate-900 text-slate-400"}`}>
+                {m==="cost"?"Cost (COGS)":"Consumption"}
+              </button>
+            ))}
+          </div>
+        </div>
         <button onClick={run} disabled={loading} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">{loading?"Loading…":"Load orders"}</button>
       </div>
-      <p className="text-xs text-slate-500">Real orders from flipdish_sales, costed by the same engine as COGS Reconcile. Click an order to see its line-by-line cost build-up (base + each matched modifier; chocolate groups shown collapsed to max). Verify the maths against your recipes.</p>
+      <p className="text-xs text-slate-500">{mode==="consumption"
+        ? "Real orders from flipdish_sales, showing the base-unit QUANTITY of each ingredient consumed per line (base recipe + matched modifiers), by the same engine as the stock planner. Click an order to see its item-by-item consumption."
+        : "Real orders from flipdish_sales, costed by the same engine as COGS Reconcile. Click an order to see its line-by-line cost build-up (base + each matched modifier; chocolate groups shown collapsed to max). Verify the maths against your recipes."}</p>
       {err && <div className="text-xs text-red-400">{err}</div>}
       {res && <div className="text-xs text-slate-500">{res.orderCount} orders on {res.date}.</div>}
       {res && res.orderCount > 0 && (
@@ -17456,26 +17475,83 @@ function TillAudit({ stores = [] }) {
             <table className="w-full text-sm">
               <thead className="bg-slate-900 text-slate-400 text-xs"><tr>
                 <th className="text-left px-3 py-2">Time</th>
-                <th className="text-right px-3 py-2">Sale</th>
-                <th className="text-right px-3 py-2">COGS</th>
-                <th className="text-right px-3 py-2">%</th>
+                {mode==="consumption" ? (
+                  <th className="text-right px-3 py-2">Items used</th>
+                ) : (
+                  <>
+                    <th className="text-right px-3 py-2">Sale</th>
+                    <th className="text-right px-3 py-2">COGS</th>
+                    <th className="text-right px-3 py-2">%</th>
+                  </>
+                )}
               </tr></thead>
               <tbody>
                 {res.orders.map(o => (
                   <tr key={o.saleId} onClick={()=>setOpenId(o.saleId)}
                     className={`border-t border-slate-800/60 cursor-pointer ${openId===o.saleId?"bg-indigo-950/40":"hover:bg-slate-900/50"}`}>
                     <td className="px-3 py-2 text-slate-300">{(o.time||"").slice(11,16)}</td>
-                    <td className="px-3 py-2 text-right font-mono text-slate-300">{money(o.revenue)}</td>
-                    <td className="px-3 py-2 text-right font-mono text-slate-300">{money(o.cogs)}</td>
-                    <td className="px-3 py-2 text-right font-mono text-slate-400">{pct(o.cogsPct)}</td>
+                    {mode==="consumption" ? (
+                      <td className="px-3 py-2 text-right font-mono text-slate-400">{(o.items||[]).length} item{(o.items||[]).length===1?"":"s"}</td>
+                    ) : (
+                      <>
+                        <td className="px-3 py-2 text-right font-mono text-slate-300">{money(o.revenue)}</td>
+                        <td className="px-3 py-2 text-right font-mono text-slate-300">{money(o.cogs)}</td>
+                        <td className="px-3 py-2 text-right font-mono text-slate-400">{pct(o.cogsPct)}</td>
+                      </>
+                    )}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
           <div className="flex-1 min-w-[320px]">
-            {!open && <div className="text-xs text-slate-500 p-4">Select an order to see its cost breakdown.</div>}
-            {open && (
+            {!open && <div className="text-xs text-slate-500 p-4">Select an order to see its {mode==="consumption"?"consumption":"cost"} breakdown.</div>}
+            {open && mode==="consumption" && (
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+                <div className="flex justify-between text-sm mb-3">
+                  <span className="text-white font-bold">Order {open.saleId.slice(0,8)}…</span>
+                  <span className="font-mono text-slate-400">{(open.time||"").slice(11,16)} · {money(open.revenue)}</span>
+                </div>
+                {/* Order-total consumption */}
+                {open.items && open.items.length > 0 && (
+                  <div className="mb-3 pb-3 border-b border-slate-800">
+                    <div className="text-[11px] text-slate-500 mb-1 uppercase tracking-wide">Order total — items consumed</div>
+                    {open.items.map((it, k) => (
+                      <div key={k} className="flex justify-between text-[12px]">
+                        <span className="text-slate-300">{it.item}</span>
+                        <span className="font-mono text-emerald-300">{qtyFmt(it.qty, it.unit)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {/* Per line */}
+                <div className="space-y-3">
+                  {open.lines.map((l, i) => (
+                    <div key={i} className="border-t border-slate-800/60 pt-2">
+                      <div className="flex justify-between text-sm">
+                        <span className="text-white">{l.caption}{l.qty>1 && <span className="text-slate-500 text-[11px] ml-1">×{l.qty}</span>}{!l.mapped && <span className="text-red-400 text-[11px] ml-2">unmapped</span>}</span>
+                      </div>
+                      <div className="mt-1 space-y-1">
+                        {l.parts.map((p, j) => (
+                          <div key={j} className="pl-3">
+                            <div className={`text-[11px] ${p.kind==="unmatched"?"text-red-400":p.kind==="collapse"?"text-emerald-400":p.kind==="global"?"text-sky-400":p.kind==="scoped"?"text-violet-400":"text-slate-500"}`}>
+                              {p.kind==="base"?"base recipe":p.kind==="unmapped"?`${p.label} — unmapped, nothing counted`:p.kind==="unmatched"?`+ ${p.label} — no modifier match`:`+ ${p.label}${p.kind==="global"?" (global)":p.kind==="scoped"?" (scoped)":""}`}
+                            </div>
+                            {(p.items||[]).map((it, m) => (
+                              <div key={m} className="flex justify-between text-[11px] pl-3">
+                                <span className="text-slate-400">{it.item}</span>
+                                <span className="font-mono text-slate-400">{qtyFmt(it.qty, it.unit)}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {open && mode==="cost" && (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
                 <div className="flex justify-between text-sm mb-3">
                   <span className="text-white font-bold">Order {open.saleId.slice(0,8)}…</span>

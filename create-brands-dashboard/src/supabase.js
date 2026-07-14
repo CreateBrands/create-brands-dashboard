@@ -9557,11 +9557,11 @@ export async function computeStoreCogsV2({ storeId, from, to } = {}) {
 // consumption source (includes modifiers/add-ons that the product-base recipe
 // alone misses). Returns { byDist: { distItemId: { qtyBaseUnit, dailyAvg,
 // weeklyAvg } }, days, ... }.
-export async function computeStoreItemConsumptionV2({ storeId, from, to, days, debugDistId } = {}) {
+export async function computeStoreItemConsumptionV2({ storeId, from, to, days, debugDistId, _testData } = {}) {
   if (!storeId) throw new Error("storeId required");
   const fromD = from || new Date(Date.now() - 27 * 864e5).toISOString().slice(0, 10);
   const toD   = to   || new Date().toISOString().slice(0, 10);
-  const [inv, rec, mapsRaw, sales] = await Promise.all([
+  const [inv, rec, mapsRaw, sales] = _testData ? [_testData.inv, _testData.rec, _testData.maps, _testData.sales] : await Promise.all([
     fetchInventory(), fetchRecipes(), fetchPosMappings(storeId),
     (async () => {
       const PAGE = 1000, MAX_PAGES = 200;
@@ -9671,7 +9671,7 @@ export async function computeStoreItemConsumptionV2({ storeId, from, to, days, d
   });
   const globalByCaption = new Map();
   (rec.modifiers || []).forEach(m => { if (m.isGlobal) globalByCaption.set(norm(m.tillCaption || m.name), m); });
-  const modMaps = await fetchModifierMappings(storeId).catch(() => []);
+  const modMaps = _testData ? (_testData.modMaps || []) : await fetchModifierMappings(storeId).catch(() => []);
   const mappingByCaption = new Map();
   (modMaps || []).forEach(mm => { const m = modById.get(mm.modifierId); if (m) mappingByCaption.set(norm(mm.caption), m); });
 
@@ -9914,6 +9914,138 @@ export async function auditTillOrders({ storeId, date, channel = "POS", limit = 
       cogsPct: orderRevenue > 0 ? orderCogs / orderRevenue : null,
       lines,
     };
+  });
+  return { storeId, date, channel, orderCount: orders.length, orders };
+}
+
+// Consumption counterpart of auditTillOrders: for each real order, the base-unit
+// QUANTITY of each inventory/dist item consumed, line by line (base recipe +
+// matched modifiers). Same recipe traversal as computeStoreItemConsumptionV2,
+// so the till audit's consumption view reconciles with the stock popup.
+export async function auditTillConsumption({ storeId, date, channel = "POS", limit = 200 } = {}) {
+  if (!storeId) throw new Error("storeId required");
+  if (!date) throw new Error("date required");
+  const [inv, rec, mapsRaw, salesRaw] = await Promise.all([
+    fetchInventory(), fetchRecipes(), fetchPosMappings(storeId),
+    (async () => {
+      let q = supabase.from("flipdish_sales")
+        .select("sale_id, channel, sale_time, sale_items, is_cancelled, amount_total")
+        .eq("store_id", storeId).eq("business_date", date)
+        .order("sale_time", { ascending: false }).limit(limit);
+      if (channel && channel !== "all") q = q.eq("channel", channel);
+      const { data, error } = await q; if (error) throw error; return data || [];
+    })(),
+  ]);
+  const norm = (s) => (s || "").toString().trim().toLowerCase().replace(/\s+/g, " ").replace(/\.+$/, "");
+  const itemById = new Map();
+  (inv.store || []).forEach(x => itemById.set("store:" + x.id, x));
+  const nameOf = (key) => itemById.get(key)?.name || key;
+  const unitOf = (key) => itemById.get(key)?.baseUnit || "";
+  const prepById = new Map((rec.preps || []).map(p => [p.id, p]));
+
+  // prepUsage(prepId) -> Map(itemKey -> qty per 1 yield-unit). Same as engine.
+  const prepUsageCache = new Map();
+  const prepUsage = (prepId, _seen) => {
+    if (prepUsageCache.has(prepId)) return prepUsageCache.get(prepId);
+    const prep = prepById.get(prepId);
+    const out = new Map();
+    if (!prep || !prep.yieldQty) { prepUsageCache.set(prepId, out); return out; }
+    const seen = _seen || new Set();
+    if (seen.has(prep.id)) return out;
+    seen.add(prep.id);
+    (rec.prepComponents || []).filter(c => c.prepId === prep.id).forEach(c => {
+      if (c.kind === "prep" && c.subPrepId) {
+        const sub = prepById.get(c.subPrepId); if (!sub) return;
+        const qty = c.portionQty == null || c.portionQty === "" ? 1 : Number(c.portionQty);
+        const useBatch = !c.unit || String(c.unit).trim().toLowerCase() === "batch";
+        const subYieldUnits = useBatch ? qty * Number(sub.yieldQty || 0) : qty;
+        prepUsage(sub.id, seen).forEach((v, k) => out.set(k, (out.get(k) || 0) + v * subYieldUnits));
+      } else {
+        const qty = c.portionQty == null ? 0 : Number(c.portionQty);
+        if (qty) out.set(c.itemScope + ":" + c.itemId, (out.get(c.itemScope + ":" + c.itemId) || 0) + qty);
+      }
+    });
+    const y = Number(prep.yieldQty);
+    out.forEach((v, k) => out.set(k, v / y));
+    seen.delete(prep.id);
+    prepUsageCache.set(prepId, out);
+    return out;
+  };
+  const productUsageCache = new Map();
+  const productBaseUsage = (productId) => {
+    if (productUsageCache.has(productId)) return productUsageCache.get(productId);
+    const out = new Map();
+    (rec.productComponents || []).filter(c => c.productId === productId && c.variantId == null).forEach(c => {
+      const portion = c.portionQty == null ? 0 : Number(c.portionQty);
+      if (c.kind === "prep" && c.prepId) prepUsage(c.prepId).forEach((v, k) => out.set(k, (out.get(k) || 0) + v * portion));
+      else if (portion) out.set(c.itemScope + ":" + c.itemId, (out.get(c.itemScope + ":" + c.itemId) || 0) + portion);
+    });
+    productUsageCache.set(productId, out);
+    return out;
+  };
+  const modUsageOf = (m) => {
+    const out = new Map();
+    if (!m) return out;
+    if (m.sourceType === "prep") {
+      if (m.prepId != null && m.prepPortion != null) prepUsage(m.prepId).forEach((v, k) => out.set(k, (out.get(k) || 0) + v * Number(m.prepPortion)));
+    } else if (m.itemScope && m.itemId != null && m.portionQty != null) out.set(m.itemScope + ":" + m.itemId, Number(m.portionQty));
+    return out;
+  };
+  // modifier lookups (same as engine)
+  const modById = new Map((rec.modifiers || []).map(m => [m.id, m]));
+  const scopedByProduct = new Map();
+  (rec.productModifiers || []).forEach(pm => {
+    const m = modById.get(pm.modifierId); if (!m || m.isGlobal) return;
+    if (!scopedByProduct.has(pm.productId)) scopedByProduct.set(pm.productId, new Map());
+    const key = m.tillCaption ? norm(m.tillCaption) : (m.groupLabel ? norm((m.name || "").replace(new RegExp(m.groupLabel, "i"), "")) : norm(m.name));
+    scopedByProduct.get(pm.productId).set(key, m);
+  });
+  const globalByCaption = new Map();
+  (rec.modifiers || []).forEach(m => { if (m.isGlobal) globalByCaption.set(norm(m.tillCaption || m.name), m); });
+  const modMaps = await fetchModifierMappings(storeId).catch(() => []);
+  const mappingByCaption = new Map();
+  (modMaps || []).forEach(mm => { const m = modById.get(mm.modifierId); if (m) mappingByCaption.set(norm(mm.caption), m); });
+  const mapByName = new Map();
+  (mapsRaw || []).forEach(m => { if (m.posName && m.productId) mapByName.set(norm(m.posName), m.productId); });
+
+  const fmt = (usageMap) => Array.from(usageMap.entries())
+    .map(([k, qty]) => ({ item: nameOf(k), unit: unitOf(k), qty: Math.round(qty * 1000) / 1000 }))
+    .filter(x => x.qty > 0)
+    .sort((a, b) => b.qty - a.qty);
+
+  const orders = (salesRaw || []).filter(s => !s.is_cancelled).map(s => {
+    const items = Array.isArray(s.sale_items) ? s.sale_items : [];
+    const orderTotal = new Map();
+    const lines = items.filter(li => li && !li.isRefunded && !li.isComplimented).map(li => {
+      const qty = Number(li.quantity) || 1;
+      const pid = mapByName.get(norm(li.caption));
+      const lineUsage = new Map();
+      const parts = [];
+      if (pid == null) {
+        parts.push({ label: li.caption, kind: "unmapped", items: [] });
+      } else {
+        const base = productBaseUsage(pid);
+        const baseScaled = new Map(); base.forEach((v, k) => baseScaled.set(k, v * qty));
+        baseScaled.forEach((v, k) => lineUsage.set(k, (lineUsage.get(k) || 0) + v));
+        parts.push({ label: "base recipe", kind: "base", items: fmt(baseScaled) });
+        const kids = Array.isArray(li.saleItems) ? li.saleItems : [];
+        const collapse = {};
+        kids.forEach(ch => {
+          const cn = norm(ch && ch.caption); if (!cn || cn === "none") return;
+          const m = mappingByCaption.get(cn) || (scopedByProduct.get(pid) && scopedByProduct.get(pid).get(cn)) || globalByCaption.get(cn);
+          if (!m) { parts.push({ label: ch.caption, kind: "unmatched", items: [] }); return; }
+          const use = modUsageOf(m); if (!use.size) return;
+          const scaled = new Map(); use.forEach((v, k) => scaled.set(k, v * qty));
+          const kind = m.isGlobal ? "global" : "scoped";
+          if (m.collapseToMax) { const g = m.groupLabel || "_c"; if (!collapse[g]) collapse[g] = { use: scaled, label: ch.caption, kind: "collapse" }; }
+          else { scaled.forEach((v, k) => lineUsage.set(k, (lineUsage.get(k) || 0) + v)); parts.push({ label: ch.caption, kind, items: fmt(scaled) }); }
+        });
+        Object.values(collapse).forEach(g => { g.use.forEach((v, k) => lineUsage.set(k, (lineUsage.get(k) || 0) + v)); parts.push({ label: g.label, kind: "collapse", items: fmt(g.use) }); });
+      }
+      lineUsage.forEach((v, k) => orderTotal.set(k, (orderTotal.get(k) || 0) + v));
+      return { caption: li.caption, qty, mapped: pid != null, parts, items: fmt(lineUsage) };
+    });
+    return { saleId: s.sale_id, time: s.sale_time, channel: s.channel, revenue: Number(s.amount_total) || 0, items: fmt(orderTotal), lines };
   });
   return { storeId, date, channel, orderCount: orders.length, orders };
 }
