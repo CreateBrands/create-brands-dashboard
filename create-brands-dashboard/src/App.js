@@ -53798,6 +53798,7 @@ function ApplyShell() {
   const [submitted,   setSubmitted]   = useState(false);
   const [submitting,  setSubmitting]  = useState(false);
   const [submitError, setSubmitError] = useState(null);
+  const [step,        setStep]        = useState(1);   // 1 About you · 2 The role · 3 CV & photo
 
   // Pre-locked store from URL (e.g. /apply?store=store-evington-road)
   const urlParams = new URLSearchParams(window.location.search);
@@ -53909,30 +53910,48 @@ function ApplyShell() {
   // Validate form. All slice 3 fields are required for public submissions per
   // product spec; the only optional field on the public form is the existing
   // free-form "tell us about yourself" applicantNotes.
-  const validate = () => {
-    if (!form.firstName.trim())          return "Please enter your first name.";
-    if (!form.lastName.trim())           return "Please enter your last name.";
-    if (!form.email.trim())              return "Please enter your email address.";
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) return "That doesn't look like a valid email address.";
-    if (!form.phone.trim())              return "Please enter your phone number.";
-    if (!form.dateOfBirth)               return "Please enter your date of birth.";
-    // Sanity-check DOB — reject anything ridiculous (after today, before 1900)
-    const dobDate = new Date(form.dateOfBirth);
-    if (isNaN(dobDate.getTime()))        return "That doesn't look like a valid date.";
-    if (dobDate > new Date())            return "Date of birth can't be in the future.";
-    if (dobDate.getFullYear() < 1900)    return "Please check your date of birth.";
-    if (!form.legalStatus)               return "Please select your legal status.";
-    if (!form.address.trim())            return "Please enter your address.";
-    if (!form.storeId)                   return "Please pick a store you'd like to work at.";
-    if (!form.position.trim())           return "Please pick a position to apply for.";
-    if (!form.relevantExperience.trim()) return "Please share any relevant experience.";
-    if (!form.resumeText.trim())         return "Please paste your CV / resume into the box.";
-    if (!form.photoFile)                 return "Please upload a photo.";
+  // Per-step validation so the wizard can gate "Continue" on each card.
+  // validate() (all steps) still runs on final submit as the safety net.
+  const validateStep = (s) => {
+    if (s === 1) {
+      if (!form.firstName.trim())          return "Please enter your first name.";
+      if (!form.lastName.trim())           return "Please enter your last name.";
+      if (!form.email.trim())              return "Please enter your email address.";
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) return "That doesn't look like a valid email address.";
+      if (!form.phone.trim())              return "Please enter your phone number.";
+      if (!form.dateOfBirth)               return "Please enter your date of birth.";
+      const dobDate = new Date(form.dateOfBirth);
+      if (isNaN(dobDate.getTime()))        return "That doesn't look like a valid date.";
+      if (dobDate > new Date())            return "Date of birth can't be in the future.";
+      if (dobDate.getFullYear() < 1900)    return "Please check your date of birth.";
+      if (!form.legalStatus)               return "Please select your legal status.";
+      if (!form.address.trim())            return "Please enter your address.";
+    }
+    if (s === 2) {
+      if (!form.storeId)                   return "Please pick a store you'd like to work at.";
+      if (!form.position.trim())           return "Please pick a position to apply for.";
+      if (!form.relevantExperience.trim()) return "Please share any relevant experience.";
+    }
+    if (s === 3) {
+      if (!form.resumeText.trim())         return "Please paste your CV / resume into the box.";
+      if (!form.photoFile)                 return "Please upload a photo.";
+    }
     return null;
   };
+  const validate = () => validateStep(1) || validateStep(2) || validateStep(3);
+  const nextStep = () => {
+    const err = validateStep(step);
+    if (err) { setSubmitError(err); return; }
+    setSubmitError(null);
+    setStep(s => Math.min(3, s + 1));
+  };
+  const prevStep = () => { setSubmitError(null); setStep(s => Math.max(1, s - 1)); };
 
   const handleSubmit = async (e) => {
     e?.preventDefault();
+    // Pressing Enter mid-wizard advances to the next card; only the final
+    // step actually submits.
+    if (step < 3) { nextStep(); return; }
     setSubmitError(null);
 
     // Honeypot — if bot filled this hidden field, silently "succeed" without inserting
@@ -54154,7 +54173,33 @@ function ApplyShell() {
             aria-hidden="true"
           />
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          {/* Step progress — 3 cards instead of one long scroll */}
+          <div style={{ display: "flex", alignItems: "center", marginBottom: 4 }}>
+            {["About you", "The role", "CV & photo"].map((label, i) => {
+              const n = i + 1;
+              const done = step > n, active = step === n;
+              return (
+                <Fragment key={label}>
+                  {i > 0 && <div style={{ flex: 1, height: 2, background: step > i ? "#4A3024" : "#F0DBE0", margin: "0 8px" }}/>}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <div style={{
+                      width: 28, height: 28, borderRadius: "50%",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      fontSize: 13, fontWeight: 700,
+                      background: done ? "#4A3024" : active ? "#E8B4BC" : "#F9F1F3",
+                      color: done ? "#FFF8F5" : "#4A3024",
+                      border: active ? "none" : done ? "none" : "1px solid #F0DBE0",
+                    }}>{done ? "✓" : n}</div>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: active || done ? "#4A3024" : "#A78B80", whiteSpace: "nowrap" }}>{label}</span>
+                  </div>
+                </Fragment>
+              );
+            })}
+          </div>
+
+          {step === 1 && (
+            <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
             <ApplyField label="First name *">
               <input style={applyInputStyle} value={form.firstName} onChange={e => set("firstName", e.target.value)} maxLength={50}/>
             </ApplyField>
@@ -54162,8 +54207,7 @@ function ApplyShell() {
               <input style={applyInputStyle} value={form.lastName} onChange={e => set("lastName", e.target.value)} maxLength={50}/>
             </ApplyField>
           </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
             <ApplyField label="Email *">
               <input style={applyInputStyle} type="email" value={form.email} onChange={e => set("email", e.target.value)} maxLength={100} autoComplete="email"/>
             </ApplyField>
@@ -54171,7 +54215,56 @@ function ApplyShell() {
               <input style={applyInputStyle} type="tel" value={form.phone} onChange={e => set("phone", e.target.value)} maxLength={20} autoComplete="tel"/>
             </ApplyField>
           </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+          <ApplyField label="Date of birth *" hint="Click anywhere on the field to open the date picker.">
+            <input
+              style={{ ...applyInputStyle, cursor: "pointer" }}
+              type="date"
+              value={form.dateOfBirth}
+              onChange={e => set("dateOfBirth", e.target.value)}
+              max={new Date().toISOString().slice(0, 10)}
+              // Click anywhere on the input opens the native picker (Chrome /
+              // Edge / Firefox 119+). Older browsers fall back to the default
+              // calendar-icon-only behaviour. showPicker may throw if it
+              // doesn't have user-activation context, so guard with ?.()
+              onClick={e => { try { e.currentTarget.showPicker?.(); } catch {} }}
+              onFocus={e => { try { e.currentTarget.showPicker?.(); } catch {} }}
+            />
+            {form.dateOfBirth && isUnder18(form.dateOfBirth) && (
+              <div style={{ marginTop: 6, fontSize: 11, color: "#8A6A1F" }}>
+                Note: applicants under 18 have legally restricted working hours.
+                Manager will discuss this with you.
+              </div>
+            )}
+          </ApplyField>
+          <ApplyField label="Legal status in the UK *" hint="Choose the option that best describes your current immigration status.">
+            <select
+              style={applyInputStyle}
+              value={form.legalStatus}
+              onChange={e => set("legalStatus", e.target.value)}
+            >
+              <option value="">— Choose your status —</option>
+              {LEGAL_STATUS_OPTIONS.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </ApplyField>
+              </div>
+          <ApplyField label="Your address *" hint="Street, town, postcode — all on one line is fine.">
+            <input
+              style={applyInputStyle}
+              value={form.address}
+              onChange={e => set("address", e.target.value)}
+              maxLength={200}
+              placeholder="e.g. 12 Main Street, Leicester, LE5 6DN"
+            />
+          </ApplyField>
+            </>
+          )}
 
+          {step === 2 && (
+            <>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
           <ApplyField label="Which store would you like to work at? *">
             {isLocked ? (
               <input style={{ ...applyInputStyle, color: "#A78B80", cursor: "not-allowed" }} value={lockedStore.shortName || lockedStore.name} disabled/>
@@ -54185,7 +54278,6 @@ function ApplyShell() {
               </select>
             )}
           </ApplyField>
-
           <ApplyField
             label="Position you're applying for *"
             hint={useRoleDropdown
@@ -54217,52 +54309,7 @@ function ApplyShell() {
               </div>
             )}
           </ApplyField>
-
-          <ApplyField label="Date of birth *" hint="Click anywhere on the field to open the date picker.">
-            <input
-              style={{ ...applyInputStyle, cursor: "pointer" }}
-              type="date"
-              value={form.dateOfBirth}
-              onChange={e => set("dateOfBirth", e.target.value)}
-              max={new Date().toISOString().slice(0, 10)}
-              // Click anywhere on the input opens the native picker (Chrome /
-              // Edge / Firefox 119+). Older browsers fall back to the default
-              // calendar-icon-only behaviour. showPicker may throw if it
-              // doesn't have user-activation context, so guard with ?.()
-              onClick={e => { try { e.currentTarget.showPicker?.(); } catch {} }}
-              onFocus={e => { try { e.currentTarget.showPicker?.(); } catch {} }}
-            />
-            {form.dateOfBirth && isUnder18(form.dateOfBirth) && (
-              <div style={{ marginTop: 6, fontSize: 11, color: "#8A6A1F" }}>
-                Note: applicants under 18 have legally restricted working hours.
-                Manager will discuss this with you.
               </div>
-            )}
-          </ApplyField>
-
-          <ApplyField label="Legal status in the UK *" hint="Choose the option that best describes your current immigration status.">
-            <select
-              style={applyInputStyle}
-              value={form.legalStatus}
-              onChange={e => set("legalStatus", e.target.value)}
-            >
-              <option value="">— Choose your status —</option>
-              {LEGAL_STATUS_OPTIONS.map(opt => (
-                <option key={opt.value} value={opt.value}>{opt.label}</option>
-              ))}
-            </select>
-          </ApplyField>
-
-          <ApplyField label="Your address *" hint="Street, town, postcode — all on one line is fine.">
-            <input
-              style={applyInputStyle}
-              value={form.address}
-              onChange={e => set("address", e.target.value)}
-              maxLength={200}
-              placeholder="e.g. 12 Main Street, Leicester, LE5 6DN"
-            />
-          </ApplyField>
-
           <ApplyField label="Relevant experience *" hint="Briefly tell us about your hospitality / customer service experience.">
             <textarea
               style={{ ...applyInputStyle, minHeight: 100, resize: "vertical" }}
@@ -54272,7 +54319,11 @@ function ApplyShell() {
               placeholder="e.g. 2 years as a barista at X, 1 year waiting tables at Y…"
             />
           </ApplyField>
+            </>
+          )}
 
+          {step === 3 && (
+            <>
           <ApplyField label="Paste your CV / resume *" hint="Plain text only. Paste from a Word doc or notepad.">
             <textarea
               style={{ ...applyInputStyle, minHeight: 180, resize: "vertical", fontFamily: "ui-monospace, SFMono-Regular, monospace", fontSize: 12 }}
@@ -54282,7 +54333,6 @@ function ApplyShell() {
               placeholder="Education, work history, skills, references…"
             />
           </ApplyField>
-
           <ApplyField label="Upload a photo *" hint="Headshot or clear photo of yourself. Max 5 MB. JPG, PNG, or WEBP.">
             <input
               type="file"
@@ -54314,10 +54364,11 @@ function ApplyShell() {
               </div>
             )}
           </ApplyField>
-
           <ApplyField label="Anything else you'd like to share?" hint="Optional — anything that doesn't fit elsewhere.">
             <textarea style={{ ...applyInputStyle, minHeight: 70, resize: "vertical" }} value={form.applicantNotes} onChange={e => set("applicantNotes", e.target.value)} maxLength={1000}/>
           </ApplyField>
+            </>
+          )}
 
           {submitError && (
             <div style={{ background: "#FDECEC", border: "1px solid #F0C4C4", color: "#A32D2D", padding: "10px 14px", borderRadius: 10, fontSize: 13 }}>
@@ -54325,15 +54376,30 @@ function ApplyShell() {
             </div>
           )}
 
-          <button type="submit" disabled={submitting} style={{
-            marginTop: 8, padding: "14px 20px", borderRadius: 12,
-            background: submitting ? "#C9B79A" : "#4A3024", color: "#FFF8F5",
-            border: "none", fontSize: 15, fontWeight: 700,
-            cursor: submitting ? "not-allowed" : "pointer",
-            transition: "background 0.15s",
-          }}>
-            {submitting ? "Submitting…" : "Submit application"}
-          </button>
+          <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
+            {step > 1 && (
+              <button type="button" onClick={prevStep} style={{
+                padding: "14px 20px", borderRadius: 12,
+                background: "#F9F1F3", color: "#4A3024",
+                border: "1px solid #F0DBE0", fontSize: 15, fontWeight: 700, cursor: "pointer",
+              }}>Back</button>
+            )}
+            {step < 3 ? (
+              <button type="button" onClick={nextStep} style={{
+                flex: 1, padding: "14px 20px", borderRadius: 12,
+                background: "#4A3024", color: "#FFF8F5",
+                border: "none", fontSize: 15, fontWeight: 700, cursor: "pointer",
+              }}>Continue</button>
+            ) : (
+              <button type="submit" disabled={submitting} style={{
+                flex: 1, padding: "14px 20px", borderRadius: 12,
+                background: submitting ? "#C9B79A" : "#4A3024", color: "#FFF8F5",
+                border: "none", fontSize: 15, fontWeight: 700,
+                cursor: submitting ? "not-allowed" : "pointer",
+                transition: "background 0.15s",
+              }}>{submitting ? "Submitting…" : "Submit application"}</button>
+            )}
+          </div>
 
           <p style={{ fontSize: 11, color: "#A78B80", textAlign: "center", marginTop: 4 }}>
             By submitting, you agree to us storing your information for recruitment purposes.
@@ -54551,7 +54617,7 @@ function ApplyCard({ children, wide }) {
       border: "1px solid #F0DBE0",
       borderRadius: 16,
       padding: 32,
-      maxWidth: wide ? 560 : 440,
+      maxWidth: wide ? 720 : 440,
       width: "100%",
       boxShadow: "0 12px 32px rgba(74, 48, 36, 0.08)",
     }}>
