@@ -53858,6 +53858,37 @@ function ApplyShell() {
     });
   }, []);
 
+  // ── EMBED AUTO-RESIZE ──────────────────────────────────────────────────────
+  // When running inside the careers-page iframe, broadcast our true content
+  // height to the parent so the frame always fits exactly — across wizard
+  // steps, validation errors, photo previews, and screen sizes. The Shopify
+  // side listens for { frameHeight } and sets the iframe height to match.
+  // ResizeObserver catches content changes that load/resize events miss; the
+  // interval is a belt-and-braces fallback. Standalone (non-embedded) visits
+  // send nothing and keep the normal full-viewport layout.
+  const isEmbedded = (() => { try { return window.self !== window.top; } catch { return true; } })();
+  useEffect(() => {
+    if (!isEmbedded) return;
+    const send = () => {
+      try { window.parent.postMessage({ frameHeight: document.body.scrollHeight }, "*"); } catch { /* noop */ }
+    };
+    send();
+    let ro = null;
+    if (typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(send);
+      ro.observe(document.body);
+    }
+    window.addEventListener("load", send);
+    const iv = setInterval(send, 1000);
+    return () => { ro?.disconnect(); window.removeEventListener("load", send); clearInterval(iv); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEmbedded]);
+
+  // Embedded: content-height layout (no minHeight) so the broadcast height is
+  // the form's true size — a 100vh minimum would create a resize feedback
+  // loop (parent grows frame -> vh grows -> reported height grows -> …).
+  const containerStyle = isEmbedded ? { ...applyContainerStyle, minHeight: "auto" } : applyContainerStyle;
+
   // Stores the public form can apply to: operational, owned, not archived,
   // and currently flagged as hiring. Managers/HQ toggle is_hiring on each
   // store via the admin StoreEditModal to pause new applications when fully
@@ -54089,7 +54120,7 @@ function ApplyShell() {
   // ─── Render: loading ────────────────────────────────────────────────────────
   if (!ready) {
     return (
-      <div style={applyContainerStyle}>
+      <div style={containerStyle}>
         <div style={{ color: "#A78B80", fontSize: 14 }}>Loading…</div>
       </div>
     );
@@ -54098,7 +54129,7 @@ function ApplyShell() {
   // ─── Render: load error (DB unreachable) ────────────────────────────────────
   if (loadError) {
     return (
-      <div style={applyContainerStyle}>
+      <div style={containerStyle}>
         <ApplyCard>
           <h1 style={applyHeadingStyle}>Application form unavailable</h1>
           <p style={applyTextStyle}>
@@ -54113,7 +54144,7 @@ function ApplyShell() {
   // ─── Render: success state ──────────────────────────────────────────────────
   if (submitted) {
     return (
-      <div style={applyContainerStyle}>
+      <div style={containerStyle}>
         <ApplyCard>
           <div style={{ fontSize: 48, marginBottom: 16 }}>✓</div>
           <h1 style={applyHeadingStyle}>Thanks, {form.firstName}!</h1>
@@ -54131,7 +54162,7 @@ function ApplyShell() {
   // ─── Render: no operational stores ──────────────────────────────────────────
   if (availableStores.length === 0) {
     return (
-      <div style={applyContainerStyle}>
+      <div style={containerStyle}>
         <ApplyCard>
           <h1 style={applyHeadingStyle}>Not accepting applications right now</h1>
           <p style={applyTextStyle}>
@@ -54144,7 +54175,7 @@ function ApplyShell() {
 
   // ─── Render: form ───────────────────────────────────────────────────────────
   return (
-    <div style={applyContainerStyle}>
+    <div style={containerStyle}>
       <ApplyCard wide>
         <div style={{ marginBottom: 24 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
