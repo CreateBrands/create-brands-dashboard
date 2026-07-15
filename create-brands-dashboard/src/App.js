@@ -54071,7 +54071,7 @@ function ApplyShell() {
   if (!ready) {
     return (
       <div style={applyContainerStyle}>
-        <div style={{ color: "#9A8770", fontSize: 14 }}>Loading…</div>
+        <div style={{ color: "#A78B80", fontSize: 14 }}>Loading…</div>
       </div>
     );
   }
@@ -54085,7 +54085,7 @@ function ApplyShell() {
           <p style={applyTextStyle}>
             We couldn't load the form right now. Please try again later, or contact the store directly.
           </p>
-          <code style={{ fontSize: 11, color: "#9A8770", marginTop: 12, display: "block" }}>{loadError}</code>
+          <code style={{ fontSize: 11, color: "#A78B80", marginTop: 12, display: "block" }}>{loadError}</code>
         </ApplyCard>
       </div>
     );
@@ -54101,7 +54101,7 @@ function ApplyShell() {
           <p style={applyTextStyle}>
             We've received your application. The store team will be in touch soon — usually within a few days.
           </p>
-          <p style={{ ...applyTextStyle, fontSize: 13, color: "#9A8770", marginTop: 20 }}>
+          <p style={{ ...applyTextStyle, fontSize: 13, color: "#A78B80", marginTop: 20 }}>
             Please keep an eye on your email ({form.email}) and phone for our response.
           </p>
         </ApplyCard>
@@ -54129,13 +54129,13 @@ function ApplyShell() {
       <ApplyCard wide>
         <div style={{ marginBottom: 24 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 8 }}>
-            <div style={{ width: 40, height: 40, borderRadius: 10, background: "#844429", display: "flex", alignItems: "center", justifyContent: "center", color: "#FDF2E0", fontWeight: 800, fontSize: 14 }}>CB</div>
-            <span style={{ color: "#9A8770", fontSize: 12, fontWeight: 600, letterSpacing: 0.5, textTransform: "uppercase" }}>Job Application</span>
+            <div style={{ width: 40, height: 40, borderRadius: 10, background: "#4A3024", display: "flex", alignItems: "center", justifyContent: "center", color: "#FFF8F5", fontWeight: 800, fontSize: 14 }}>CB</div>
+            <span style={{ color: "#A78B80", fontSize: 12, fontWeight: 600, letterSpacing: 0.5, textTransform: "uppercase" }}>Job Application</span>
           </div>
           <h1 style={applyHeadingStyle}>Join the team</h1>
           <p style={applyTextStyle}>
             {isLocked
-              ? <>Applying to <strong style={{ color: "#844429" }}>{lockedStore.shortName || lockedStore.name}</strong>. Fill in the form below and we'll be in touch.</>
+              ? <>Applying to <strong style={{ color: "#4A3024" }}>{lockedStore.shortName || lockedStore.name}</strong>. Fill in the form below and we'll be in touch.</>
               : "Fill in the form below and we'll be in touch. All fields marked * are required."
             }
           </p>
@@ -54174,7 +54174,7 @@ function ApplyShell() {
 
           <ApplyField label="Which store would you like to work at? *">
             {isLocked ? (
-              <input style={{ ...applyInputStyle, color: "#9A8770", cursor: "not-allowed" }} value={lockedStore.shortName || lockedStore.name} disabled/>
+              <input style={{ ...applyInputStyle, color: "#A78B80", cursor: "not-allowed" }} value={lockedStore.shortName || lockedStore.name} disabled/>
             ) : (
               <select style={applyInputStyle} value={form.storeId} onChange={e => set("storeId", e.target.value)}>
                 <option value="">— Choose a store —</option>
@@ -54210,8 +54210,8 @@ function ApplyShell() {
             ) : (
               <div style={{
                 padding: "12px 14px", borderRadius: 10,
-                background: "#F3EADA", border: "1px solid #E8DCC6",
-                color: "#9A8770", fontSize: 13,
+                background: "#F9F1F3", border: "1px solid #F0DBE0",
+                color: "#A78B80", fontSize: 13,
               }}>
                 No positions are currently open for applications. Please check back soon.
               </div>
@@ -54233,7 +54233,7 @@ function ApplyShell() {
               onFocus={e => { try { e.currentTarget.showPicker?.(); } catch {} }}
             />
             {form.dateOfBirth && isUnder18(form.dateOfBirth) && (
-              <div style={{ marginTop: 6, fontSize: 11, color: "#fbbf24" }}>
+              <div style={{ marginTop: 6, fontSize: 11, color: "#8A6A1F" }}>
                 Note: applicants under 18 have legally restricted working hours.
                 Manager will discuss this with you.
               </div>
@@ -54298,7 +54298,7 @@ function ApplyShell() {
                 setSubmitError(null);
                 set("photoFile", f);
               }}
-              style={{ ...applyInputStyle, padding: "8px 10px", color: "#9A8770" }}
+              style={{ ...applyInputStyle, padding: "8px 10px", color: "#A78B80" }}
             />
             {form.photoFile && (
               <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 10 }}>
@@ -54306,9 +54306,9 @@ function ApplyShell() {
                 <img
                   src={URL.createObjectURL(form.photoFile)}
                   alt="Preview"
-                  style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, border: "1px solid #E8DCC6" }}
+                  style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 8, border: "1px solid #F0DBE0" }}
                 />
-                <div style={{ fontSize: 12, color: "#9A8770" }}>
+                <div style={{ fontSize: 12, color: "#A78B80" }}>
                   {form.photoFile.name} · {(form.photoFile.size / 1024).toFixed(0)} KB
                 </div>
               </div>
@@ -54320,14 +54320,14 @@ function ApplyShell() {
           </ApplyField>
 
           {submitError && (
-            <div style={{ background: "#7f1d1d40", border: "1px solid #dc262660", color: "#fca5a5", padding: "10px 14px", borderRadius: 10, fontSize: 13 }}>
+            <div style={{ background: "#FDECEC", border: "1px solid #F0C4C4", color: "#A32D2D", padding: "10px 14px", borderRadius: 10, fontSize: 13 }}>
               {submitError}
             </div>
           )}
 
           <button type="submit" disabled={submitting} style={{
             marginTop: 8, padding: "14px 20px", borderRadius: 12,
-            background: submitting ? "#C9B79A" : "#844429", color: "#FDF2E0",
+            background: submitting ? "#C9B79A" : "#4A3024", color: "#FFF8F5",
             border: "none", fontSize: 15, fontWeight: 700,
             cursor: submitting ? "not-allowed" : "pointer",
             transition: "background 0.15s",
@@ -54335,7 +54335,7 @@ function ApplyShell() {
             {submitting ? "Submitting…" : "Submit application"}
           </button>
 
-          <p style={{ fontSize: 11, color: "#9A8770", textAlign: "center", marginTop: 4 }}>
+          <p style={{ fontSize: 11, color: "#A78B80", textAlign: "center", marginTop: 4 }}>
             By submitting, you agree to us storing your information for recruitment purposes.
           </p>
         </form>
@@ -54506,7 +54506,7 @@ function SelfFillShell() {
 
 const applyContainerStyle = {
   minHeight: "100vh",
-  background: "#F4E9DD",
+  background: "#FFFFFF",
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
@@ -54515,7 +54515,7 @@ const applyContainerStyle = {
 };
 
 const applyHeadingStyle = {
-  color: "#3A2E26",
+  color: "#4A3024",
   fontSize: 26,
   fontWeight: 800,
   margin: 0,
@@ -54525,7 +54525,7 @@ const applyHeadingStyle = {
 };
 
 const applyTextStyle = {
-  color: "#6B5D4F",
+  color: "#6E4B3A",
   fontSize: 14,
   lineHeight: 1.5,
   margin: 0,
@@ -54535,9 +54535,9 @@ const applyInputStyle = {
   width: "100%",
   padding: "10px 14px",
   borderRadius: 10,
-  background: "#FBF6EC",
-  border: "1px solid #E8DCC6",
-  color: "#3A2E26",
+  background: "#FBF5F6",
+  border: "1px solid #F0DBE0",
+  color: "#4A3024",
   fontSize: 14,
   fontFamily: "inherit",
   outline: "none",
@@ -54547,13 +54547,13 @@ const applyInputStyle = {
 function ApplyCard({ children, wide }) {
   return (
     <div style={{
-      background: "#FBF6EC",
-      border: "1px solid #E8DCC6",
+      background: "#FFFFFF",
+      border: "1px solid #F0DBE0",
       borderRadius: 16,
       padding: 32,
       maxWidth: wide ? 560 : 440,
       width: "100%",
-      boxShadow: "0 12px 32px rgba(74, 48, 36, 0.10)",
+      boxShadow: "0 12px 32px rgba(74, 48, 36, 0.08)",
     }}>
       {children}
     </div>
@@ -54563,11 +54563,11 @@ function ApplyCard({ children, wide }) {
 function ApplyField({ label, hint, children }) {
   return (
     <div>
-      <label style={{ display: "block", color: "#6B5D4F", fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+      <label style={{ display: "block", color: "#6E4B3A", fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
         {label}
       </label>
       {children}
-      {hint && <div style={{ color: "#9A8770", fontSize: 11, marginTop: 4 }}>{hint}</div>}
+      {hint && <div style={{ color: "#A78B80", fontSize: 11, marginTop: 4 }}>{hint}</div>}
     </div>
   );
 }
