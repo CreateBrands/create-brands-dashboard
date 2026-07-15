@@ -54299,8 +54299,7 @@ function ApplyShell() {
                   <option key={r.id} value={r.title}>{r.title}</option>
                 ))}
               </select>
-            ) : (
-              <div style={{
+            ) : (              <div style={{
                 padding: "12px 14px", borderRadius: 10,
                 background: "#F9F1F3", border: "1px solid #F0DBE0",
                 color: "#A78B80", fontSize: 13,
@@ -54308,6 +54307,14 @@ function ApplyShell() {
                 No positions are currently open for applications. Please check back soon.
               </div>
             )}
+            {useRoleDropdown && form.positionChoice && (() => {
+              const sel = availableRoles.find(x => x.title === form.positionChoice);
+              return sel?.description ? (
+                <div style={{ marginTop: 6, fontSize: 12, color: "#6E4B3A", background: "#F9F1F3", border: "1px solid #F0DBE0", borderRadius: 8, padding: "8px 10px" }}>
+                  {sel.description}
+                </div>
+              ) : null;
+            })()}
           </ApplyField>
               </div>
           <ApplyField label="Relevant experience *" hint="Briefly tell us about your hospitality / customer service experience.">
