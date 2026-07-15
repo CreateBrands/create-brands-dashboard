@@ -51280,6 +51280,39 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
     approved: true, approvedBy: r.approvedBy || currentUser.name,  // hours still get approved (the regular portion); just the OT is rejected
     updatedAt: new Date().toISOString() });
 
+  // ── Break-claim decisions ─────────────────────────────────────────────────
+  // Staff can claim an ENFORCED break (deducted by the minimum-break rule
+  // despite never clocking one) when they genuinely couldn't take it.
+  // Approve = the break becomes PAID: break_paid set, hours + gross recomputed
+  // via the canonical calc with breakPaid=true (deducts 0, everything else
+  // identical). Reject = the deduction stands, with the manager's note shown
+  // back to the employee. Gross is only recomputed when it was hourly-derived
+  // (grossPay present + rate > 0) — salaried/held-pay records are left alone.
+  const handleApproveBreakClaim = (r) => {
+    const recomputed = computePunchHours({
+      punchIn: r.punchIn, punchOut: r.punchOut,
+      breakMinutes: r.breakMinutes, breakStart: r.breakStart, breakEnd: r.breakEnd,
+      breakPaid: true,
+    });
+    const hours = recomputed.hours ?? r.hoursWorked;
+    const gross = (r.grossPay != null && Number(r.hourlyRate) > 0 && hours != null)
+      ? Math.round(hours * Number(r.hourlyRate) * 100) / 100
+      : r.grossPay;
+    onUpdate({ ...r,
+      breakPaid: true,
+      breakClaimApproved: true, breakClaimDecidedBy: currentUser.name,
+      hoursWorked: hours, grossPay: gross,
+      updatedAt: new Date().toISOString() });
+  };
+  const handleRejectBreakClaim = (r) => {
+    const reason = window.prompt("Reject this break claim?\n\nAdd a short note for the employee (why the break stays deducted):", "");
+    if (reason === null) return;   // cancelled
+    onUpdate({ ...r,
+      breakClaimApproved: false, breakClaimDecidedBy: currentUser.name,
+      breakClaimRejectedReason: reason || "Not approved",
+      updatedAt: new Date().toISOString() });
+  };
+
   return (
     <div className="space-y-4">
       {/* Top stats strip */}
@@ -51449,6 +51482,12 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                     {r.status === "open" && <button onClick={()=>setAmendModal(r)} className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold">⏹ Clock out</button>}
                     {needsApproval && <button onClick={()=>handleApprove(r)} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">✓ Approve</button>}
                     {needsOTApproval && <button onClick={()=>handleApproveOT(r)} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">✓ OT</button>}
+                    {r.breakClaimReason && r.breakClaimApproved == null && (
+                      <>
+                        <button onClick={()=>handleApproveBreakClaim(r)} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold" title={`Break claim: "${r.breakClaimReason}"`}>✓ Pay break</button>
+                        <button onClick={()=>handleRejectBreakClaim(r)} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-red-400 text-xs font-semibold">✗ Break</button>
+                      </>
+                    )}
                     {locked ? (
                       <span className="px-3 py-1.5 rounded-lg bg-slate-800/50 text-slate-600 text-xs font-semibold flex items-center gap-1"><Lock size={12}/> Locked</span>
                     ) : (
@@ -51675,6 +51714,35 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                     {(r.overtimeReason || (r.overtimeComments?.length || 0) > 0) && onAddComment && (
                       <OvertimeConversation record={r} currentUser={currentUser} isEmployee={false} onAddComment={onAddComment} compact/>
                     )}
+                  </div>
+                )}
+
+                {/* Break claim — employee says they couldn't take the enforced break */}
+                {r.breakClaimReason && (
+                  <div className={`rounded-xl p-3 border ${
+                    r.breakClaimApproved === true  ? "bg-emerald-950/20 border-emerald-500/20" :
+                    r.breakClaimApproved === false ? "bg-slate-900 border-slate-700" :
+                    "bg-amber-950/20 border-amber-500/20"
+                  }`}>
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-bold text-amber-400 mb-1">
+                          ☕ Break claim — {(() => { const bs = breakSplit(r); return bs ? `${bs.breakMins}m` : ""; })()} deducted, employee says they couldn't take it
+                          {r.breakClaimApproved === true && <span className="text-emerald-400 ml-2">✓ Paid — approved by {r.breakClaimDecidedBy}</span>}
+                          {r.breakClaimApproved === false && <span className="text-slate-400 ml-2">✗ Rejected</span>}
+                        </div>
+                        <div className="text-xs text-slate-300 italic">"{r.breakClaimReason}"</div>
+                        {r.breakClaimApproved === false && r.breakClaimRejectedReason && (
+                          <div className="text-xs text-slate-500 mt-1">Manager note: "{r.breakClaimRejectedReason}"</div>
+                        )}
+                      </div>
+                      {r.breakClaimApproved == null && (
+                        <div className="flex gap-2 flex-shrink-0">
+                          <button onClick={()=>handleApproveBreakClaim(r)} className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-colors">✓ Pay break</button>
+                          <button onClick={()=>handleRejectBreakClaim(r)} className="px-2.5 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 text-white text-xs font-bold transition-colors">✗ Reject</button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
 
@@ -53087,7 +53155,7 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
     <div className="space-y-5 max-w-2xl">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h2 className="text-base font-bold text-white">My Overtime</h2>
+          <h2 className="text-base font-bold text-white">My Overtime & Breaks</h2>
           {brand && <div className="text-xs text-slate-600 mt-0.5 flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full" style={{background:brand.color}}/>{brand.name}</div>}
         </div>
         <div className="flex items-center gap-3 text-xs">
@@ -53221,11 +53289,94 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
           );
         })}
       </div>
+
+      {/* ── Break claims ──────────────────────────────────────────────────────
+          A shift where the minimum-break rule DEDUCTED an unpaid break the
+          employee never clocked (breakEnforced). If they genuinely couldn't
+          take the break, they claim it here with a reason; the manager can
+          then approve it as PAID (deduction reversed) or reject with a note. */}
+      {(() => {
+        const claimSplit = (r) => (r.punchIn && r.punchOut) ? computePunchHours({
+          punchIn: r.punchIn, punchOut: r.punchOut,
+          breakMinutes: r.breakMinutes, breakStart: r.breakStart, breakEnd: r.breakEnd,
+        }) : null;
+        const rows = enriched.filter(r => {
+          if (r.status !== "closed" || (r.breakPaid && !r.breakClaimReason)) return false;
+          if (r.breakClaimReason) return true;                     // submitted — show status
+          const s = claimSplit(r);
+          return !!(s && s.breakEnforced);                         // claimable
+        });
+        if (!rows.length) return null;
+        const fmtMin = (m) => `${m}m`;
+        return (
+          <div className="space-y-3 pt-2">
+            <div className="text-sm font-bold text-white">Break claims</div>
+            <div className="text-xs text-slate-500 -mt-2">If an unpaid break was deducted but you couldn't take it, claim it here for your manager to approve as paid.</div>
+            {rows.map(r => {
+              const s = claimSplit(r);
+              const mins = s ? s.breakMins : 0;
+              const pending  = r.breakClaimReason && r.breakClaimApproved == null;
+              const approved = r.breakClaimApproved === true;
+              const rejected = r.breakClaimApproved === false;
+              return (
+                <div key={"bc-"+r.id} className={`rounded-2xl border p-4 space-y-2 ${
+                  approved ? "bg-emerald-950/20 border-emerald-500/20" :
+                  rejected ? "bg-slate-900 border-slate-700" :
+                  pending  ? "bg-amber-950/20 border-amber-500/30" :
+                  "bg-slate-900 border-slate-700"
+                }`}>
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="text-sm font-bold text-white">
+                      {new Date(r.date+"T12:00:00").toLocaleDateString("en-GB",{weekday:"long",day:"numeric",month:"short"})}
+                    </div>
+                    {pending  && <Badge label="Awaiting manager decision" color="amber"/>}
+                    {approved && <Badge label="Break paid ✓" color="emerald"/>}
+                    {rejected && <Badge label="Not approved" color="slate"/>}
+                  </div>
+                  <div className="text-xs text-slate-400">
+                    ☕ A <b className="text-amber-400">{fmtMin(mins)}</b> unpaid break was deducted from this shift, but no break was clocked.
+                  </div>
+                  {!r.breakClaimReason && (
+                    <div className="space-y-2">
+                      <div className="text-xs text-slate-500">Couldn't take your break? Tell your manager why and claim it as paid.</div>
+                      <textarea
+                        value={reasonInputs["bc-"+r.id] || ""}
+                        onChange={e => setReasonInputs(prev => ({...prev, ["bc-"+r.id]: e.target.value}))}
+                        rows={2}
+                        placeholder="e.g. Too busy during service, no cover available to take my break…"
+                        className={`${inputCls} resize-none text-xs`}
+                      />
+                      <button
+                        onClick={() => {
+                          const reason = (reasonInputs["bc-"+r.id] || "").trim();
+                          if (!reason) return;
+                          onUpdate({ ...r, breakClaimReason: reason, updatedAt: new Date().toISOString() });
+                          setReasonInputs(prev => ({ ...prev, ["bc-"+r.id]: "" }));
+                        }}
+                        disabled={!(reasonInputs["bc-"+r.id]||"").trim()}
+                        className="w-full py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-bold transition-colors">
+                        Claim break as paid
+                      </button>
+                    </div>
+                  )}
+                  {r.breakClaimReason && (
+                    <div className="text-xs text-slate-400 italic">Your reason: "{r.breakClaimReason}"</div>
+                  )}
+                  {approved && (
+                    <div className="text-xs text-emerald-400">Approved by {r.breakClaimDecidedBy} — the break was not deducted from your pay.</div>
+                  )}
+                  {rejected && r.breakClaimRejectedReason && (
+                    <div className="text-xs text-slate-500">Manager note: "{r.breakClaimRejectedReason}"</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
     </div>
   );
 }
-
-
 
 // ── KioskShell ────────────────────────────────────────────────────────────────
 // Per-store kiosk auth flow:
