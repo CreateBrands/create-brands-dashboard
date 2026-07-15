@@ -54621,7 +54621,7 @@ function ApplyCard({ children, wide }) {
       border: "1px solid #F0DBE0",
       borderRadius: 16,
       padding: 32,
-      maxWidth: wide ? 720 : 440,
+      maxWidth: wide ? 860 : 440,
       width: "100%",
       boxShadow: "0 12px 32px rgba(74, 48, 36, 0.08)",
     }}>
