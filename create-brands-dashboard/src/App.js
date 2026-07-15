@@ -13074,7 +13074,7 @@ function AgentAutonomyModal({ autonomy, stores = [], onClose, onSave }) {
 // Item stock-planning popup on the store order page. Shows Stock in hand, Par
 // level, Required stock (manual, saved per store) plus Daily/Weekly requirement
 // calculated from the store's Flipdish sales history.
-function StockDetailModal({ storeId, item, usage, usageDays, cleanName, unitLabel, onClose, onAddToCart, currentQty }) {
+function StockDetailModal({ storeId, storeName, item, usage, usageDays, cleanName, unitLabel, onClose, onAddToCart, currentQty }) {
   const [stock, setStock] = useState({ stockInHand: "", parLevel: "", requiredStock: "" });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -13139,8 +13139,6 @@ function StockDetailModal({ storeId, item, usage, usageDays, cleanName, unitLabe
     </div>
   );
 
-  const suggested = usage ? Math.max(0, Math.ceil((usage.weeklyAvg || 0) - (Number(stock.stockInHand) || 0))) : null;
-
   // Consumption is measured in the INVENTORY base unit (g/ml/ea), and the
   // accurate case size is the inventory item's pack_qty (base-units per order
   // case), returned by the consumption engine. Fall back to dist-item pack
@@ -13151,13 +13149,6 @@ function StockDetailModal({ storeId, item, usage, usageDays, cleanName, unitLabe
     : ((Number(item.packSize) || 1) * (Number(item.packCount) || 1));
   const isWeight = /^(g|gram|grams)$/i.test(measureUnit);
   const isVolume = /^(ml|milliliter|millilitre)$/i.test(measureUnit);
-  // Pretty raw usage: convert large g→kg, ml→L for readability.
-  const prettyRaw = (v) => {
-    if (v == null) return "—";
-    if (isWeight && v >= 1000) return `${(v/1000).toFixed(2)} kg`;
-    if (isVolume && v >= 1000) return `${(v/1000).toFixed(2)} L`;
-    return `${Math.round(v*10)/10} ${measureUnit}`;
-  };
   // Order units = raw consumption ÷ base-units per case.
   const toPacks = (v) => (v == null || unitsPerCase <= 0) ? null : v / unitsPerCase;
   const dailyPacks  = usage ? toPacks(usage.dailyAvg) : null;
@@ -13166,6 +13157,24 @@ function StockDetailModal({ storeId, item, usage, usageDays, cleanName, unitLabe
   const stockInHandPacks = Number(stock.stockInHand) || 0;    // stock entered in cases
   const suggestedPacks = usage ? Math.max(0, Math.ceil((weeklyPacks || 0) - stockInHandPacks)) : null;
   const fmtNum = (v) => v == null ? "—" : (Math.round(v * 100) / 100);
+  // Headline figures speak in plain language: whole units ("units"), or
+  // kg/L for bulk weight/volume. Returns { num, word } so the number can be
+  // rendered large with the unit word small beside it.
+  const isEach = /^(ea|each|unit|units|pc|pcs)$/i.test(measureUnit);
+  const headline = (v) => {
+    if (v == null) return { num: "—", word: "" };
+    if (isWeight) return v >= 1000 ? { num: (v/1000).toFixed(2), word: "kg" } : { num: Math.round(v*10)/10, word: "g" };
+    if (isVolume) return v >= 1000 ? { num: (v/1000).toFixed(2), word: "L" } : { num: Math.round(v*10)/10, word: "ml" };
+    const n = Math.round(v*10)/10;
+    if (isEach) return { num: n, word: n === 1 ? "unit" : "units" };
+    return { num: n, word: measureUnit };
+  };
+  // "1 case = 16 units" / "1 case = 8 L" — the pack size in friendly words.
+  const packDesc = () => {
+    const h = headline(unitsPerCase);
+    return `1 ${packWord} = ${h.num} ${h.word}`;
+  };
+  const casePlural = (n) => `${packWord}${n === 1 ? "" : "s"}`;
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{ backgroundColor: "rgba(58,46,38,0.4)" }} onClick={onClose}>
@@ -13173,7 +13182,7 @@ function StockDetailModal({ storeId, item, usage, usageDays, cleanName, unitLabe
         <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid #E8DCC6" }}>
           <div className="min-w-0">
             <div className="text-sm font-bold truncate" style={{ color: "#3A2E26" }}>{cleanName(item.name)}</div>
-            <div className="text-[11px]" style={{ color: "#9A8770" }}>{unitLabel(item)}{item.sku ? ` · ${item.sku}` : ""}</div>
+            <div className="text-[11px]" style={{ color: "#9A8770" }}>{item.sku ? `${item.sku} · ` : ""}{packDesc()}</div>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg flex-shrink-0" style={{ color: "#844429" }}><X size={18}/></button>
         </div>
@@ -13182,44 +13191,59 @@ function StockDetailModal({ storeId, item, usage, usageDays, cleanName, unitLabe
             <div className="py-8 text-center text-sm" style={{ color: "#9A8770" }}>Loading…</div>
           ) : (
             <>
-              {/* Requirements — shown in ORDER units (packs), with the raw
-                  consumption (kg/L/ea) underneath for transparency. */}
+              {/* Provenance — the raw fact the whole calculation hangs off:
+                  what this store actually consumed (from till sales through
+                  the recipe chain) over the window. Names the store so it's
+                  always clear whose numbers these are. */}
+              {usage ? (
+                <div className="rounded-lg px-3 py-2 text-[12px]" style={{ backgroundColor: "#F3EADA", border: "1px solid #E8DCC6", color: "#6B5D4F" }}>
+                  <span className="font-bold" style={{ color: "#3A2E26" }}>{storeName || storeId}</span>
+                  {" used "}
+                  <span className="font-bold tabular-nums" style={{ color: "#3A2E26" }}>{headline(usage.qtyBaseUnit).num} {headline(usage.qtyBaseUnit).word}</span>
+                  {` in the last ${usageDays} days, based on till sales.`}
+                </div>
+              ) : (
+                <div className="rounded-lg px-3 py-2 text-[12px]" style={{ backgroundColor: "#F3EADA", border: "1px solid #E8DCC6", color: "#9A8770" }}>
+                  No recipe-based usage found for this item at {storeName || storeId} in the last {usageDays} days.
+                </div>
+              )}
+              {/* Requirements — lead with the intuitive quantity (units/kg/L),
+                  with the case equivalent as the secondary line. */}
               <div className="grid grid-cols-2 gap-2">
-                {calcCard("Daily requirement",
-                  usage ? `${fmtNum(dailyPacks)} ${packWord}` : "—",
-                  usage ? `${prettyRaw(usage.dailyAvg)}/day · last ${usageDays}d` : "not used in recipes")}
-                {calcCard("Weekly requirement",
-                  usage ? `${fmtNum(weeklyPacks)} ${packWord}` : "—",
-                  usage ? `${prettyRaw(usage.weeklyAvg)} · ${unitsPerCase}${measureUnit}/${packWord}` : "no consumption")}
+                {calcCard("You use per day",
+                  usage ? <>{headline(usage.dailyAvg).num} <span className="text-sm font-semibold">{headline(usage.dailyAvg).word}</span></> : "—",
+                  usage ? `≈ ${fmtNum(dailyPacks)} ${casePlural(fmtNum(dailyPacks))}` : "not used in recipes")}
+                {calcCard("You need per week",
+                  usage ? <>{headline(usage.weeklyAvg).num} <span className="text-sm font-semibold">{headline(usage.weeklyAvg).word}</span></> : "—",
+                  usage ? `≈ ${fmtNum(weeklyPacks)} ${casePlural(fmtNum(weeklyPacks))}` : "no consumption")}
               </div>
               {/* Manual per-store fields — entered in ordering units (packs/boxes) */}
               <div className="grid grid-cols-3 gap-2">
-                {numField(`Stock in hand`, "stockInHand")}
-                {numField("Par level", "parLevel")}
-                {numField("Required stock", "requiredStock")}
+                {numField(`Stock in hand (${packWord}s)`, "stockInHand")}
+                {numField(`Par level (${packWord}s)`, "parLevel")}
+                {numField(`Required (${packWord}s)`, "requiredStock")}
               </div>
-              <div className="text-[10px] -mt-2" style={{ color: "#9A8770" }}>Order quantities in {packWord}s (1 {packWord} = {unitsPerCase}{measureUnit})</div>
               {savedMsg && <div className="text-[11px] font-semibold" style={{ color: savedMsg.startsWith("Failed") ? "#A23B2E" : "#3F6B3A" }}>{savedMsg}</div>}
               {/* Suggested order = weekly requirement − stock in hand, in packs */}
               {usage && (
                 <div className="rounded-lg p-2.5 flex items-center justify-between" style={{ backgroundColor: "#EDF3E7", border: "1px solid #CFE0C2" }}>
                   <div>
-                    <div className="text-[11px] font-semibold" style={{ color: "#4A6B3A" }}>Suggested to order (week)</div>
-                    <div className="text-[10px]" style={{ color: "#6B8757" }}>weekly need − stock in hand</div>
+                    <div className="text-[12px] font-bold" style={{ color: "#3F6B3A" }}>Order {suggestedPacks} {casePlural(suggestedPacks)} this week</div>
+                    <div className="text-[10px]" style={{ color: "#6B8757" }}>Need {fmtNum(weeklyPacks)} {casePlural(fmtNum(weeklyPacks))} · you have {stockInHandPacks} in stock</div>
                   </div>
-                  <div className="text-2xl font-black tabular-nums" style={{ color: "#3F6B3A" }}>{suggestedPacks} <span className="text-sm font-semibold">{packWord}{suggestedPacks === 1 ? "" : "s"}</span></div>
+                  <div className="text-2xl font-black tabular-nums" style={{ color: "#3F6B3A" }}>{suggestedPacks}</div>
                 </div>
               )}
               <button onClick={() => { onAddToCart(item.id, (Number(stock.requiredStock) || suggestedPacks || 1)); onClose(); }}
                 className="w-full py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-1.5" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>
-                <Plus size={15}/> Add {stock.requiredStock ? `${stock.requiredStock}` : (suggestedPacks || "")} to order
+                <Plus size={15}/> Add {(Number(stock.requiredStock) || suggestedPacks || 1)} {casePlural(Number(stock.requiredStock) || suggestedPacks || 1)} to order
               </button>
               {currentQty > 0 && <div className="text-[11px] text-center" style={{ color: "#9A8770" }}>{currentQty} already in your order</div>}
-              {/* Diagnostic (temporary): shows where consumption comes from */}
-              <div className="pt-1">
-                <button onClick={runDiag} className="text-[11px] font-semibold" style={{ color: "#9A8770" }}>{diagLoading ? "Analysing…" : "🔍 Why this number?"}</button>
+              {/* Transparency: full breakdown of where the number comes from */}
+              <div className="pt-1 text-center">
+                <button onClick={runDiag} className="text-[11px] font-semibold underline" style={{ color: "#9A8770" }}>{diagLoading ? "Analysing…" : "See the working"}</button>
                 {diag && (
-                  <div className="mt-2 p-2 rounded-lg text-[10px] max-h-52 overflow-y-auto" style={{ backgroundColor: "#F3EADA", color: "#6B5D4F" }}>
+                  <div className="mt-2 p-2 rounded-lg text-[10px] text-left max-h-52 overflow-y-auto" style={{ backgroundColor: "#F3EADA", color: "#6B5D4F" }}>
                     {diag.error ? <div style={{ color: "#A23B2E" }}>{diag.error}</div> : (
                       <>
                         <div className="font-bold">Total 28d: {diag.totalForItem} (base {diag.fromBase} + modifiers {diag.fromModifiers})</div>
@@ -13919,6 +13943,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
       {detailItem && (
         <StockDetailModal
           storeId={activeStoreId}
+          storeName={customers.find(c => c.id === customerId)?.name || activeStoreId}
           item={detailItem}
           usage={consumption?.byDist?.[detailItem.id] || null}
           usageDays={consumption?.days || 28}
