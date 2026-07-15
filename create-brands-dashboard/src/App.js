@@ -54574,7 +54574,11 @@ const applyContainerStyle = {
   minHeight: "100vh",
   background: "#FFFFFF",
   display: "flex",
-  alignItems: "center",
+  // Top-anchored, not centered: inside the careers-page iframe the viewport is
+  // the iframe's fixed height, and centering a now-short wizard in it leaves a
+  // large blank band ABOVE the form. Anchoring to the top puts any excess
+  // frame height below the card instead, where it reads as normal page space.
+  alignItems: "flex-start",
   justifyContent: "center",
   padding: 24,
   fontFamily: "'Jost', system-ui, -apple-system, 'Segoe UI', sans-serif",
