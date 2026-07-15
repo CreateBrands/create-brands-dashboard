@@ -15083,3 +15083,204 @@ export async function renameRecipeCard(id, { name, mainCategory, category }) {
   return row;
 }
 
+
+// ===== FLEET_FUEL_V1 — fuel-card control for distribution vans ===============
+// Flow: driver enters the odometer BEFORE filling (validated against the van's
+// last recorded reading), shows the reg+mileage kiosk card to the attendant so
+// the number Allstar records is the number in our system, then completes the
+// fill with litres/£/receipt photo. Flags are computed automatically at
+// completion; abandoned pending fills are themselves flagged.
+
+const _vehicleMap = (r) => ({
+  id: r.id, reg: r.reg, label: r.label || "", fuelType: r.fuel_type || "diesel",
+  tankLitres: r.tank_litres != null ? Number(r.tank_litres) : null,
+  cardNumber: r.card_number || "", active: r.active ?? true,
+  createdAt: r.created_at, updatedAt: r.updated_at,
+});
+const _fuelTxnMap = (r) => ({
+  id: r.id, vehicleId: r.vehicle_id, driverId: r.driver_id, driverName: r.driver_name || "",
+  status: r.status, startedAt: r.started_at, completedAt: r.completed_at,
+  odometer: r.odometer != null ? Number(r.odometer) : null,
+  litres: r.litres != null ? Number(r.litres) : null,
+  amount: r.amount != null ? Number(r.amount) : null,
+  station: r.station || "", receiptUrl: r.receipt_url || "",
+  lat: r.lat != null ? Number(r.lat) : null, lng: r.lng != null ? Number(r.lng) : null,
+  miles: r.miles != null ? Number(r.miles) : null, mpg: r.mpg != null ? Number(r.mpg) : null,
+  source: r.source || "driver_log", flags: r.flags || [],
+  flagStatus: r.flag_status || "ok", reviewNote: r.review_note || "", reviewedBy: r.reviewed_by || "",
+});
+
+export async function fetchFleetVehicles({ includeInactive = false } = {}) {
+  let q = supabase.from("fleet_vehicles").select("*").order("reg");
+  if (!includeInactive) q = q.eq("active", true);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(_vehicleMap);
+}
+
+export async function upsertFleetVehicle(v) {
+  const row = {
+    id: v.id || `fv-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    reg: (v.reg || "").trim().toUpperCase(), label: v.label || "",
+    fuel_type: v.fuelType || "diesel",
+    tank_litres: v.tankLitres === "" || v.tankLitres == null ? null : Number(v.tankLitres),
+    card_number: v.cardNumber || "", active: v.active ?? true,
+    updated_at: new Date().toISOString(),
+  };
+  if (!row.reg) throw new Error("Registration is required.");
+  const { data, error } = await supabase.from("fleet_vehicles").upsert(row).select().single();
+  if (error) throw error;
+  return _vehicleMap(data);
+}
+
+// Last COMPLETED fill for a vehicle — the odometer baseline for validation.
+async function _lastCompletedFill(vehicleId, beforeIso = null) {
+  let q = supabase.from("fuel_transactions").select("*")
+    .eq("vehicle_id", vehicleId).eq("status", "complete")
+    .order("completed_at", { ascending: false }).limit(1);
+  if (beforeIso) q = q.lt("completed_at", beforeIso);
+  const { data, error } = await q.maybeSingle();
+  if (error) throw error;
+  return data ? _fuelTxnMap(data) : null;
+}
+
+// Step 1 — driver enters odometer at the van, before walking to the kiosk.
+// Validates against the van's last reading (hard block: can't go backwards).
+// If the driver already has a pending fill, it's returned so they can resume.
+export async function startFuelFill({ vehicleId, driverId, driverName, odometer, lat = null, lng = null }) {
+  if (!vehicleId) throw new Error("Pick a vehicle first.");
+  const odo = Number(odometer);
+  if (!odo || odo <= 0) throw new Error("Enter the odometer reading from the dashboard.");
+  // Resume an existing pending fill for this driver (any vehicle).
+  const { data: mine } = await supabase.from("fuel_transactions").select("*")
+    .eq("driver_id", driverId).eq("status", "pending")
+    .order("started_at", { ascending: false }).limit(1).maybeSingle();
+  if (mine) return { txn: _fuelTxnMap(mine), resumed: true };
+  const last = await _lastCompletedFill(vehicleId);
+  if (last && last.odometer != null && odo < last.odometer) {
+    throw new Error(`That reading (${odo.toLocaleString()}) is LOWER than this van's last recorded mileage (${last.odometer.toLocaleString()}). Check the dashboard and try again.`);
+  }
+  const row = {
+    id: `ft-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    vehicle_id: vehicleId, driver_id: driverId || null, driver_name: driverName || "",
+    status: "pending", started_at: new Date().toISOString(),
+    odometer: odo, lat, lng, source: "driver_log",
+  };
+  const { data, error } = await supabase.from("fuel_transactions").insert(row).select().single();
+  if (error) throw error;
+  return { txn: _fuelTxnMap(data), resumed: false };
+}
+
+export async function cancelFuelFill(id) {
+  const { error } = await supabase.from("fuel_transactions").delete().eq("id", id).eq("status", "pending");
+  if (error) throw error;
+}
+
+export async function uploadFuelReceipt(file) {
+  if (!file) return "";
+  const ext = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/heic": "heic" }[(file.type || "").toLowerCase()] || "jpg";
+  const token = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  const path = `receipts/${token}.${ext}`;
+  const { error } = await supabase.storage.from("fuel-receipts")
+    .upload(path, file, { contentType: file.type || "image/jpeg", cacheControl: "3600", upsert: false });
+  if (error) throw error;
+  const { data: { publicUrl } } = supabase.storage.from("fuel-receipts").getPublicUrl(path);
+  return publicUrl;
+}
+
+// Step 3 — after paying: litres, £, station, receipt photo. Flags computed here.
+export async function completeFuelFill(id, { litres, amount, station = "", receiptFile = null }) {
+  const L = Number(litres), A = Number(amount);
+  if (!L || L <= 0) throw new Error("Enter the litres from the pump/receipt.");
+  if (!A || A <= 0) throw new Error("Enter the £ amount from the receipt.");
+  const { data: txnRow, error: tErr } = await supabase.from("fuel_transactions").select("*").eq("id", id).maybeSingle();
+  if (tErr) throw tErr;
+  if (!txnRow) throw new Error("This fill can't be found — start again.");
+  if (txnRow.status === "complete") throw new Error("This fill is already logged.");
+  const txn = _fuelTxnMap(txnRow);
+  const { data: vRow } = await supabase.from("fleet_vehicles").select("*").eq("id", txn.vehicleId).maybeSingle();
+  const vehicle = vRow ? _vehicleMap(vRow) : null;
+
+  let receiptUrl = "";
+  try { receiptUrl = await uploadFuelReceipt(receiptFile); } catch (e) { console.warn("receipt upload failed:", e.message); }
+
+  // ── Flags ──────────────────────────────────────────────────────────────────
+  const flags = [];
+  if (vehicle?.tankLitres && L > vehicle.tankLitres * 1.05) {
+    flags.push(`Overfill: ${L}L exceeds the van's ${vehicle.tankLitres}L tank`);
+  }
+  const nowIso = new Date().toISOString();
+  const prev = await _lastCompletedFill(txn.vehicleId, nowIso);
+  let miles = null, mpg = null;
+  if (prev) {
+    const hoursSince = (Date.now() - new Date(prev.completedAt).getTime()) / 36e5;
+    if (hoursSince < 6) flags.push(`Second fill within ${Math.round(hoursSince * 10) / 10}h of the previous one`);
+    if (prev.odometer != null && txn.odometer != null) {
+      miles = Math.round((txn.odometer - prev.odometer) * 10) / 10;
+      if (miles <= 0) flags.push("Odometer has not increased since the last fill");
+      else {
+        if (miles > 1200) flags.push(`Implausible mileage jump: ${miles.toLocaleString()} miles since last fill`);
+        mpg = Math.round((miles / (L / 4.54609)) * 10) / 10;
+        // Rolling MPG norm: median of this van's last completed fills with mpg.
+        const { data: hist } = await supabase.from("fuel_transactions").select("mpg")
+          .eq("vehicle_id", txn.vehicleId).eq("status", "complete").not("mpg", "is", null)
+          .order("completed_at", { ascending: false }).limit(8);
+        const samples = (hist || []).map(h => Number(h.mpg)).filter(x => x > 0);
+        if (samples.length >= 3) {
+          const sorted = [...samples].sort((a, b) => a - b);
+          const median = sorted[Math.floor(sorted.length / 2)];
+          if (median > 0 && Math.abs(mpg - median) / median > 0.35) {
+            flags.push(`MPG ${mpg} is ${mpg < median ? "well below" : "well above"} this van's norm (~${median})`);
+          }
+        }
+      }
+    }
+  }
+  // Long gap between starting the fill and completing it (> 2h) is suspicious.
+  const startedH = (Date.now() - new Date(txn.startedAt).getTime()) / 36e5;
+  if (startedH > 2) flags.push(`Completed ${Math.round(startedH * 10) / 10}h after the odometer was entered`);
+
+  const patch = {
+    status: "complete", completed_at: nowIso, litres: L, amount: A,
+    station: station || "", receipt_url: receiptUrl,
+    miles, mpg, flags, flag_status: flags.length ? "flagged" : "ok",
+    updated_at: nowIso,
+  };
+  const { data, error } = await supabase.from("fuel_transactions").update(patch).eq("id", id).select().single();
+  if (error) throw error;
+  return _fuelTxnMap(data);
+}
+
+// Admin fetch. Also sweeps stale pending fills (>2h) into expired+flagged —
+// someone entered a mileage, fuelled, and never logged the amount.
+export async function fetchFuelTransactions({ vehicleId = null, days = 30, flaggedOnly = false } = {}) {
+  const cutoff = new Date(Date.now() - 2 * 36e5).toISOString();
+  await supabase.from("fuel_transactions")
+    .update({ status: "expired", flag_status: "flagged", flags: ["Started but never completed — odometer entered, no amount logged"], updated_at: new Date().toISOString() })
+    .eq("status", "pending").lt("started_at", cutoff);
+  const fromIso = new Date(Date.now() - days * 864e5).toISOString();
+  let q = supabase.from("fuel_transactions").select("*").gte("started_at", fromIso)
+    .order("started_at", { ascending: false }).limit(500);
+  if (vehicleId) q = q.eq("vehicle_id", vehicleId);
+  if (flaggedOnly) q = q.eq("flag_status", "flagged");
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(_fuelTxnMap);
+}
+
+export async function fetchMyPendingFill(driverId) {
+  const { data, error } = await supabase.from("fuel_transactions").select("*")
+    .eq("driver_id", driverId).eq("status", "pending")
+    .order("started_at", { ascending: false }).limit(1).maybeSingle();
+  if (error) throw error;
+  return data ? _fuelTxnMap(data) : null;
+}
+
+// Manager resolves a flagged transaction with a note (mirrors break claims).
+export async function reviewFuelTransaction(id, { note, reviewedBy }) {
+  const { error } = await supabase.from("fuel_transactions")
+    .update({ flag_status: "explained", review_note: note || "", reviewed_by: reviewedBy || "", updated_at: new Date().toISOString() })
+    .eq("id", id);
+  if (error) throw error;
+}
+// ===== end FLEET_FUEL_V1 =====

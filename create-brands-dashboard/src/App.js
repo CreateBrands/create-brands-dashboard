@@ -76,7 +76,7 @@ import {
   fetchEmployeeCertifications, addEmployeeCertification,
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
-  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, updateCkGoodsIn, computeCkStock, fetchCkOrders, saveCkOrder, submitCkOrder, cancelCkOrder, deleteCkOrder, fulfilCkOrder, computeCkOrderDemand, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, upsertCkIngredientsByName, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchScheduleJobs, saveScheduleJobs, detectAllergensInText, diffAllergens, scanLabelText, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock,
+  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, updateCkGoodsIn, computeCkStock, fetchCkOrders, saveCkOrder, submitCkOrder, cancelCkOrder, deleteCkOrder, fulfilCkOrder, computeCkOrderDemand, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, upsertCkIngredientsByName, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchScheduleJobs, saveScheduleJobs, detectAllergensInText, diffAllergens, scanLabelText, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock, fetchFleetVehicles, upsertFleetVehicle, startFuelFill, cancelFuelFill, completeFuelFill, fetchFuelTransactions, fetchMyPendingFill, reviewFuelTransaction,
   archiveEmployeeDocument, fetchArchivedDocuments,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
   signContractDocument,
@@ -19500,6 +19500,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
   // the driver agreement — the pill below makes it visible to the driver.
   const isDriverRole = /driver|delivery/i.test(myOpsMember?.department || "");
   const trackingActive = isDriverRole && !!myOpenPunch;
+  const [fuelOpen, setFuelOpen] = useState(false);   // FLEET_FUEL_V1 driver flow
   useEffect(() => {
     if (!trackingActive) return;
     const punchId = myOpenPunch.id, empId = myOpenPunch.employeeId, stId = myOpenPunch.storeId;
@@ -19726,6 +19727,14 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
       {quickMsg && !quickRecOn && (
         <div className={`fixed top-2 right-2 z-50 rounded-full px-3 py-1.5 text-[11px] font-bold text-white shadow-lg ${quickMsg.tone === "ok" ? "bg-emerald-600" : "bg-red-600"}`}>{quickMsg.text}</div>
       )}
+      {/* FLEET_FUEL_V1 — driver fuel logging modal */}
+      {fuelOpen && (
+        <LogFuelModal
+          driverId={currentUser.opsTeamMemberId || currentUser.id}
+          driverName={currentUser.name}
+          onClose={() => setFuelOpen(false)}
+        />
+      )}
       {/* DRIVER_TRACK_V1 — visible while vehicle tracking is running */}
       {trackingActive && (
         <div className="fixed top-2 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1.5 bg-slate-900/90 border border-emerald-700/50 rounded-full px-3 py-1 text-[10px] font-semibold text-emerald-400 shadow-lg">
@@ -19788,6 +19797,14 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
               {myOpenPunch && <div className="text-[11px] text-slate-500 text-center mt-1.5">Clocked in since {new Date(myOpenPunch.punchIn).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}{myClockStore ? ` · ${myClockStore.shortName || myClockStore.name}` : ""}</div>}
               {clockMsg && <div className={`mt-2 text-xs font-semibold rounded-lg px-3 py-2 text-center ${clockMsg.type === "error" ? "bg-red-600 text-white" : "bg-emerald-600 text-white"}`}>{clockMsg.msg}</div>}
             </div>
+          )}
+
+          {/* FLEET_FUEL_V1 — drivers log fuel fills (3-step flow with kiosk card) */}
+          {isDriverRole && (
+            <button onClick={() => { setFuelOpen(true); setMoreOpen(false); }}
+              className="w-full mb-3 flex items-center justify-center gap-2 px-3 py-3 rounded-2xl text-sm font-bold bg-amber-600 text-white hover:bg-amber-500">
+              ⛽ Log fuel
+            </button>
           )}
 
           {/* tile grid */}
@@ -53378,6 +53395,316 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
   );
 }
 
+
+
+// ── FLEET_FUEL_V1 — admin: vans register + fuel transactions + flag review ───
+function FleetFuelView({ currentUser }) {
+  const [vehicles, setVehicles] = useState([]);
+  const [txns, setTxns] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filterVehicle, setFilterVehicle] = useState("");
+  const [flaggedOnly, setFlaggedOnly] = useState(false);
+  const [editV, setEditV] = useState(null);      // vehicle being edited / "new"
+  const [saveErr, setSaveErr] = useState(null);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [vs, ts] = await Promise.all([
+        fetchFleetVehicles({ includeInactive: true }),
+        fetchFuelTransactions({ vehicleId: filterVehicle || null, days: 60, flaggedOnly }),
+      ]);
+      setVehicles(vs); setTxns(ts);
+    } catch (e) { console.error(e); }
+    setLoading(false);
+  };
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [filterVehicle, flaggedOnly]);
+
+  const vehById = new Map(vehicles.map(v => [v.id, v]));
+  const flaggedCount = txns.filter(t => t.flagStatus === "flagged").length;
+  const monthSpend = txns.filter(t => t.status === "complete" && t.completedAt && new Date(t.completedAt).getMonth() === new Date().getMonth()).reduce((a, t) => a + (t.amount || 0), 0);
+
+  const saveVehicle = async (v) => {
+    setSaveErr(null);
+    try { await upsertFleetVehicle(v); setEditV(null); load(); }
+    catch (e) { setSaveErr(e.message); }
+  };
+  const doReview = async (t) => {
+    const note = window.prompt(`Resolve this flag?\n\nFlags:\n${(t.flags || []).join("\n")}\n\nAdd a short note explaining it:`, "");
+    if (note === null) return;
+    await reviewFuelTransaction(t.id, { note: note || "Reviewed", reviewedBy: currentUser.name });
+    load();
+  };
+
+  const inCls = "w-full px-2.5 py-2 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm placeholder-slate-500 focus:outline-none focus:border-indigo-500";
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-lg font-bold text-white">Fleet Fuel</h2>
+          <div className="text-xs text-slate-500">Fuel-card control — driver logs, odometer trail, automatic flags</div>
+        </div>
+        <div className="flex items-center gap-2 text-xs">
+          <div className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300">This month: <b className="text-white">£{monthSpend.toFixed(2)}</b></div>
+          <div className={`px-3 py-1.5 rounded-xl border ${flaggedCount ? "bg-amber-950/40 border-amber-700/50 text-amber-300" : "bg-slate-900 border-slate-800 text-slate-400"}`}>{flaggedCount} flagged</div>
+        </div>
+      </div>
+
+      {/* Vehicles */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="text-sm font-bold text-white">Vans</div>
+          <button onClick={() => setEditV({ reg: "", label: "", fuelType: "diesel", tankLitres: "", cardNumber: "", active: true })}
+            className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold">+ Add van</button>
+        </div>
+        {vehicles.length === 0 && !loading && <div className="text-xs text-slate-500">No vans yet — add each van with its reg, tank size, and Allstar card ref.</div>}
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {vehicles.map(v => (
+            <button key={v.id} onClick={() => setEditV(v)}
+              className={`text-left rounded-xl border p-3 ${v.active ? "bg-slate-800/60 border-slate-700" : "bg-slate-900 border-slate-800 opacity-50"}`}>
+              <div className="text-sm font-bold text-white" style={{ fontFamily: "monospace" }}>{v.reg}</div>
+              <div className="text-[11px] text-slate-500">{v.label || v.fuelType}{v.tankLitres ? ` · ${v.tankLitres}L tank` : ""}{v.cardNumber ? ` · card ${v.cardNumber}` : ""}{v.active ? "" : " · inactive"}</div>
+            </button>
+          ))}
+        </div>
+        {editV && (
+          <div className="rounded-xl border border-indigo-700/50 bg-slate-950 p-3 space-y-2">
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div><label className="text-[11px] font-semibold text-slate-400">Registration *</label><input value={editV.reg} onChange={e => setEditV({ ...editV, reg: e.target.value })} placeholder="AB12 CDE" className={inCls}/></div>
+              <div><label className="text-[11px] font-semibold text-slate-400">Label</label><input value={editV.label} onChange={e => setEditV({ ...editV, label: e.target.value })} placeholder="White Sprinter" className={inCls}/></div>
+              <div><label className="text-[11px] font-semibold text-slate-400">Tank (litres)</label><input type="number" value={editV.tankLitres ?? ""} onChange={e => setEditV({ ...editV, tankLitres: e.target.value })} placeholder="75" className={inCls}/></div>
+              <div><label className="text-[11px] font-semibold text-slate-400">Fuel card ref</label><input value={editV.cardNumber} onChange={e => setEditV({ ...editV, cardNumber: e.target.value })} placeholder="last 4 digits" className={inCls}/></div>
+            </div>
+            <label className="flex items-center gap-2 text-xs text-slate-300"><input type="checkbox" checked={editV.active} onChange={e => setEditV({ ...editV, active: e.target.checked })}/> Active</label>
+            {saveErr && <div className="text-xs text-red-400">{saveErr}</div>}
+            <div className="flex gap-2">
+              <button onClick={() => saveVehicle(editV)} className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">Save</button>
+              <button onClick={() => { setEditV(null); setSaveErr(null); }} className="px-3 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold">Cancel</button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Transactions */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div className="text-sm font-bold text-white">Fuel log <span className="text-slate-500 font-normal">(last 60 days)</span></div>
+          <div className="flex items-center gap-2">
+            <select value={filterVehicle} onChange={e => setFilterVehicle(e.target.value)} className="px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-xs">
+              <option value="">All vans</option>
+              {vehicles.map(v => <option key={v.id} value={v.id}>{v.reg}</option>)}
+            </select>
+            <label className="flex items-center gap-1.5 text-xs text-slate-300"><input type="checkbox" checked={flaggedOnly} onChange={e => setFlaggedOnly(e.target.checked)}/> Flagged only</label>
+          </div>
+        </div>
+        {loading ? <div className="text-xs text-slate-500 py-4 text-center">Loading…</div> :
+         txns.length === 0 ? <div className="text-xs text-slate-500 py-4 text-center">No fuel transactions in this window.</div> : (
+          <div className="space-y-2">
+            {txns.map(t => {
+              const v = vehById.get(t.vehicleId);
+              const flagged = t.flagStatus === "flagged", explained = t.flagStatus === "explained";
+              return (
+                <div key={t.id} className={`rounded-xl border p-3 ${flagged ? "bg-amber-950/20 border-amber-700/40" : "bg-slate-800/40 border-slate-800"}`}>
+                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                    <div className="min-w-0">
+                      <div className="text-sm font-bold text-white">
+                        <span style={{ fontFamily: "monospace" }}>{v?.reg || "?"}</span>
+                        {t.status === "complete" && <span className="font-normal text-slate-300"> · {t.litres}L · £{(t.amount || 0).toFixed(2)}</span>}
+                        {t.status === "pending" && <span className="text-amber-400 text-xs font-semibold"> · in progress</span>}
+                        {t.status === "expired" && <span className="text-red-400 text-xs font-semibold"> · never completed</span>}
+                      </div>
+                      <div className="text-[11px] text-slate-500">
+                        {new Date(t.startedAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                        {" · "}{t.driverName || "unknown driver"}
+                        {t.odometer != null && <> · odo {t.odometer.toLocaleString()}</>}
+                        {t.miles != null && t.miles > 0 && <> · {t.miles} mi</>}
+                        {t.mpg != null && <> · {t.mpg} mpg</>}
+                        {t.station && <> · {t.station}</>}
+                      </div>
+                      {(t.flags || []).length > 0 && (
+                        <div className="mt-1.5 space-y-0.5">
+                          {t.flags.map((f, i) => <div key={i} className={`text-[11px] font-semibold ${flagged ? "text-amber-300" : "text-slate-500"}`}>⚠ {f}</div>)}
+                        </div>
+                      )}
+                      {explained && <div className="text-[11px] text-emerald-400 mt-1">✓ Reviewed by {t.reviewedBy}{t.reviewNote ? ` — "${t.reviewNote}"` : ""}</div>}
+                    </div>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {t.receiptUrl && <a href={t.receiptUrl} target="_blank" rel="noreferrer" className="px-2.5 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-[11px] font-semibold hover:text-white">Receipt</a>}
+                      {flagged && <button onClick={() => doReview(t)} className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold">Resolve</button>}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── FLEET_FUEL_V1 — driver 3-step fuel logging ────────────────────────────────
+// Step 1: at the van — pick vehicle, enter odometer (validated: can't go
+//         backwards vs the van's last reading). Creates a pending fill.
+// Step 2: at the kiosk — full-screen REG + MILEAGE card to show the attendant,
+//         so the number Allstar records is exactly the number in our system.
+// Step 3: after paying — litres, £, station, receipt photo. Flags auto-compute.
+function LogFuelModal({ driverId, driverName, onClose }) {
+  const [vehicles, setVehicles] = useState([]);
+  const [phase, setPhase] = useState("start");   // start | kiosk | complete | done
+  const [txn, setTxn] = useState(null);
+  const [vehicleId, setVehicleId] = useState("");
+  const [odometer, setOdometer] = useState("");
+  const [litres, setLitres] = useState("");
+  const [amount, setAmount] = useState("");
+  const [station, setStation] = useState("");
+  const [receipt, setReceipt] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState(null);
+
+  useEffect(() => {
+    let dead = false;
+    Promise.all([fetchFleetVehicles(), fetchMyPendingFill(driverId)]).then(([vs, pending]) => {
+      if (dead) return;
+      setVehicles(vs);
+      if (pending) { setTxn(pending); setVehicleId(pending.vehicleId); setPhase("kiosk"); }
+      else if (vs.length === 1) setVehicleId(vs[0].id);
+    }).catch(e => !dead && setErr(e.message));
+    return () => { dead = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const vehicle = vehicles.find(v => v.id === (txn?.vehicleId || vehicleId)) || null;
+
+  const doStart = async () => {
+    setErr(null); setBusy(true);
+    try {
+      let lat = null, lng = null;
+      try {
+        const pos = await new Promise((res, rej) => navigator.geolocation
+          ? navigator.geolocation.getCurrentPosition(res, rej, { timeout: 6000, maximumAge: 60000 })
+          : rej(new Error("no geo")));
+        lat = pos.coords.latitude; lng = pos.coords.longitude;
+      } catch { /* GPS optional */ }
+      const { txn: t, resumed } = await startFuelFill({ vehicleId, driverId, driverName, odometer, lat, lng });
+      setTxn(t);
+      if (resumed) setVehicleId(t.vehicleId);
+      setPhase("kiosk");
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  };
+
+  const doComplete = async () => {
+    setErr(null); setBusy(true);
+    try {
+      await completeFuelFill(txn.id, { litres, amount, station, receiptFile: receipt });
+      setPhase("done");
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  };
+
+  const doCancel = async () => {
+    if (txn && phase !== "done") { try { await cancelFuelFill(txn.id); } catch { /* already completed/expired */ } }
+    onClose();
+  };
+
+  const inBox = "w-full px-3 py-3 rounded-xl bg-slate-800 border border-slate-700 text-white text-base placeholder-slate-500 focus:outline-none focus:border-indigo-500";
+
+  return (
+    <div className="fixed inset-0 z-[60] bg-black/70 backdrop-blur-sm flex items-end sm:items-center justify-center" onClick={phase === "kiosk" ? undefined : doCancel}>
+      <div onClick={e => e.stopPropagation()} className="w-full sm:max-w-md bg-slate-900 border border-slate-700 rounded-t-3xl sm:rounded-3xl p-5 space-y-4 max-h-[92vh] overflow-auto">
+
+        {phase === "start" && (<>
+          <div className="flex items-center justify-between">
+            <div className="text-base font-bold text-white">⛽ Log fuel</div>
+            <button onClick={doCancel} className="w-8 h-8 rounded-full bg-slate-800 text-slate-400 flex items-center justify-center"><X size={15}/></button>
+          </div>
+          <div className="text-xs text-slate-400">Do this <b className="text-white">at the van, before you go to pay</b>. You'll get a card to show the attendant.</div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-slate-400">Vehicle</label>
+            <select value={vehicleId} onChange={e => setVehicleId(e.target.value)} className={inBox}>
+              <option value="">— Pick your van —</option>
+              {vehicles.map(v => <option key={v.id} value={v.id}>{v.reg}{v.label ? ` · ${v.label}` : ""}</option>)}
+            </select>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-slate-400">Odometer (miles, from the dashboard)</label>
+            <input type="number" inputMode="numeric" value={odometer} onChange={e => setOdometer(e.target.value)} placeholder="e.g. 84213" className={inBox}/>
+          </div>
+          {err && <div className="text-xs font-semibold text-red-400 bg-red-950/40 border border-red-800/40 rounded-xl px-3 py-2">{err}</div>}
+          <button onClick={doStart} disabled={busy || !vehicleId || !odometer}
+            className="w-full py-3.5 rounded-2xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-bold">
+            {busy ? "Checking…" : "Continue → show at kiosk"}
+          </button>
+        </>)}
+
+        {phase === "kiosk" && txn && (<>
+          <div className="text-center text-xs font-semibold text-slate-400 uppercase tracking-wide">Show this at the kiosk</div>
+          <div className="rounded-2xl bg-slate-950 border-2 border-indigo-500/60 p-6 text-center space-y-4">
+            <div>
+              <div className="text-[11px] text-slate-500 font-semibold uppercase">Registration</div>
+              <div className="text-4xl font-black text-white tracking-wider" style={{ fontFamily: "monospace" }}>{vehicle?.reg || "—"}</div>
+            </div>
+            <div>
+              <div className="text-[11px] text-slate-500 font-semibold uppercase">Mileage</div>
+              <div className="text-4xl font-black text-emerald-400 tabular-nums">{txn.odometer?.toLocaleString()}</div>
+            </div>
+          </div>
+          <div className="text-[11px] text-slate-500 text-center">Give these exact numbers when asked. Then fill up and pay.</div>
+          <button onClick={() => setPhase("complete")}
+            className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold">
+            I've paid — log the amount
+          </button>
+          <button onClick={doCancel} className="w-full py-2 text-xs font-semibold text-slate-500">Cancel this fill</button>
+        </>)}
+
+        {phase === "complete" && txn && (<>
+          <div className="flex items-center justify-between">
+            <div className="text-base font-bold text-white">Receipt details</div>
+            <button onClick={() => setPhase("kiosk")} className="text-xs font-semibold text-slate-400">← Back</button>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-slate-400">Litres</label>
+              <input type="number" inputMode="decimal" step="0.01" value={litres} onChange={e => setLitres(e.target.value)} placeholder="e.g. 62.4" className={inBox}/>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-slate-400">Amount (£)</label>
+              <input type="number" inputMode="decimal" step="0.01" value={amount} onChange={e => setAmount(e.target.value)} placeholder="e.g. 94.30" className={inBox}/>
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-slate-400">Station (optional)</label>
+            <input value={station} onChange={e => setStation(e.target.value)} placeholder="e.g. Shell A46" className={inBox}/>
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-xs font-semibold text-slate-400">Photo of receipt</label>
+            <input type="file" accept="image/*" capture="environment" onChange={e => setReceipt(e.target.files?.[0] || null)}
+              className="w-full text-xs text-slate-400 file:mr-3 file:px-3 file:py-2 file:rounded-xl file:border-0 file:bg-indigo-600 file:text-white file:text-xs file:font-bold"/>
+            {receipt && <div className="text-[11px] text-emerald-400">✓ {receipt.name}</div>}
+          </div>
+          {err && <div className="text-xs font-semibold text-red-400 bg-red-950/40 border border-red-800/40 rounded-xl px-3 py-2">{err}</div>}
+          <button onClick={doComplete} disabled={busy || !litres || !amount}
+            className="w-full py-3.5 rounded-2xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-bold">
+            {busy ? "Saving…" : "Save fuel log"}
+          </button>
+        </>)}
+
+        {phase === "done" && (<>
+          <div className="text-center py-6 space-y-3">
+            <div className="text-4xl">✅</div>
+            <div className="text-base font-bold text-white">Fuel logged</div>
+            <div className="text-xs text-slate-400">{vehicle?.reg} · {litres}L · £{amount}</div>
+          </div>
+          <button onClick={onClose} className="w-full py-3 rounded-2xl bg-slate-800 text-white text-sm font-bold">Done</button>
+        </>)}
+
+      </div>
+    </div>
+  );
+}
+
 // ── KioskShell ────────────────────────────────────────────────────────────────
 // Per-store kiosk auth flow:
 //   1. On first load, check localStorage for a registered storeId.
@@ -57624,6 +57951,7 @@ export default function App() {
         { key: "dist-credit-notes", label: "Credit Notes", icon: Receipt },
       ]},
       { key: "dist-reports", label: "Reports", icon: BarChart2, requiresEntity: "brand-distribution" },
+      { key: "dist-fuel", label: "Fleet Fuel", icon: Truck, requiresEntity: "brand-distribution" },
     ]},
     { group: "PEOPLE", items: [
       { key: "team",         label: "Team",              icon: Users, badge: (pendingSetupCount + hiringBadge) > 0 ? (pendingSetupCount + hiringBadge).toString() : null, badgeClearOnView: true, children: [
@@ -58123,6 +58451,7 @@ export default function App() {
             {effectiveActiveView === "dist-credit-notes" && <DistCreditNotesView currentUser={currentUser}/>}
             {effectiveActiveView === "dist-packaging" && <PackagingOrdersView currentUser={currentUser}/>}
             {effectiveActiveView === "dist-reports" && <DistReportsView/>}
+            {effectiveActiveView === "dist-fuel" && <FleetFuelView currentUser={currentUser}/>}
             {effectiveActiveView === "setup" && setupPanel === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "cash-accounts" && financeAvailable && <CashAccountsView accounts={cashAccounts} sources={cashSources} expenseTypes={cashExpenseTypes} ledger={cashLedger} stores={stores} categories={categories} handlers={cashHandlers}/>}
             {effectiveActiveView === "spend" && financeAvailable && <SpendDashboardView claims={expenseClaims} payees={expensePayees} bankTransactions={bankTransactions} bankAccounts={bankAccounts} cashAccounts={cashAccounts} cashLedger={cashLedger} stores={stores}/>}
