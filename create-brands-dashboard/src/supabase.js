@@ -6385,6 +6385,8 @@ function _invBody(p) {
   if ("allergens" in p) b.allergens = Array.isArray(p.allergens) ? p.allergens : [];
   if ("reorderPoint" in p) b.reorder_point = p.reorderPoint === "" || p.reorderPoint == null ? null : Number(p.reorderPoint);
   if ("siteId" in p) b.site_id = p.siteId || null;
+  // Warehouse link (Fix: previously unsaveable from the app — SQL-only).
+  if ("distItemId" in p) b.dist_item_id = p.distItemId || null;
   return b;
 }
 

@@ -15539,6 +15539,7 @@ function InventoryImport({ scope, onClose, onDone }) {
 
 function InventoryBuilder() {
   const [data, setData] = useState(null);
+  const [distItems, setDistItems] = useState([]);   // warehouse items for the link column
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState(null);
   const [scope, setScope] = useState("store");   // 'store' | 'ck'
@@ -15558,7 +15559,15 @@ function InventoryBuilder() {
 
   const load = async () => {
     setErr(null);
-    try { setData(await fetchInventory()); }
+    try {
+      const [invData, dItems] = await Promise.all([
+        fetchInventory(),
+        // Warehouse items for the link column. includeInactive so items whose
+        // linked dist item was retired still display their link (with a note).
+        fetchDistItems({ includeInactive: true }).catch(() => []),
+      ]);
+      setData(invData); setDistItems(dItems);
+    }
     catch (e) { setErr(e.message || String(e)); }
     finally { setLoading(false); }
   };
@@ -15790,15 +15799,16 @@ function InventoryBuilder() {
               <th className="text-left px-2 py-2">Unit</th>
               <th className="text-right px-2 py-2">Pack £</th>
               <th className="text-right px-2 py-2 cursor-pointer select-none hover:text-white" onClick={()=>toggleSort("cost")}>£/unit{sortBy==="cost"?(sortDir==="asc"?" ↑":" ↓"):""}</th>
+              {scope === "store" && <th className="text-left px-2 py-2">Warehouse item</th>}
               <th className="px-2 py-2"></th>
             </tr>
           </thead>
           <tbody>
             {shown.length === 0 && (
-              <tr><td colSpan={9} className="px-3 py-8 text-center text-slate-500 text-sm">No items match. Adjust filters or click "Add item".</td></tr>
+              <tr><td colSpan={11} className="px-3 py-8 text-center text-slate-500 text-sm">No items match. Adjust filters or click "Add item".</td></tr>
             )}
             {pageRows.map(it => (
-              <CogsItemRow key={it.id} item={it} scope={scope} cats={cats} sups={sups} saving={savingId===it.id}
+              <CogsItemRow key={it.id} item={it} scope={scope} cats={cats} sups={sups} distItems={distItems} saving={savingId===it.id}
                 onSave={(patch) => saveField(it.id, patch)} onDelete={() => removeRow(it.id)}/>
             ))}
           </tbody>
@@ -18191,7 +18201,7 @@ function PosMapper({ stores = [] }) {
   );
 }
 
-function CogsItemRow({ item, scope, cats, sups, saving, onSave, onDelete }) {
+function CogsItemRow({ item, scope, cats, sups, distItems = [], saving, onSave, onDelete }) {
   const cell = "bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-white";
   const [f, setF] = useState({
     name: item.name || "", category: item.category || "",
@@ -18230,6 +18240,43 @@ function CogsItemRow({ item, scope, cats, sups, saving, onSave, onDelete }) {
       </td>
       <td className="px-2 py-1.5 text-right"><input value={f.packPrice} onChange={e=>set("packPrice",e.target.value)} onBlur={()=>blur("packPrice")} className={cell+" w-16 text-right"}/></td>
       <td className="px-2 py-1.5 text-right font-mono text-slate-400 text-xs">{perUnit!=null?"£"+perUnit.toFixed(4):"—"}</td>
+      {scope === "store" && (() => {
+        // ── Warehouse link + pack-drift warning ─────────────────────────────
+        // The consumption engine converts base-unit usage to cases with the
+        // STORE item's packQty, but the physical case shipped is defined by
+        // the dist item (packCount × packSize packUnit). If the two disagree,
+        // suggested case counts go quietly wrong — so surface it right here.
+        const linked = distItems.find(x => x.id === item.distItemId) || null;
+        let drift = null;
+        if (linked && Number(f.packQty) > 0) {
+          const unitFactor = { kg: 1000, l: 1000, kilogram: 1000, litre: 1000, liter: 1000 };
+          const pu = (linked.packUnit || "").toLowerCase();
+          const distEquiv = (linked.packCount || 1) * (linked.packSize != null ? linked.packSize * (unitFactor[pu] || 1) : 1);
+          const distUnitNorm = unitFactor[pu] ? (pu.startsWith("k") ? "g" : "ml") : pu;
+          const comparable = linked.packSize == null
+            ? (item.baseUnit === "ea" || !item.baseUnit)          // count-based packs vs ea
+            : distUnitNorm === (item.baseUnit || "").toLowerCase(); // measured packs need matching unit
+          if (comparable && distEquiv > 0 && Math.abs(distEquiv - Number(f.packQty)) / distEquiv > 0.01) {
+            drift = `Pack mismatch: store says ${f.packQty} ${item.baseUnit || ""}/case, warehouse item says ${distEquiv} (${linked.packCount || 1}×${linked.packSize ?? 1}${linked.packUnit || ""}). Order suggestions use the store value — align them.`;
+          }
+        }
+        return (
+          <td className="px-2 py-1.5">
+            <div className="flex items-center gap-1">
+              <select value={item.distItemId || ""} onChange={e => onSave({ distItemId: e.target.value || null })}
+                className={cell + " w-36"} title={linked ? `${linked.name}${linked.sku ? ` (${linked.sku})` : ""}` : "Not linked — invisible to order-page demand"}>
+                <option value="">— not linked —</option>
+                {item.distItemId && !distItems.some(x => x.id === item.distItemId) && <option value={item.distItemId}>(missing item)</option>}
+                {distItems.map(x => (
+                  <option key={x.id} value={x.id}>{x.name}{x.active === false ? " (inactive)" : ""}</option>
+                ))}
+              </select>
+              {drift && <span title={drift} className="text-amber-400 cursor-help text-sm" aria-label="Pack mismatch">⚠</span>}
+              {linked && linked.active === false && <span title="Linked warehouse item is inactive" className="text-slate-500 cursor-help text-sm">⏸</span>}
+            </div>
+          </td>
+        );
+      })()}
       <td className="px-2 py-1.5 text-right">
         {saving ? <span className="text-xs text-slate-500">…</span> :
           <button onClick={onDelete} className="text-slate-600 hover:text-red-400"><Trash2 size={14}/></button>}
