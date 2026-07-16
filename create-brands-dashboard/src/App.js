@@ -76,7 +76,7 @@ import {
   fetchEmployeeCertifications, addEmployeeCertification,
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
-  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, updateCkGoodsIn, computeCkStock, fetchCkOrders, saveCkOrder, submitCkOrder, cancelCkOrder, deleteCkOrder, fulfilCkOrder, computeCkOrderDemand, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, upsertCkIngredientsByName, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchScheduleJobs, saveScheduleJobs, detectAllergensInText, diffAllergens, scanLabelText, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock, fetchFleetVehicles, upsertFleetVehicle, startFuelFill, cancelFuelFill, completeFuelFill, fetchFuelTransactions, fetchMyPendingFill, reviewFuelTransaction,
+  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, updateCkGoodsIn, computeCkStock, fetchCkOrders, saveCkOrder, submitCkOrder, cancelCkOrder, deleteCkOrder, fulfilCkOrder, computeCkOrderDemand, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, upsertCkIngredientsByName, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchScheduleJobs, saveScheduleJobs, detectAllergensInText, diffAllergens, scanLabelText, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock, fetchIncomingCkDeliveries, fetchCkDeliveryDetail, saveCkDeliveryReceipt, confirmCkDelivery, ckLineEquivalent, fetchFleetVehicles, upsertFleetVehicle, startFuelFill, cancelFuelFill, completeFuelFill, fetchFuelTransactions, fetchMyPendingFill, reviewFuelTransaction,
   archiveEmployeeDocument, fetchArchivedDocuments,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
   signContractDocument,
@@ -5082,12 +5082,44 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   const load = useCallback(() => {
     if (!siteId) { setLoading(false); return; }
     setLoading(true);
-    Promise.all([fetchCkIngredients(siteId), fetchCkGoodsIn(siteId), fetchCkCategories(siteId), fetchCkSuppliers(siteId), fetchCkProducts(siteId).catch(()=>[]), fetchCkProductComponents().catch(()=>[]), fetchProductionRuns(siteId).catch(()=>[]), fetchDispatches({ fromSiteId: siteId }).catch(()=>[]), fetchDispatchedByRun().catch(()=>({})), fetchCkPreps(siteId).catch(()=>[]), fetchCkPrepComponents().catch(()=>[]), fetchProductionPlans(siteId).catch(()=>[]), fetchCkOrders({ status: ["submitted","fulfilled"] }).catch(()=>[])])
-      .then(([i, g, c, s, kp, comps, rn, dsp, dbr, pr, pc, pl, ord]) => { setIngredients(i); setGoodsIn(g); setCategories(c); setSuppliers(s); setCkProducts(kp); setAllComponents(comps); setRuns(rn); setDispatches(dsp); setDispatchedByRun(dbr); setCkPreps(pr); setAllPrepComps(pc); setPlans(pl); setCkOrders(ord); })
+    Promise.all([fetchCkIngredients(siteId), fetchCkGoodsIn(siteId), fetchCkCategories(siteId), fetchCkSuppliers(siteId), fetchCkProducts(siteId).catch(()=>[]), fetchCkProductComponents().catch(()=>[]), fetchProductionRuns(siteId).catch(()=>[]), fetchDispatches({ fromSiteId: siteId }).catch(()=>[]), fetchDispatchedByRun().catch(()=>({})), fetchCkPreps(siteId).catch(()=>[]), fetchCkPrepComponents().catch(()=>[]), fetchProductionPlans(siteId).catch(()=>[]), fetchCkOrders({ status: ["submitted","fulfilled"] }).catch(()=>[]), fetchIncomingCkDeliveries(siteId).catch(()=>[])])
+      .then(([i, g, c, s, kp, comps, rn, dsp, dbr, pr, pc, pl, ord, inDel]) => { setIngredients(i); setGoodsIn(g); setCategories(c); setSuppliers(s); setCkProducts(kp); setAllComponents(comps); setRuns(rn); setDispatches(dsp); setDispatchedByRun(dbr); setCkPreps(pr); setAllPrepComps(pc); setPlans(pl); setCkOrders(ord); setIncomingDel(inDel); })
       .catch(e => setErr(e?.message || String(e)))
       .finally(() => setLoading(false));
   }, [siteId]);
   useEffect(() => { load(); }, [load]);
+
+  // ── Incoming from Distribution (Dist→CK bridge) ──
+  const [incomingDel, setIncomingDel] = useState([]);
+  const [ckRecvDel, setCkRecvDel] = useState(null);        // { head, lines } being received
+  const [ckRecvQty, setCkRecvQty] = useState({});          // lineId -> qty (kitchen units)
+  const [ckRecvBusy, setCkRecvBusy] = useState(false);
+  const openCkRecvDel = async (id) => {
+    setErr("");
+    try {
+      const d = await fetchCkDeliveryDetail(id);
+      const pre = {};
+      (d.lines || []).forEach(l => {
+        const { equivalent } = ckLineEquivalent(l);
+        pre[l.id] = l.qty_received != null ? l.qty_received : equivalent;   // prefill = full dispatched amount
+      });
+      setCkRecvQty(pre); setCkRecvDel(d);
+    } catch (e) { setErr(e?.message || String(e)); }
+  };
+  const confirmCkRecvDel = async () => {
+    if (!ckRecvDel?.head) return;
+    setCkRecvBusy(true); setErr("");
+    try {
+      await saveCkDeliveryReceipt(ckRecvDel.head.id, (ckRecvDel.lines || []).map(l => ({
+        id: l.id, qtyReceived: ckRecvQty[l.id], recvUnit: ckLineEquivalent(l).unit,
+      })));
+      const res = await confirmCkDelivery(ckRecvDel.head.id, currentUser?.name || null);
+      setCkRecvDel(null);
+      setIoMsg(`Delivery received ✓${res.shortfalls ? ` — ${res.shortfalls} shortfall line(s) flagged` : ""}`);
+      load();
+    } catch (e) { setErr(e?.message || String(e)); }
+    setCkRecvBusy(false);
+  };
 
   const stock = useMemo(() => computeCkStock(ingredients, goodsIn), [ingredients, goodsIn]);
   const lowCount = stock.filter(s => s.low).length;
@@ -5726,6 +5758,70 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
 
       {err && <div className="text-xs text-red-400 bg-red-950/20 border border-red-800/40 rounded-xl px-3 py-2">{err}</div>}
       {ioMsg && <div className="text-xs text-emerald-300 bg-emerald-950/20 border border-emerald-800/40 rounded-xl px-3 py-2">{ioMsg}</div>}
+
+      {/* ── Incoming from Distribution (Dist→CK bridge) ─────────────────────
+          Dispatches to the CK customer land here; receiving them writes
+          ck_goods_in batches with the dispatch costs — no more double entry. */}
+      {incomingDel.length > 0 && (
+        <div className="bg-indigo-950/30 border border-indigo-700/40 rounded-2xl p-4 space-y-2">
+          <div className="text-sm font-bold text-indigo-200 flex items-center gap-2"><Truck size={15}/> Incoming from Distribution</div>
+          {incomingDel.map(d => (
+            <div key={d.id} className="flex items-center justify-between gap-3 rounded-xl bg-slate-900/60 border border-slate-800 px-3 py-2">
+              <div className="text-xs text-slate-300">
+                Delivery <b className="text-white">#{d.id}</b>
+                {" · dispatched "}{new Date(d.dispatched_at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                {d.status === "receiving" && <span className="ml-2 text-amber-400 font-semibold">in progress</span>}
+              </div>
+              <button onClick={() => openCkRecvDel(d.id)} className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold">Receive</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Receive modal */}
+      {ckRecvDel && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={() => !ckRecvBusy && setCkRecvDel(null)}>
+          <div onClick={e => e.stopPropagation()} className="w-full max-w-2xl bg-slate-900 border border-slate-700 rounded-2xl p-5 space-y-4 max-h-[88vh] overflow-auto">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-base font-bold text-white">Receive delivery #{ckRecvDel.head.id}</div>
+                <div className="text-xs text-slate-500">Check each line against what physically arrived — amounts are in kitchen units, pre-filled with the full dispatched quantity.</div>
+              </div>
+              <button onClick={() => setCkRecvDel(null)} disabled={ckRecvBusy} className="w-8 h-8 rounded-full bg-slate-800 text-slate-400 flex items-center justify-center"><X size={15}/></button>
+            </div>
+            <div className="space-y-2">
+              {(ckRecvDel.lines || []).map(l => {
+                const eqv = ckLineEquivalent(l);
+                const short = ckRecvQty[l.id] !== "" && Number(ckRecvQty[l.id]) + 0.0005 < eqv.equivalent;
+                return (
+                  <div key={l.id} className={`rounded-xl border p-3 ${short ? "border-amber-600/50 bg-amber-950/20" : "border-slate-800 bg-slate-800/40"}`}>
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div className="min-w-0">
+                        <div className="text-sm font-bold text-white">{l.item_name}{!l.ck_item_id && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-indigo-600 text-white">new — will be added to ingredients</span>}</div>
+                        <div className="text-[11px] text-slate-500">
+                          Dispatched: {l.qty_dispatched} × {l.pack_count || 1}{l.pack_size ? `*${l.pack_size}${l.pack_unit || ""}` : (l.pack_unit || "")} = <b className="text-slate-300">{eqv.equivalent} {eqv.unit}</b>
+                          {l.unit_price != null && <> · £{Number(l.unit_price).toFixed(2)}/case</>}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input type="number" inputMode="decimal" step="any" value={ckRecvQty[l.id] ?? ""}
+                          onChange={e => setCkRecvQty(prev => ({ ...prev, [l.id]: e.target.value }))}
+                          className="w-24 px-2.5 py-2 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm text-right"/>
+                        <span className="text-xs text-slate-400 w-8">{eqv.unit}</span>
+                      </div>
+                    </div>
+                    {short && <div className="text-[11px] text-amber-400 mt-1.5">⚠ Below the dispatched amount — will be flagged as a shortfall for Distribution.</div>}
+                  </div>
+                );
+              })}
+            </div>
+            <button onClick={confirmCkRecvDel} disabled={ckRecvBusy}
+              className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm font-bold">
+              {ckRecvBusy ? "Receiving…" : "Confirm — add to Goods In"}
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Alert tiles */}
       <div className="grid grid-cols-3 gap-2">
@@ -15799,7 +15895,7 @@ function InventoryBuilder() {
               <th className="text-left px-2 py-2">Unit</th>
               <th className="text-right px-2 py-2">Pack £</th>
               <th className="text-right px-2 py-2 cursor-pointer select-none hover:text-white" onClick={()=>toggleSort("cost")}>£/unit{sortBy==="cost"?(sortDir==="asc"?" ↑":" ↓"):""}</th>
-              {scope === "store" && <th className="text-left px-2 py-2">Warehouse item</th>}
+              {(scope === "store" || scope === "ck") && <th className="text-left px-2 py-2">Warehouse item</th>}
               <th className="px-2 py-2"></th>
             </tr>
           </thead>
@@ -18240,7 +18336,7 @@ function CogsItemRow({ item, scope, cats, sups, distItems = [], saving, onSave, 
       </td>
       <td className="px-2 py-1.5 text-right"><input value={f.packPrice} onChange={e=>set("packPrice",e.target.value)} onBlur={()=>blur("packPrice")} className={cell+" w-16 text-right"}/></td>
       <td className="px-2 py-1.5 text-right font-mono text-slate-400 text-xs">{perUnit!=null?"£"+perUnit.toFixed(4):"—"}</td>
-      {scope === "store" && (() => {
+      {(scope === "store" || scope === "ck") && (() => {
         // ── Warehouse link + pack-drift warning ─────────────────────────────
         // The consumption engine converts base-unit usage to cases with the
         // STORE item's packQty, but the physical case shipped is defined by
@@ -55724,28 +55820,41 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
       );
     }
     if (tab === "break") {
-      // Break tab: show BREAK info (duration + from–to), not shift schedule.
+      // Break tab: show BREAK info — number of breaks + each interval, e.g.
+      // "3 breaks · 15m, 15m, 12m" (from break_log), with a live segment when
+      // one is currently running. Falls back to the accumulated total for
+      // shifts predating the break log.
       const m = memberOf(item.employeeId);
       const name = item.employeeName || (m ? `${m.firstName} ${m.lastName}`.trim() : "Unknown");
       const accent = m?.color || "#844429";
       const onBreakNow = item.breakStart && !item.breakEnd;
-      // Duration: live elapsed if mid-break, else the recorded break minutes.
       const liveMins = onBreakNow ? Math.max(0, Math.round((Date.now() - new Date(item.breakStart).getTime()) / 60000)) : null;
-      const totalMins = onBreakNow ? liveMins : (Number(item.breakMinutes) || 0);
+      const log = Array.isArray(item.breakLog) ? item.breakLog : [];
+      const segMins = log.map(b => Number(b.m) || 0);
+      const totalMins = segMins.reduce((a, b) => a + b, 0) + (liveMins || 0)
+        || (onBreakNow ? liveMins : (Number(item.breakMinutes) || 0));
       const durLabel = `${Math.floor(totalMins/60) > 0 ? `${Math.floor(totalMins/60)}h ` : ""}${totalMins%60}m`;
+      const nBreaks = log.length + (onBreakNow ? 1 : 0);
+      const intervals = [
+        ...log.map(b => `${b.m}m${b.capped ? "⚠" : ""}`),
+        ...(onBreakNow ? [`${liveMins}m…`] : []),
+      ].join(", ");
+      const breakdown = nBreaks > 0
+        ? `${nBreaks} break${nBreaks === 1 ? "" : "s"} · ${intervals}`
+        : (Number(item.breakMinutes) > 0 ? "logged on timesheet" : "—");
       const fromTo = item.breakStart
         ? `${fmtT(item.breakStart)}${item.breakEnd ? `–${fmtT(item.breakEnd)}` : " – now"}`
-        : (Number(item.breakMinutes) > 0 ? "logged on timesheet" : "—");
+        : "";
       return (
         <div key={item.id} onClick={() => setEditPunch(item)}
           className="flex items-center gap-3 px-2 py-2.5 rounded-xl hover:bg-slate-800/60 cursor-pointer">
           <Avatar photoUrl={m?.photoUrl} name={name} color={accent} size={40} rounded="full" />
           <div className="min-w-0 flex-1">
             <div className="text-sm font-semibold text-white truncate">{name}</div>
-            <div className="text-[10px] text-slate-500 mt-0.5">{fromTo}</div>
+            <div className="text-[10px] text-slate-500 mt-0.5">{breakdown}{fromTo ? ` · last ${fromTo}` : ""}</div>
           </div>
           <div className="text-right flex-shrink-0">
-            <div className="text-[9px] uppercase tracking-wide text-slate-600">Break</div>
+            <div className="text-[9px] uppercase tracking-wide text-slate-600">Break{nBreaks > 1 ? "s" : ""}</div>
             <div className={`text-sm font-bold tabular-nums ${onBreakNow ? "text-amber-400" : "text-slate-200"}`}>{durLabel}{onBreakNow ? " (live)" : ""}</div>
           </div>
         </div>

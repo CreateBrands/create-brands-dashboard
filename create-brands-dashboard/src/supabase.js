@@ -1269,7 +1269,7 @@ export async function updatePunchOut(id, punchOut, hoursWorked, grossPay) {
   // (Root cause of the "2h 3m live break on a closed shift" bug.)
   const { data: existing } = await supabase
     .from("punch_records")
-    .select("break_start, break_end, break_minutes, punch_in")
+    .select("break_start, break_end, break_minutes, break_log, punch_in")
     .eq("id", id).single();
 
   // SANITY GUARD — a single café shift over 16h is physically implausible
@@ -1311,8 +1311,17 @@ export async function updatePunchOut(id, punchOut, hoursWorked, grossPay) {
     const foldedTotal = Math.min(priorBreak + rawElapsed, cap);
     patch.break_end = punchOut;
     patch.break_minutes = foldedTotal;
+    // BREAK_LOG: record the auto-closed segment either way; mark capped when we
+    // had to truncate a runaway open break, and flag for manager review.
+    const _log = Array.isArray(existing.break_log) ? existing.break_log : [];
+    const _capped = priorBreak + rawElapsed > cap + 5;
+    patch.break_log = [..._log, {
+      s: existing.break_start, e: punchOut,
+      m: Math.max(0, foldedTotal - priorBreak),
+      ...(_capped ? { capped: true } : {}),
+    }];
     // Flag when we had to cap a runaway open break, so managers can review.
-    if (priorBreak + rawElapsed > cap + 5) {
+    if (_capped) {
       patch.notes = `${patch.notes ? patch.notes + " · " : ""}Open break auto-closed & capped at ${cap}m (raw ${priorBreak + rawElapsed}m — likely forgot to end break)`;
     }
   }
@@ -1343,7 +1352,7 @@ export async function deletePunchRecord(id) {
 // On end, accumulates elapsed minutes into break_minutes.
 export async function setPunchBreak(id, action) {
   const { data: rows, error: e1 } = await supabase
-    .from("punch_records").select("break_start, break_minutes").eq("id", id).single();
+    .from("punch_records").select("break_start, break_minutes, break_log").eq("id", id).single();
   if (e1) throw e1;
   const nowIso = new Date().toISOString();
   let patch;
@@ -1353,6 +1362,12 @@ export async function setPunchBreak(id, action) {
     const start = rows?.break_start ? new Date(rows.break_start).getTime() : null;
     const addMins = start ? Math.max(0, Math.round((Date.now() - start) / 60000)) : 0;
     patch = { break_end: nowIso, break_minutes: (rows?.break_minutes || 0) + addMins };
+    // BREAK_LOG: record the individual segment so views can show "3 breaks ·
+    // 15m, 15m, 12m" rather than just the accumulated total.
+    if (start) {
+      const log = Array.isArray(rows?.break_log) ? rows.break_log : [];
+      patch.break_log = [...log, { s: rows.break_start, e: nowIso, m: addMins }];
+    }
   }
   const { data, error } = await supabase
     .from("punch_records").update(patch).eq("id", id).select().single();
@@ -1397,6 +1412,7 @@ function appPunchToDb(p) {
     break_start: p.breakStart || null, break_end: p.breakEnd || null,
     break_minutes: p.breakMinutes || 0,
     break_paid: p.breakPaid ?? false,
+    break_log: Array.isArray(p.breakLog) ? p.breakLog : [],
     break_claim_reason: p.breakClaimReason || "",
     break_claim_approved: p.breakClaimApproved ?? null,
     break_claim_decided_by: p.breakClaimDecidedBy || "",
@@ -1427,6 +1443,7 @@ function dbPunchToApp(p) {
     breakStart: p.break_start || null, breakEnd: p.break_end || null,
     breakMinutes: p.break_minutes ? parseInt(p.break_minutes, 10) : 0,
     breakPaid: p.break_paid ?? false,
+    breakLog: Array.isArray(p.break_log) ? p.break_log : [],
     breakClaimReason: p.break_claim_reason || "",
     breakClaimApproved: p.break_claim_approved ?? null,
     breakClaimDecidedBy: p.break_claim_decided_by || "",
@@ -11938,7 +11955,11 @@ export async function advanceDistOrderToDispatch(soId, createdBy, freshCosts = {
   try {
     const dispatchId = dispatchResult && (dispatchResult.id || dispatchResult.dispatchId) ? (dispatchResult.id || dispatchResult.dispatchId) : null;
     await createStoreDeliveryFromDispatch(soId, dispatchId, lines);
-  } catch (e) { console.error("store delivery mirror failed:", e.message); }
+    // CK customer: mirror into a CK delivery instead (each mirror checks its
+    // own applicability — store fn no-ops without a store_id, CK fn no-ops
+    // unless the customer is flagged is_central_kitchen).
+    await createCkDeliveryFromDispatch(soId, dispatchId, lines);
+  } catch (e) { console.error("delivery mirror failed:", e.message); }
   return dispatchResult;
 }
 
@@ -14856,6 +14877,192 @@ export async function fetchDeliveryShortfalls({ storeId } = {}) {
   let rows = (data || []).filter(r => r.store_deliveries && r.store_deliveries.status === "confirmed");
   if (storeId) rows = rows.filter(r => r.store_deliveries.store_id === storeId);
   return rows;
+}
+
+// ─── DIST → CENTRAL KITCHEN RECEIVING BRIDGE ────────────────────────────────
+// Mirrors the store pattern for the CK customer (dist_contacts.is_central_kitchen):
+// dispatch → ck_delivery (incoming) → CK confirms received quantities →
+// ck_goods_in FEFO batches (dispatch unit costs feed CK costing), shortfall
+// flags when received < dispatched. Resolution via cogs_ck_items.dist_item_id
+// with the same auto-create safety net the stores get.
+
+async function _ckSiteId() {
+  const { data } = await supabase.from("stores").select("id")
+    .eq("site_type", "central_kitchen").is("archived_at", null).limit(1).maybeSingle();
+  return data?.id || null;
+}
+
+async function _isCkSalesOrder(soId) {
+  try {
+    const { data: so } = await supabase.from("dist_sales_orders")
+      .select("customer_id").eq("id", soId).maybeSingle();
+    if (!so?.customer_id) return false;
+    const { data: c } = await supabase.from("dist_contacts")
+      .select("is_central_kitchen").eq("id", so.customer_id).maybeSingle();
+    return !!c?.is_central_kitchen;
+  } catch { return false; }
+}
+
+// Convert a dispatched line to the kitchen-facing quantity + unit.
+// A case = pack_count × pack_size pack_unit (e.g. 1×15 L). The kitchen enters
+// received amounts in that unit (L/kg/pcs), not in cases.
+export function ckLineEquivalent(line) {
+  const count = Number(line.pack_count ?? line.packCount) || 1;
+  const size = line.pack_size ?? line.packSize;
+  const unit = (line.pack_unit ?? line.packUnit) || "ea";
+  const perCase = size != null ? count * Number(size) : count;
+  const cases = Number(line.qty_dispatched ?? line.qtyDispatched) || 0;
+  return { perCase, unit, equivalent: cases * perCase };
+}
+
+// Best-effort mirror at dispatch time. Returns the delivery id or null.
+export async function createCkDeliveryFromDispatch(soId, dispatchId, dispatchLines) {
+  try {
+    if (!(await _isCkSalesOrder(soId))) return null;
+    const siteId = await _ckSiteId();
+    const distIds = [...new Set((dispatchLines || []).map(l => l.itemId).filter(Boolean))];
+    const distById = new Map();
+    if (distIds.length) {
+      const { data: di } = await supabase.from("dist_items")
+        .select("id, name, pack_count, pack_size, pack_unit").in("id", distIds);
+      (di || []).forEach(d => distById.set(d.id, d));
+    }
+    const { data: ckItems } = await supabase.from("cogs_ck_items")
+      .select("id, name, dist_item_id").in("dist_item_id", distIds.length ? distIds : ["__none__"]).is("archived_at", null);
+    const ckByDist = new Map((ckItems || []).map(s => [s.dist_item_id, s]));
+
+    const { data: deliv, error: hErr } = await supabase.from("ck_deliveries")
+      .insert({ site_id: siteId, dist_order_id: soId, dispatch_id: dispatchId || null,
+                status: "incoming", dispatched_at: new Date().toISOString() })
+      .select().single();
+    if (hErr) { console.error("ck delivery header failed:", hErr.message); return null; }
+
+    const lineRows = (dispatchLines || []).map(l => {
+      const di = distById.get(l.itemId) || {};
+      const ck = ckByDist.get(l.itemId);
+      return {
+        delivery_id: deliv.id,
+        dist_item_id: l.itemId || null,
+        ck_item_id: ck ? ck.id : null,
+        item_name: (ck && ck.name) || di.name || "Item",
+        qty_dispatched: Number(l.qty) || 0,
+        pack_count: di.pack_count != null ? Number(di.pack_count) : 1,
+        pack_size: di.pack_size != null ? Number(di.pack_size) : null,
+        pack_unit: di.pack_unit || "",
+        unit_price: l.unitPrice != null ? Number(l.unitPrice) : null,
+      };
+    });
+    if (lineRows.length) {
+      const { error: lErr } = await supabase.from("ck_delivery_lines").insert(lineRows);
+      if (lErr) console.error("ck delivery lines failed:", lErr.message);
+    }
+    return deliv.id;
+  } catch (e) {
+    console.error("createCkDeliveryFromDispatch error:", e.message);
+    return null;
+  }
+}
+
+export async function fetchIncomingCkDeliveries(siteId) {
+  let q = supabase.from("ck_deliveries").select("*").in("status", ["incoming", "receiving"])
+    .order("dispatched_at", { ascending: false });
+  if (siteId) q = q.eq("site_id", siteId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return data || [];
+}
+
+export async function fetchCkDeliveryDetail(deliveryId) {
+  const [{ data: head }, { data: lines }] = await Promise.all([
+    supabase.from("ck_deliveries").select("*").eq("id", deliveryId).maybeSingle(),
+    supabase.from("ck_delivery_lines").select("*").eq("delivery_id", deliveryId).order("id"),
+  ]);
+  return { head, lines: lines || [] };
+}
+
+export async function saveCkDeliveryReceipt(deliveryId, lines) {
+  for (const l of (lines || [])) {
+    await supabase.from("ck_delivery_lines").update({
+      qty_received: l.qtyReceived != null && l.qtyReceived !== "" ? Number(l.qtyReceived) : null,
+      recv_unit: l.recvUnit || "",
+    }).eq("id", l.id);
+  }
+  await supabase.from("ck_deliveries").update({ status: "receiving" }).eq("id", deliveryId);
+  return true;
+}
+
+// Ensure a CK ingredient exists for a dist item (mirror of the store version).
+async function ensureCkItemForDistItem(distItemId, fallbackName) {
+  if (!distItemId) return null;
+  const { data: existing } = await supabase.from("cogs_ck_items")
+    .select("id").eq("dist_item_id", distItemId).limit(1).maybeSingle();
+  if (existing) return existing.id;
+  const { data: di } = await supabase.from("dist_items")
+    .select("name, category, pack_count, pack_size, pack_unit, purchase_rate")
+    .eq("id", distItemId).maybeSingle();
+  const name = (di?.name || fallbackName || "Unnamed item").trim();
+  const packCount = di?.pack_count != null ? Number(di.pack_count) : 1;
+  const packSize = di?.pack_size != null ? Number(di.pack_size) : null;
+  const packUnit = di?.pack_unit || "ea";
+  const body = {
+    name, category: di?.category || "Other Items", base_unit: packUnit,
+    pack_desc: packSize != null ? `${packCount}*${packSize}${packUnit}` : `${packCount}${packUnit ? "*" + packUnit : ""}`,
+    pack_qty: packSize != null ? packSize * packCount : packCount,
+    pack_price: di?.purchase_rate != null ? Number(di.purchase_rate) : null,
+    dist_item_id: distItemId,
+  };
+  const { data: created, error } = await supabase.from("cogs_ck_items").insert(body).select("id").single();
+  if (error) { console.error("ensureCkItemForDistItem failed:", error.message); return null; }
+  return created.id;
+}
+
+// CONFIRM: each received line becomes a ck_goods_in FEFO batch — qty in the
+// kitchen unit, unit cost derived from the dispatch price per case, supplier
+// "Distribution", ref back to the delivery. Shortfalls flagged when the
+// received amount is below the dispatched equivalent.
+export async function confirmCkDelivery(deliveryId, receivedBy) {
+  const { head, lines } = await fetchCkDeliveryDetail(deliveryId);
+  if (!head) throw new Error("Delivery not found.");
+  if (head.status === "confirmed") throw new Error("This delivery is already confirmed.");
+  const siteId = head.site_id || await _ckSiteId();
+  const today = new Date().toISOString().slice(0, 10);
+  let shortfalls = 0;
+
+  for (const l of lines) {
+    const { perCase, unit, equivalent } = ckLineEquivalent(l);
+    const recv = l.qty_received != null ? Number(l.qty_received) : 0;
+    const recvUnit = l.recv_unit || unit;
+
+    let ckItemId = l.ck_item_id;
+    if (!ckItemId && recv > 0 && l.dist_item_id) {
+      ckItemId = await ensureCkItemForDistItem(l.dist_item_id, l.item_name);
+      if (ckItemId) await supabase.from("ck_delivery_lines").update({ ck_item_id: ckItemId }).eq("id", l.id);
+    }
+    if (ckItemId && recv > 0) {
+      // £ per kitchen unit = £ per case ÷ units per case.
+      const unitCost = (l.unit_price != null && perCase > 0) ? +(Number(l.unit_price) / perCase).toFixed(4) : null;
+      await supabase.from("ck_goods_in").insert({
+        id: `gin-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        site_id: siteId, ingredient_id: String(ckItemId),
+        qty_received: recv, qty_remaining: recv, unit: recvUnit,
+        batch_no: `DEL-${deliveryId}-${l.id}`, supplier: "Distribution",
+        received_date: today, unit_cost: unitCost,
+        total_cost: unitCost != null ? +(unitCost * recv).toFixed(2) : null,
+        invoice_ref: `dist-delivery-${deliveryId}`, received_by: receivedBy || null,
+        note: `Received from Distribution (order ${head.dist_order_id || "?"})`,
+      });
+      await supabase.from("ck_delivery_lines").update({ unit_cost: unitCost }).eq("id", l.id);
+    }
+    if (recv + 0.0005 < equivalent) {
+      shortfalls++;
+      await supabase.from("ck_delivery_lines").update({ short_reported: true }).eq("id", l.id);
+    }
+  }
+
+  await supabase.from("ck_deliveries").update({
+    status: "confirmed", received_at: new Date().toISOString(), received_by: receivedBy || null,
+  }).eq("id", deliveryId);
+  return { confirmed: true, shortfalls };
 }
 
 // ─── PHASE 4: COGS depletion of store stock (the DOWN side) ──────────────────
