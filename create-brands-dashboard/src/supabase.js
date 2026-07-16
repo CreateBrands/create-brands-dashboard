@@ -9560,42 +9560,15 @@ export async function computeStoreCogsV2({ storeId, from, to } = {}) {
   };
 }
 
-// ── ITEM CONSUMPTION V2 — accurate, from flipdish_sales.sale_items ──────────
-// Mirrors computeStoreCogsV2 EXACTLY (base recipe + matched modifiers, collapse
-// groups, refund/comp exclusion) but accumulates base-unit QUANTITY of each
-// inventory item, then rolls up to distribution items. This is the accurate
-// consumption source (includes modifiers/add-ons that the product-base recipe
-// alone misses). Returns { byDist: { distItemId: { qtyBaseUnit, dailyAvg,
-// weeklyAvg } }, days, ... }.
-export async function computeStoreItemConsumptionV2({ storeId, from, to, days, debugDistId, _testData } = {}) {
-  if (!storeId) throw new Error("storeId required");
-  const fromD = from || new Date(Date.now() - 27 * 864e5).toISOString().slice(0, 10);
-  const toD   = to   || new Date().toISOString().slice(0, 10);
-  const [inv, rec, mapsRaw, sales] = _testData ? [_testData.inv, _testData.rec, _testData.maps, _testData.sales] : await Promise.all([
-    fetchInventory(), fetchRecipes(), fetchPosMappings(storeId),
-    (async () => {
-      const PAGE = 1000, MAX_PAGES = 200;
-      let all = [], pageStart = 0;
-      for (let p = 0; p < MAX_PAGES; p++) {
-        const { data, error } = await supabase.from("flipdish_sales")
-          .select("sale_items, is_cancelled")
-          .eq("store_id", storeId).gte("business_date", fromD).lte("business_date", toD)
-          .order("sale_id", { ascending: true })
-          .range(pageStart, pageStart + PAGE - 1);
-        if (error) throw error;
-        const batch = data || [];
-        all = all.concat(batch);
-        if (batch.length < PAGE) break;
-        pageStart += PAGE;
-      }
-      return all;
-    })(),
-  ]);
+// ── SHARED RECIPE-CONSUMPTION WALKER ─────────────────────────────────────────
+// The single traversal used by BOTH computeStoreItemConsumptionV2 (order-page
+// planner) and depleteStoreStockFromSales (live stock deduction), so the two
+// can never drift: base recipe + matched modifiers (mapping > product-scoped >
+// global), collapse-to-max groups, refund/comp line exclusion, cancelled-order
+// exclusion. Emits item keys as "scope:itemId" (store:/ck:) via handlers, so
+// each caller decides its own rollup (V2 → dist items; depletion → store items).
+export function buildRecipeConsumptionWalker(rec, mapsRaw, modMaps) {
   const norm = (s) => (s || "").toString().trim().toLowerCase().replace(/\s+/g, " ").replace(/\.+$/, "");
-
-  // store inventory item key -> distItemId (CK excluded — separate entity).
-  const distIdByKey = new Map();
-  (inv.store || []).forEach(x => { if (x.distItemId) distIdByKey.set("store:" + x.id, x.distItemId); });
 
   const prepById = new Map((rec.preps || []).map(p => [p.id, p]));
 
@@ -9669,7 +9642,7 @@ export async function computeStoreItemConsumptionV2({ storeId, from, to, days, d
     return out;
   };
 
-  // modifier lookups (identical to V2)
+  // Modifier lookups: explicit caption mapping > product-scoped > global.
   const modById = new Map((rec.modifiers || []).map(m => [m.id, m]));
   const scopedByProduct = new Map();
   (rec.productModifiers || []).forEach(pm => {
@@ -9681,49 +9654,31 @@ export async function computeStoreItemConsumptionV2({ storeId, from, to, days, d
   });
   const globalByCaption = new Map();
   (rec.modifiers || []).forEach(m => { if (m.isGlobal) globalByCaption.set(norm(m.tillCaption || m.name), m); });
-  const modMaps = _testData ? (_testData.modMaps || []) : await fetchModifierMappings(storeId).catch(() => []);
   const mappingByCaption = new Map();
   (modMaps || []).forEach(mm => { const m = modById.get(mm.modifierId); if (m) mappingByCaption.set(norm(mm.caption), m); });
 
   const mapByName = new Map();
   (mapsRaw || []).forEach(m => { if (m.posName && m.productId) mapByName.set(norm(m.posName), m.productId); });
 
-  // Walk actual sold lines + chosen modifiers, accumulating item consumption.
-  const invConsumed = new Map();
-  let mappedLines = 0, unmappedLines = 0;
-  // Debug: for one target DIST item, track consumption per product and the
-  // top unmapped sale captions, to locate where consumption is lost. A dist item
-  // may map to several inventory keys.
-  const debugKeys = new Set();
-  if (debugDistId) distIdByKey.forEach((distId, key) => { if (distId === debugDistId) debugKeys.add(key); });
-  const dbg = debugDistId ? { byProduct: {}, unmapped: {}, fromBase: 0, fromMod: 0 } : null;
   const productNameById = (id) => (rec.products || []).find(p => p.id === id)?.name || `#${id}`;
-  const addUsage = (useMap, mult, ctx) => {
-    useMap.forEach((v, k) => {
-      invConsumed.set(k, (invConsumed.get(k) || 0) + v * mult);
-      if (dbg && debugKeys.has(k)) {
-        const pn = ctx?.product || "—";
-        dbg.byProduct[pn] = (dbg.byProduct[pn] || 0) + v * mult;
-        if (ctx?.isMod) dbg.fromMod += v * mult; else dbg.fromBase += v * mult;
-      }
-    });
-  };
 
-  sales.forEach(s => {
-    if (s.is_cancelled) return;
-    const items = Array.isArray(s.sale_items) ? s.sale_items : [];
+  // walkSale(sale, handlers) — handlers: {
+  //   addUsage(useMap, mult, ctx)   REQUIRED — receives Map(itemKey -> qty) per hit
+  //   onMapped(qty), onUnmapped(normCaption, qty)   optional counters
+  // }
+  const walkSale = (s, h) => {
+    if (!s || s.is_cancelled) return;
+    let items = s.sale_items;
+    if (typeof items === "string") { try { items = JSON.parse(items); } catch { items = []; } }
+    if (!Array.isArray(items)) items = [];
     items.forEach(li => {
       if (!li || li.isRefunded || li.isComplimented) return;
       const qty = Number(li.quantity) || 1;
       const pid = mapByName.get(norm(li.caption));
-      if (!pid) {
-        unmappedLines += qty;
-        if (dbg) dbg.unmapped[norm(li.caption)] = (dbg.unmapped[norm(li.caption)] || 0) + qty;
-        return;
-      }
-      mappedLines += qty;
+      if (!pid) { h.onUnmapped && h.onUnmapped(norm(li.caption), qty); return; }
+      h.onMapped && h.onMapped(qty);
       const pn = productNameById(pid);
-      addUsage(productBaseUsage(pid), qty, { product: pn, isMod: false });
+      h.addUsage(productBaseUsage(pid), qty, { product: pn, isMod: false });
       const kids = Array.isArray(li.saleItems) ? li.saleItems : [];
       const collapseChosen = {};
       kids.forEach(ch => {
@@ -9737,12 +9692,83 @@ export async function computeStoreItemConsumptionV2({ storeId, from, to, days, d
           const g = m.groupLabel || "_collapse";
           if (!collapseChosen[g]) collapseChosen[g] = use;
         } else {
-          addUsage(use, qty, { product: pn, isMod: true });
+          h.addUsage(use, qty, { product: pn, isMod: true });
         }
       });
-      Object.values(collapseChosen).forEach(use => addUsage(use, qty, { product: pn, isMod: true }));
+      Object.values(collapseChosen).forEach(use => h.addUsage(use, qty, { product: pn, isMod: true }));
     });
-  });
+  };
+
+  return { walkSale, norm };
+}
+
+// ── ITEM CONSUMPTION V2 — accurate, from flipdish_sales.sale_items ──────────
+// Mirrors computeStoreCogsV2 EXACTLY (base recipe + matched modifiers, collapse
+// groups, refund/comp exclusion) but accumulates base-unit QUANTITY of each
+// inventory item, then rolls up to distribution items. This is the accurate
+// consumption source (includes modifiers/add-ons that the product-base recipe
+// alone misses). Returns { byDist: { distItemId: { qtyBaseUnit, dailyAvg,
+// weeklyAvg } }, days, ... }.
+export async function computeStoreItemConsumptionV2({ storeId, from, to, days, debugDistId, _testData } = {}) {
+  if (!storeId) throw new Error("storeId required");
+  const fromD = from || new Date(Date.now() - 27 * 864e5).toISOString().slice(0, 10);
+  const toD   = to   || new Date().toISOString().slice(0, 10);
+  const [inv, rec, mapsRaw, sales] = _testData ? [_testData.inv, _testData.rec, _testData.maps, _testData.sales] : await Promise.all([
+    fetchInventory(), fetchRecipes(), fetchPosMappings(storeId),
+    (async () => {
+      const PAGE = 1000, MAX_PAGES = 200;
+      let all = [], pageStart = 0;
+      for (let p = 0; p < MAX_PAGES; p++) {
+        const { data, error } = await supabase.from("flipdish_sales")
+          .select("sale_items, is_cancelled")
+          .eq("store_id", storeId).gte("business_date", fromD).lte("business_date", toD)
+          .order("sale_id", { ascending: true })
+          .range(pageStart, pageStart + PAGE - 1);
+        if (error) throw error;
+        const batch = data || [];
+        all = all.concat(batch);
+        if (batch.length < PAGE) break;
+        pageStart += PAGE;
+      }
+      return all;
+    })(),
+  ]);
+  // store inventory item key -> distItemId (CK excluded — separate entity).
+  const distIdByKey = new Map();
+  (inv.store || []).forEach(x => { if (x.distItemId) distIdByKey.set("store:" + x.id, x.distItemId); });
+
+  const modMaps = _testData ? (_testData.modMaps || []) : await fetchModifierMappings(storeId).catch(() => []);
+  // Single shared traversal (same one depleteStoreStockFromSales uses).
+  const walker = buildRecipeConsumptionWalker(rec, mapsRaw, modMaps);
+
+  // Walk actual sold lines + chosen modifiers, accumulating item consumption.
+  const invConsumed = new Map();
+  let mappedLines = 0, unmappedLines = 0;
+  // Debug: for one target DIST item, track consumption per product and the
+  // top unmapped sale captions, to locate where consumption is lost. A dist item
+  // may map to several inventory keys.
+  const debugKeys = new Set();
+  if (debugDistId) distIdByKey.forEach((distId, key) => { if (distId === debugDistId) debugKeys.add(key); });
+  const dbg = debugDistId ? { byProduct: {}, unmapped: {}, fromBase: 0, fromMod: 0 } : null;
+  const addUsage = (useMap, mult, ctx) => {
+    useMap.forEach((v, k) => {
+      invConsumed.set(k, (invConsumed.get(k) || 0) + v * mult);
+      if (dbg && debugKeys.has(k)) {
+        const pn = ctx?.product || "—";
+        dbg.byProduct[pn] = (dbg.byProduct[pn] || 0) + v * mult;
+        if (ctx?.isMod) dbg.fromMod += v * mult; else dbg.fromBase += v * mult;
+      }
+    });
+  };
+
+  sales.forEach(s => walker.walkSale(s, {
+    addUsage,
+    onMapped: (q) => { mappedLines += q; },
+    onUnmapped: (cap, q) => {
+      unmappedLines += q;
+      if (dbg) dbg.unmapped[cap] = (dbg.unmapped[cap] || 0) + q;
+    },
+  }));
 
   // Roll up to dist items. Also attach the INVENTORY item's base unit + case
   // size (pack_qty), which is the accurate basis for converting consumption
@@ -14839,76 +14865,15 @@ export async function fetchDeliveryShortfalls({ storeId } = {}) {
 // Idempotency: each sale deducts exactly once, tracked by movement ref
 // 'sale:{sale_id}'. Safe to re-run — already-deducted sales are skipped.
 
-// Resolve a prep into its STORE-scoped ingredient quantities (recursive, cycle-safe).
-// Returns Map(storeItemId -> qty per 1 unit of the prep's yield).
-function _prepToStoreItems(prep, prepById, prepCompsByPrep, _seen) {
-  const out = new Map();
-  if (!prep) return out;
-  const seen = _seen || new Set();
-  if (seen.has(prep.id)) return out;      // cycle guard
-  seen.add(prep.id);
-  const yield_ = Number(prep.yieldQty) || 1;
-  const comps = prepCompsByPrep.get(prep.id) || [];
-  for (const c of comps) {
-    const portion = Number(c.portionQty) || 0;
-    if (c.subPrepId != null) {
-      // nested prep — resolve and scale by this portion / yield
-      const sub = prepById.get(c.subPrepId);
-      const subMap = _prepToStoreItems(sub, prepById, prepCompsByPrep, seen);
-      subMap.forEach((q, itemId) => out.set(itemId, (out.get(itemId) || 0) + q * portion));
-    } else if (c.itemScope === "store" && c.itemId != null) {
-      // STORE ingredient only — ignore CK-scoped components
-      const per = portion / yield_;
-      out.set(String(c.itemId), (out.get(String(c.itemId)) || 0) + per * yield_);
-    }
-    // CK-scoped or unscoped components are intentionally skipped (not store stock)
-  }
-  // normalise to "per 1 unit of yield"
-  const norm = new Map();
-  out.forEach((q, itemId) => norm.set(itemId, q / yield_));
-  return norm;
-}
-
-// Build a product -> Map(storeItemId -> qtyPerUnit) consumption table.
-function _productStoreConsumption(recipes) {
-  const prepById = new Map((recipes.preps || []).map(p => [p.id, p]));
-  const prepCompsByPrep = new Map();
-  (recipes.prepComponents || []).forEach(c => {
-    if (!prepCompsByPrep.has(c.prepId)) prepCompsByPrep.set(c.prepId, []);
-    prepCompsByPrep.get(c.prepId).push(c);
-  });
-  const compsByProduct = new Map();
-  (recipes.productComponents || []).forEach(c => {
-    if (!compsByProduct.has(c.productId)) compsByProduct.set(c.productId, []);
-    compsByProduct.get(c.productId).push(c);
-  });
-  const table = new Map(); // productId -> Map(storeItemId -> qty per 1 sold)
-  (recipes.products || []).forEach(prod => {
-    const map = new Map();
-    (compsByProduct.get(prod.id) || []).forEach(c => {
-      const portion = Number(c.portionQty) || 0;
-      if (c.prepId != null) {
-        const prep = prepById.get(c.prepId);
-        const pm = _prepToStoreItems(prep, prepById, prepCompsByPrep, null);
-        pm.forEach((qPerYield, itemId) => map.set(itemId, (map.get(itemId) || 0) + qPerYield * portion));
-      } else if (c.itemScope === "store" && c.itemId != null) {
-        map.set(String(c.itemId), (map.get(String(c.itemId)) || 0) + portion);
-      }
-      // CK-scoped components skipped — never deplete store stock for CK items
-    });
-    table.set(prod.id, map);
-  });
-  return table;
-}
-
 // Deplete store stock from a store's sales for a given date (idempotent).
 // Returns { processed, skipped, movements }.
 export async function depleteStoreStockFromSales(storeId, date) {
   if (!storeId || !date) throw new Error("storeId and date required.");
 
-  const [recipes, mapsRaw, salesRes] = await Promise.all([
+  const [recipes, mapsRaw, modMaps, salesRes] = await Promise.all([
     fetchRecipes(),
     fetchPosMappings(storeId).catch(() => []),
+    fetchModifierMappings(storeId).catch(() => []),
     supabase.from("flipdish_sales")
       .select("sale_id, sale_items, is_cancelled, business_date")
       .eq("store_id", storeId).eq("business_date", date),
@@ -14916,11 +14881,12 @@ export async function depleteStoreStockFromSales(storeId, date) {
   const sales = (salesRes.data || []).filter(s => !s.is_cancelled);
   if (!sales.length) return { processed: 0, skipped: 0, movements: 0 };
 
-  const consumption = _productStoreConsumption(recipes);
-  const norm = (s) => (s || "").toString().trim().toLowerCase().replace(/\s+/g, " ").replace(/\.+$/, "");
-  // POS map: till-name (normalised) -> productId
-  const prodByTill = new Map();
-  (mapsRaw || []).forEach(m => { if (m.posName && m.productId) prodByTill.set(norm(m.posName), m.productId); });
+  // SAME traversal as the order-page planner (computeStoreItemConsumptionV2):
+  // base recipe + matched modifiers + collapse groups + refund/comp exclusion,
+  // and the RMS line shape (li.caption/quantity — the old walker read li.name,
+  // which RMS lines don't carry, so it silently deducted nothing). Only
+  // store-scoped keys deplete store stock; CK keys are ignored by design.
+  const walker = buildRecipeConsumptionWalker(recipes, mapsRaw, modMaps);
 
   // Which sales already deducted? (idempotency by ref)
   const saleIds = sales.map(s => `sale:${s.sale_id}`);
@@ -14936,18 +14902,17 @@ export async function depleteStoreStockFromSales(storeId, date) {
     const ref = `sale:${sale.sale_id}`;
     if (doneRefs.has(ref)) { skipped++; continue; }
 
-    // Aggregate store-item consumption for this whole sale.
+    // Aggregate store-item consumption for this whole sale (walker emits
+    // "scope:itemId" keys; only store-scoped ones deplete store stock).
     const consume = new Map(); // storeItemId -> qty
-    let items = sale.sale_items;
-    if (typeof items === "string") { try { items = JSON.parse(items); } catch { items = []; } }
-    (items || []).forEach(li => {
-      const tillName = li.name || li.item_name || li.title || "";
-      const qtySold = Number(li.qty ?? li.quantity ?? 1) || 1;
-      const productId = prodByTill.get(norm(tillName));
-      if (!productId) return;                       // unmapped till-name → skip (not costed)
-      const map = consumption.get(productId);
-      if (!map) return;
-      map.forEach((perUnit, itemId) => consume.set(itemId, (consume.get(itemId) || 0) + perUnit * qtySold));
+    walker.walkSale(sale, {
+      addUsage: (useMap, mult) => {
+        useMap.forEach((v, k) => {
+          if (!k.startsWith("store:")) return;
+          const itemId = k.slice(6);
+          consume.set(itemId, (consume.get(itemId) || 0) + v * mult);
+        });
+      },
     });
 
     if (consume.size === 0) { processed++; continue; } // nothing store-scoped to deduct
