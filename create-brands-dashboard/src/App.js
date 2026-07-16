@@ -14823,12 +14823,11 @@ function StoreRecipesView() {
             )}
           </div>
 
-          {/* Photo */}
-          {d.photo && (
-            <div style={{ marginTop:14 }}>
-              <img src={d.photo} alt={d.name} style={{ width:"100%", maxWidth:440, borderRadius:8, display:"block" }}/>
-            </div>
-          )}
+          {/* Photo — always shown, with the name banner overlay like the printed card */}
+          <div style={{ position:"relative", marginTop:16, maxWidth:440 }}>
+            <div style={{ position:"absolute", top:14, left:-4, background:C.band, color:"#fff", fontWeight:800, fontSize:13, padding:"6px 20px", zIndex:2 }}>{d.name}</div>
+            <div style={{ width:"100%", aspectRatio:"1/1", borderRadius:8, background:d.photo?`#F3EADA url(${d.photo}) center/cover no-repeat`:"#F3EADA", display:"flex", alignItems:"center", justifyContent:"center", color:C.inkFaint, fontSize:13 }}>{d.photo?"":"No photo"}</div>
+          </div>
 
           {/* Steps — 1 col on phones, up to 3 on desktop */}
           <div style={{ fontWeight:800, fontSize:14, marginTop:18, paddingBottom:6, borderBottom:`2px solid ${C.head}` }}>STEPS</div>
@@ -14845,9 +14844,16 @@ function StoreRecipesView() {
             ))}
           </div>
 
-          {/* Ingredients */}
+          {/* Ingredients — with the original STEPS / QTY / INGREDIENTS header row */}
           <div style={{ fontWeight:800, fontSize:14, marginTop:20, paddingBottom:6, borderBottom:`2px solid ${C.head}` }}>INGREDIENTS</div>
           <table style={{ width:"100%", borderCollapse:"collapse", border:`1px solid ${C.line}`, marginTop:10 }}>
+            <thead>
+              <tr style={{ background:C.head }}>
+                <td style={{ padding:"8px 10px", fontSize:12, fontWeight:800, width:"28%" }}>STEPS</td>
+                <td style={{ padding:"8px 10px", fontSize:12, fontWeight:800, width:"22%" }}>QTY</td>
+                <td style={{ padding:"8px 10px", fontSize:12, fontWeight:800 }}>INGREDIENTS/TOOLS</td>
+              </tr>
+            </thead>
             <tbody>
               {(d.ingredients||[]).map((it,i)=>(
                 <tr key={i} style={{ background: i%2===0?C.row:"transparent" }}>
