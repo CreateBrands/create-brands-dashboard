@@ -7914,12 +7914,19 @@ export async function receiveDispatch({ dispatchId, toSiteId, receivedDate, rece
 
   // CK → Distribution hook (best-effort): draft a Distribution goods receipt
   // for the received lines so warehouse stock can be confirmed. Never blocks CK.
+  // GUARD: surface any products with no dist_items.ck_product_id link — those
+  // land in ck_distribution_stock but will NOT become sellable warehouse stock,
+  // so the receiver must be told rather than the list being silently discarded.
+  let unmatchedProducts = [];
   try {
     const ckLines = (receipts || []).map(r => { const l = byId.get(r.lineId); return l ? { productId: l.productId, productName: l.productName, qtyReceived: Number(r.qtyReceived) || 0, finishedBatchNo: l.finishedBatchNo, useByDate: l.useByDate } : null; }).filter(Boolean);
-    if (ckLines.length) await createDistDraftReceiptFromCk({ ckDispatchId: dispatchId, ckLines, receivedDate: receivedDate || new Date().toISOString().slice(0,10), createdBy: receivedBy });
+    if (ckLines.length) {
+      const draft = await createDistDraftReceiptFromCk({ ckDispatchId: dispatchId, ckLines, receivedDate: receivedDate || new Date().toISOString().slice(0,10), createdBy: receivedBy });
+      unmatchedProducts = (draft && draft.unmatched) || [];
+    }
   } catch (e) { /* hook is non-blocking; draft can be created later */ }
 
-  return dispatchId;
+  return { dispatchId, unmatched: unmatchedProducts };
 }
 
 export async function fetchDistributionStock(siteId) {

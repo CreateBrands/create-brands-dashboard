@@ -5041,8 +5041,8 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   // The full tab order, with their permission keys. Tabs without a feat key
   // (overview, count, allergens) are always visible. Used to land on a permitted
   // tab so a user without Stock access doesn't open to a hidden tab (blank page).
-  const CK_TAB_ORDER = ["overview","stock","goods","count","allergens","preps","products","orders","planner","production","finished","dispatch","categories","suppliers"];
-  const ckTabAllowed = (k) => (k === "overview" || k === "count" || k === "allergens" || k === "orders") ? true : ckCanFeature(`feat.ck.${k}`);
+  const CK_TAB_ORDER = ["overview","stock","goods","count","allergens","preps","products","planner","production","finished","dispatch","categories","suppliers"];
+  const ckTabAllowed = (k) => (k === "overview" || k === "count" || k === "allergens") ? true : ckCanFeature(`feat.ck.${k}`);
   useEffect(() => {
     // If the current tab isn't permitted, jump to the first one that is.
     if (!ckTabAllowed(tab)) {
@@ -5724,7 +5724,13 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   const setRecvQty = (lineId, q) => setRecvLines(ls => ls.map(l => l.lineId===lineId ? {...l, qtyReceived:q} : l));
   const doReceive = async () => {
     setRecvBusy(true); setErr("");
-    try { await receiveDispatch({ dispatchId: recvModal.id, toSiteId: recvModal.toSiteId, receivedDate: new Date().toISOString().slice(0,10), receivedBy: currentUser?.name, receipts: recvLines.map(l=>({ lineId:l.lineId, qtyReceived:Number(l.qtyReceived)||0 })) }); setRecvModal(null); load(); }
+    try {
+      const res = await receiveDispatch({ dispatchId: recvModal.id, toSiteId: recvModal.toSiteId, receivedDate: new Date().toISOString().slice(0,10), receivedBy: currentUser?.name, receipts: recvLines.map(l=>({ lineId:l.lineId, qtyReceived:Number(l.qtyReceived)||0 })) });
+      setRecvModal(null); load();
+      const um = res?.unmatched || [];
+      if (um.length) setErr(`⚠ Received, but ${um.length} product(s) are not listed in the warehouse catalogue: ${um.map(u=>u.productName).join(", ")}. They are in CK distribution stock but will NOT become sellable warehouse stock until linked (Distribution → Items → CK link).`);
+      else setIoMsg("Dispatch received ✓ — draft goods receipt created at the warehouse.");
+    }
     catch (e) { setErr(e?.message||String(e)); }
     setRecvBusy(false);
   };
@@ -5836,10 +5842,13 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
           { label: "", tabs: [["overview","🏠 Today"]] },
           { label: "Inventory", tabs: [["stock","Stock"],["goods","Goods in log"],["count","Count"],["allergens","Allergens"]] },
           { label: "Recipes",   tabs: [["preps","Preps"],["products","Products"]] },
-          { label: "Planning",  tabs: [["orders","Orders"],["planner","Planner"],["production","Production"],["finished","Finished goods"],["dispatch","Dispatch"]] },
+          // "Orders" tab retired: hub model — stores order from Dist only; CK sees
+          // demand via the "Store orders vs warehouse stock" card. ck_orders can
+          // never be populated, so the screen would show zeros forever.
+          { label: "Planning",  tabs: [["planner","Planner"],["production","Production"],["finished","Finished goods"],["dispatch","Dispatch"]] },
           { label: "Setup",     tabs: [["categories","Categories"],["suppliers","Suppliers"]] },
         ].map((grp, gi) => {
-          const visible = grp.tabs.filter(([k]) => k === "overview" || k === "orders" || ckCanFeature(`feat.ck.${k==="goods"?"goods":k}`));
+          const visible = grp.tabs.filter(([k]) => k === "overview" || ckCanFeature(`feat.ck.${k==="goods"?"goods":k}`));
           if (!visible.length) return null;
           return (
             <div key={grp.label} className="flex items-center gap-1">
@@ -16123,7 +16132,7 @@ function RecipeBuilder({ mode }) {
 
         {/* editor panel — opens at top when a product is selected */}
         {selected && (
-          <ProductEditor product={selected} rec={rec} inv={inv} productBaseCost={productBaseCost} prepCostPerUnit={prepCostPerUnit} modifierCost={modifierCost} reload={load}
+          <ProductEditor key={selected.id} product={selected} rec={rec} inv={inv} productBaseCost={productBaseCost} prepCostPerUnit={prepCostPerUnit} modifierCost={modifierCost} reload={load}
             onClose={()=>setSelId(null)}
             onDelete={async()=>{if(window.confirm("Delete product?")){await deleteProduct(selected.id); setSelId(null); await load();}}}/>
         )}
@@ -16207,7 +16216,7 @@ function RecipeBuilder({ mode }) {
           {!selected ? (
             <div className="rounded-xl border border-slate-800 p-8 text-center text-slate-500 text-sm">Select a {label} to edit, or add a new one.</div>
           ) : (
-            <PrepEditor prep={selected} rec={rec} inv={inv} prepCost={prepCost} prepBatchCostById={prepBatchCostById} reload={load} onDelete={async()=>{if(window.confirm("Delete prep?")){await deletePrep(selected.id); setSelId(null); await load();}}}/>
+            <PrepEditor key={selected.id} prep={selected} rec={rec} inv={inv} prepCost={prepCost} prepBatchCostById={prepBatchCostById} reload={load} onDelete={async()=>{if(window.confirm("Delete prep?")){await deletePrep(selected.id); setSelId(null); await load();}}}/>
           )}
         </div>
       </div>
@@ -16382,11 +16391,17 @@ function PrepCompRow({ c, inv, preps = [], prepBatchCostById, reload }) {
             <SearchableItemSelect items={preps} value={c.subPrepId||""} onSelect={async p=>{ await updatePrepComponent(c.id,{subPrepId:p?.id||null, componentName:p?.name||null}); await reload(); }} placeholder="— pick a prep —" />
           </div>
         ) : (
-          <ItemPicker inv={inv} highlight={incomplete} value={c.itemScope?c.itemScope+":"+c.itemId:""} onChange={async o=>{await updatePrepComponent(c.id,{itemScope:o?.scope||null,itemId:o?.id||null,itemName:o?.name||null}); await reload();}}/>
+          <ItemPicker inv={inv} highlight={incomplete} value={c.itemScope?c.itemScope+":"+c.itemId:""} onChange={async o=>{const bu=o?((inv?.[o.scope]||[]).find(i=>String(i.id)===String(o.id))?.baseUnit||""):null; await updatePrepComponent(c.id,{itemScope:o?.scope||null,itemId:o?.id||null,itemName:o?.name||null,unit:bu}); await reload();}}/>
         )}
       </td>
       <td className="px-3 py-2 text-right"><input value={f.portionQty} onChange={e=>setF(s=>({...s,portionQty:e.target.value}))} onBlur={async()=>{await updatePrepComponent(c.id,{portionQty:f.portionQty}); await reload();}} className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white w-20 text-right" placeholder={isPrep?"1":"0"}/></td>
-      <td className="px-3 py-2"><input value={isPrep?(f.unit||"batch"):f.unit} onChange={e=>setF(s=>({...s,unit:e.target.value}))} onBlur={async()=>{await updatePrepComponent(c.id,{unit:f.unit}); await reload();}} className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white w-16" placeholder={isPrep?"batch":"g"}/></td>
+      {/* UNIT GUARD: for inventory items the unit IS the item's base unit — the
+          engine counts in base units, so a typed "ea" against a grams item
+          silently undercounts ~400× (see Heinz Beans). Locked display; prep
+          rows keep the input because "batch" vs yield-units is a real choice. */}
+      <td className="px-3 py-2">{isPrep
+        ? <input value={f.unit||"batch"} onChange={e=>setF(s=>({...s,unit:e.target.value}))} onBlur={async()=>{await updatePrepComponent(c.id,{unit:f.unit}); await reload();}} className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white w-16" placeholder="batch"/>
+        : <span title="Locked to the item's base unit — quantities are counted in this unit" className="inline-block bg-slate-800/50 border border-slate-800 rounded-lg px-2 py-2 text-sm text-slate-400 w-16 text-center cursor-not-allowed">{((inv?.[c.itemScope]||[]).find(i=>String(i.id)===String(c.itemId))?.baseUnit)||c.unit||"—"}</span>}</td>
       <td className="px-3 py-2 text-right font-mono text-slate-300 text-sm">{cost!=null?"£"+cost.toFixed(4):"—"}</td>
       <td className="px-3 py-2 text-right"><button onClick={async()=>{await deletePrepComponent(c.id); await reload();}} className="text-slate-600 hover:text-red-400"><X size={16}/></button></td>
     </tr>
@@ -16539,10 +16554,12 @@ function ProductEditor({ product, rec, inv, productBaseCost, prepCostPerUnit, mo
                       ? <select autoFocus={incomplete} value={c.prepId||""} onChange={async e=>{const pid=Number(e.target.value); await updateProductComponentRef(c.id,{kind:"prep",prepId:pid,itemScope:null,itemId:null}); await reload();}} className={`bg-slate-800 border rounded-lg px-3 py-2 text-sm text-white w-full max-w-xs ${incomplete?"border-amber-500/60":"border-slate-700"}`}>
                           <option value="">⬇ choose a prep…</option>{rec.preps.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}
                         </select>
-                      : <ItemPicker inv={inv} highlight={incomplete} value={c.itemScope?c.itemScope+":"+c.itemId:""} onChange={async o=>{await updateProductComponentRef(c.id,{kind:"item",itemScope:o?.scope||null,itemId:o?.id||null,prepId:null,label:o?.name||null}); await reload();}}/>}
+                      : <ItemPicker inv={inv} highlight={incomplete} value={c.itemScope?c.itemScope+":"+c.itemId:""} onChange={async o=>{const bu=o?((inv?.[o.scope]||[]).find(i=>String(i.id)===String(o.id))?.baseUnit||""):null; await updateProductComponentRef(c.id,{kind:"item",itemScope:o?.scope||null,itemId:o?.id||null,prepId:null,label:o?.name||null}); if(o) await updateProductComponent(c.id,{unit:bu}); await reload();}}/>}
                   </td>
                   <td className="px-3 py-2 text-right"><input defaultValue={c.portionQty??""} onBlur={async e=>{await updateProductComponent(c.id,{portionQty:e.target.value}); await reload();}} className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white w-20 text-right" placeholder="0"/></td>
-                  <td className="px-3 py-2"><input defaultValue={c.unit||""} onBlur={async e=>{await updateProductComponent(c.id,{unit:e.target.value}); await reload();}} className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white w-16" placeholder="g"/></td>
+                  <td className="px-3 py-2">{c.kind==="item"
+                    ? <span title="Locked to the item's base unit — quantities are counted in this unit" className="inline-block bg-slate-800/50 border border-slate-800 rounded-lg px-2 py-2 text-sm text-slate-400 w-16 text-center cursor-not-allowed">{((inv?.[c.itemScope]||[]).find(i=>String(i.id)===String(c.itemId))?.baseUnit)||c.unit||"—"}</span>
+                    : <input defaultValue={c.unit||""} onBlur={async e=>{await updateProductComponent(c.id,{unit:e.target.value}); await reload();}} className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white w-16" placeholder="g"/>}</td>
                   <td className="px-3 py-2 text-right font-mono text-slate-300 text-sm">{compCost(c)!=null?"£"+compCost(c).toFixed(4):"—"}</td>
                   <td className="px-3 py-2 text-right"><button onClick={async()=>{await deleteProductComponent(c.id); await reload();}} className="text-slate-600 hover:text-red-400"><X size={16}/></button></td>
                 </tr>
