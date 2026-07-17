@@ -13451,7 +13451,8 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
     try { setRound(sid ? await fetchOpenOrderRound(sid) : null); } catch { setRound(null); }
   };
   useEffect(() => { setRoundLoaded(false); reloadRound(activeStoreId); /* eslint-disable-next-line */ }, [activeStoreId]);
-  const myRoundAsg = (round?.assignments || []).filter(x => x.userId === currentUser?.id);
+  const myRoundMemberId = currentUser?.opsTeamMemberId || currentUser?.id;
+  const myRoundAsg = (round?.assignments || []).filter(x => x.userId === myRoundMemberId || x.userId === currentUser?.id);
   const staffRoundMode = !isManager && !!round && myRoundAsg.length > 0;
   useEffect(() => {
     // Prefill staff quantities from their existing round lines.
@@ -13959,7 +13960,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
                     Team round open · {doneN}/{(round.assignments||[]).length} parts submitted · {lineCount} item{lineCount!==1?"s":""} requested
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    <button onClick={async()=>{ try { const us = await fetchUsers(); setRoundUsers(us.filter(u=>(u.storeIds||[]).includes(activeStoreId) && !["owner","hq_staff"].includes(u.role))); setRoundBasis(round.assignments?.[0]?.groupBy || "category"); const m={}; (round.assignments||[]).forEach(x=>{m[x.section]=x.userId;}); setRoundAssignMap(m); setRoundAssignOpen(true); } catch(e){ setErr(e.message||String(e)); } }}
+                    <button onClick={async()=>{ try { const team = await fetchOpsTeam(); setRoundUsers(team.filter(m=>(m.storeIds||[]).includes(activeStoreId) && !m.archivedAt).map(m=>({ id: m.id, name: `${m.firstName||""} ${m.lastName||""}`.trim() || m.nickname || "Unnamed" })).sort((x,y)=>x.name.localeCompare(y.name))); setRoundBasis(round.assignments?.[0]?.groupBy || "category"); const m={}; (round.assignments||[]).forEach(x=>{m[x.section]=x.userId;}); setRoundAssignMap(m); setRoundAssignOpen(true); } catch(e){ setErr(e.message||String(e)); } }}
                       className="px-3 py-1.5 rounded-xl text-xs font-bold" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }}>Assign categories</button>
                     <button disabled={!lineCount} onClick={()=>{ setCart(prev=>{ const next={...prev}; Object.entries(sums).forEach(([id,s])=>{ next[id]=(next[id]||0)+s.qty; }); return next; }); setRoundLoaded(true); setCartOpen(true); }}
                       className="px-3 py-1.5 rounded-xl text-xs font-bold disabled:opacity-40" style={{ backgroundColor: "#2E7D32", color: "#fff" }}>Load compiled list into cart</button>
@@ -17377,7 +17378,8 @@ function StockCountEditor({ countId, storeId, money, currentUser, onBack }) {
 
   // ── SPLIT COUNT: who am I, what's mine ──
   const isManager = ["owner","hq_staff","manager"].includes(currentUser?.role);
-  const myAsg = assignments.filter(x => x.userId && x.userId === currentUser?.id);
+  const myMemberId = currentUser?.opsTeamMemberId || currentUser?.id;
+  const myAsg = assignments.filter(x => x.userId && (x.userId === myMemberId || x.userId === currentUser?.id));
   const staffRestricted = !isManager && assignments.length > 0;
   // When restricted, the grouping basis is fixed to the one the manager split by.
   const effGroupBy = staffRestricted ? (assignments[0]?.groupBy || "location") : groupBy;
@@ -17406,10 +17408,15 @@ function StockCountEditor({ countId, storeId, money, currentUser, onBack }) {
   });
   const openAssign = async () => {
     try {
-      const us = await fetchUsers();
-      // Employee list = users who belong to THIS store. HQ/owner accounts have
-      // no store restriction, which is exactly why they must NOT pass the filter.
-      const pool = us.filter(u => (u.storeIds || []).includes(storeId) && !["owner", "hq_staff"].includes(u.role));
+      // Employee list = the TEAM records for this store (same roster the punch
+      // system uses) — staff mostly don't have full dashboard accounts, but
+      // their logins link back to a team member via opsTeamMemberId, which is
+      // how "my part" is matched when they open the count.
+      const team = await fetchOpsTeam();
+      const pool = team
+        .filter(m => (m.storeIds || []).includes(storeId) && !m.archivedAt)
+        .map(m => ({ id: m.id, name: `${m.firstName || ""} ${m.lastName || ""}`.trim() || m.nickname || "Unnamed" }))
+        .sort((x, y) => x.name.localeCompare(y.name));
       setAssignUsers(pool);
       const basis = assignments[0]?.groupBy || (groupBy === "category" ? "category" : "location");
       setAssignBasis(basis);
