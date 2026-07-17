@@ -76,7 +76,7 @@ import {
   fetchEmployeeCertifications, addEmployeeCertification,
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
-  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, updateCkGoodsIn, computeCkStock, fetchCkOrders, saveCkOrder, submitCkOrder, cancelCkOrder, deleteCkOrder, fulfilCkOrder, computeCkOrderDemand, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, upsertCkIngredientsByName, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchScheduleJobs, saveScheduleJobs, detectAllergensInText, diffAllergens, scanLabelText, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock, fetchIncomingCkDeliveries, fetchCkDeliveryDetail, saveCkDeliveryReceipt, confirmCkDelivery, ckLineEquivalent, computeCkDemandViaDist, fetchFleetVehicles, upsertFleetVehicle, startFuelFill, cancelFuelFill, completeFuelFill, fetchFuelTransactions, fetchMyPendingFill, reviewFuelTransaction,
+  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, updateCkGoodsIn, computeCkStock, fetchCkOrders, saveCkOrder, submitCkOrder, cancelCkOrder, deleteCkOrder, fulfilCkOrder, computeCkOrderDemand, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, upsertCkIngredientsByName, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchScheduleJobs, saveScheduleJobs, detectAllergensInText, diffAllergens, scanLabelText, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock, fetchIncomingCkDeliveries, fetchCkDeliveryDetail, saveCkDeliveryReceipt, confirmCkDelivery, ckLineEquivalent, computeCkDemandViaDist, fetchCountAssignments, saveCountAssignments, setCountAssignmentStatus, fetchOpenOrderRound, createOrderRound, saveOrderRoundAssignments, setOrderRoundLine, setOrderRoundPartStatus, closeOrderRound, fetchFleetVehicles, upsertFleetVehicle, startFuelFill, cancelFuelFill, completeFuelFill, fetchFuelTransactions, fetchMyPendingFill, reviewFuelTransaction,
   archiveEmployeeDocument, fetchArchivedDocuments,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
   signContractDocument,
@@ -13429,6 +13429,32 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   const [detailItem, setDetailItem] = useState(null);  // item whose stock popup is open
   const [consumption, setConsumption] = useState(null); // { byDist, days } from recipe-based usage
 
+  // ── TEAM ORDER ROUND: manager assigns categories, staff fill their part,
+  //    manager compiles into ONE sales order. ──
+  const [round, setRound] = useState(null);
+  const [roundQty, setRoundQty] = useState({});           // staff mode: itemId -> qty string
+  const [roundAssignOpen, setRoundAssignOpen] = useState(false);
+  const [roundUsers, setRoundUsers] = useState([]);
+  const [roundAssignMap, setRoundAssignMap] = useState({});
+  const [roundBusy, setRoundBusy] = useState(false);
+  const [roundLoaded, setRoundLoaded] = useState(false);  // compiled list pulled into cart
+  const [roundBasis, setRoundBasis] = useState("category"); // category | department | frequency
+  const isManager = ["owner", "hq_staff", "manager"].includes(currentUser?.role);
+  const reloadRound = async (sid) => {
+    try { setRound(sid ? await fetchOpenOrderRound(sid) : null); } catch { setRound(null); }
+  };
+  useEffect(() => { setRoundLoaded(false); reloadRound(activeStoreId); /* eslint-disable-next-line */ }, [activeStoreId]);
+  const myRoundAsg = (round?.assignments || []).filter(x => x.userId === currentUser?.id);
+  const staffRoundMode = !isManager && !!round && myRoundAsg.length > 0;
+  useEffect(() => {
+    // Prefill staff quantities from their existing round lines.
+    if (!staffRoundMode) return;
+    const m = {};
+    (round?.lines || []).filter(l => l.requestedBy === currentUser?.id).forEach(l => { m[l.itemId] = String(l.qty); });
+    setRoundQty(m);
+    /* eslint-disable-next-line */
+  }, [round?.id, staffRoundMode]);
+
   const storeIds = currentUser?.storeIds || [];
   // The store whose sales history to use = the SELECTED customer's store (each
   // distribution customer is linked to one store). Falls back to the user's
@@ -13547,6 +13573,21 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
 
   // When department changes, reset the sub-filter to "All".
   useEffect(() => { setCat("All"); }, [deptId]);
+
+  // ── Round partition basis: which "section" an item belongs to under a basis.
+  //    category = item category · department = owner-configured department nav ·
+  //    frequency = the Daily/Weekly tag. ──
+  const roundDeptOf = (i) => {
+    for (const d of departments) {
+      if ((d.categories || []).some(c => c.toLowerCase() === (i.category || "").toLowerCase())) return d.name;
+      if ((d.collectionIds || []).length && (i.collectionIds || []).some(id => d.collectionIds.includes(id))) return d.name;
+    }
+    return "No department";
+  };
+  const roundSectionOf = (i, basis) =>
+    basis === "department" ? roundDeptOf(i)
+    : basis === "frequency" ? ((i.tagFrequency || "").trim() || "Untagged")
+    : (i.category || "Uncategorised");
 
   // Category list, honouring the owner's configured order (unlisted → alpha tail),
   // and constrained to the active department when one is selected.
@@ -13778,6 +13819,8 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
       if (orderNote.trim()) noteParts.push(orderNote.trim());
       noteParts.push("Placed via store ordering portal");
       const id = await createDistSalesOrder({ customerId, status: "confirmed", orderDate: new Date().toISOString().slice(0, 10), vatMode: "exclusive", createdBy: currentUser?.id, note: noteParts.join(" · ") }, lines);
+      // If this order came from a team round, close the round against the SO.
+      if (roundLoaded && round) { try { await closeOrderRound(round.id, { status: "placed", soId: id }); } catch {} setRoundLoaded(false); reloadRound(activeStoreId); }
       setPlaced({ id, count: cartCount, total: cartTotal }); setCart({}); setConfirmOpen(false); setCartOpen(false); setDeliveryDate(""); setOrderNote("");
     } catch (e) { setErr(e.message); }
     setPlacing(false);
@@ -13806,6 +13849,57 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
 
   if (!loading && err === "no-link") {
     return <div className="max-w-md mx-auto text-center py-16 space-y-2"><Package size={32} className="mx-auto text-slate-600"/><h2 className="text-lg font-bold text-white">Ordering not set up yet</h2><p className="text-sm text-slate-500">Your store isn't linked to a Distribution account yet. Ask the Distribution team to link it, then you can order here.</p></div>;
+  }
+
+  // ── STAFF ROUND MODE: only your assigned categories, quantities save as you
+  //    type; the manager compiles everyone's parts into one order. ──
+  if (!loading && staffRoundMode) {
+    const basis = myRoundAsg[0]?.groupBy || "category";
+    const mySections = new Set(myRoundAsg.map(x => x.section));
+    const myItems = catalogue.filter(i => mySections.has(roundSectionOf(i, basis)));
+    const byCat = {};
+    myItems.forEach(i => { const c = roundSectionOf(i, basis); (byCat[c] = byCat[c] || []).push(i); });
+    const filledN = myItems.filter(i => Number(roundQty[i.id]) > 0).length;
+    const allDone = myRoundAsg.every(x => x.status === "done");
+    const saveLine = async (i, v) => {
+      setRoundQty(s => ({ ...s, [i.id]: v }));
+      try { await setOrderRoundLine(round.id, i.id, v, currentUser); } catch (e) { setErr(e.message || String(e)); }
+    };
+    return (
+      <div className="max-w-2xl mx-auto p-4 space-y-4">
+        <div className="rounded-2xl border border-purple-700/40 bg-purple-950/10 p-4">
+          <div className="text-base font-bold text-white">Team order — your part</div>
+          <div className="text-xs text-slate-400 mt-0.5">Enter how many of each item your area needs. Your entries save automatically; the manager places the final order for the whole store.</div>
+          <div className="text-xs text-purple-300 mt-1.5 font-semibold">Your sections: {myRoundAsg.map(x=>x.section).join(", ")} · {filledN} item{filledN!==1?"s":""} requested</div>
+        </div>
+        {err && <div className="text-xs text-red-400 bg-red-950/30 rounded-xl px-3 py-2">{err}</div>}
+        {Object.keys(byCat).sort().map(cat => (
+          <div key={cat} className="rounded-2xl border border-slate-800 bg-slate-900/40 overflow-hidden">
+            <div className="px-4 py-2.5 bg-slate-900/80 text-xs font-bold uppercase tracking-wide text-slate-400">{cat} · {byCat[cat].length}</div>
+            <div className="divide-y divide-slate-800/60">
+              {byCat[cat].map(i => (
+                <div key={i.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                  <div className="min-w-0">
+                    <div className="text-sm text-slate-200 truncate">{i.name}</div>
+                    <div className="text-[11px] text-slate-500">{i.packCount || 1}{i.packSize ? `*${i.packSize}${i.packUnit||""}` : (i.packUnit||"")}{i.sku ? ` · ${i.sku}` : ""}</div>
+                  </div>
+                  <div className="flex items-center gap-1.5 flex-shrink-0">
+                    <button onClick={()=>saveLine(i, String(Math.max(0,(Number(roundQty[i.id])||0)-1)))} className="w-8 h-8 rounded-lg bg-slate-800 text-slate-300 text-lg leading-none">−</button>
+                    <input type="number" inputMode="numeric" value={roundQty[i.id] ?? ""} onChange={e=>setRoundQty(s=>({...s,[i.id]:e.target.value}))} onBlur={e=>saveLine(i, e.target.value)}
+                      className="w-14 px-1 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-sm text-center" placeholder="0"/>
+                    <button onClick={()=>saveLine(i, String((Number(roundQty[i.id])||0)+1))} className="w-8 h-8 rounded-lg bg-indigo-600 text-white text-lg leading-none">+</button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+        <button onClick={async()=>{ try { for (const x of myRoundAsg) await setOrderRoundPartStatus(x.id, !allDone); reloadRound(activeStoreId); } catch(e){ setErr(e.message||String(e)); } }}
+          className={`w-full py-3 rounded-xl text-sm font-bold ${allDone ? "bg-emerald-700 text-white" : "bg-purple-600 hover:bg-purple-500 text-white"}`}>
+          {allDone ? "Part submitted ✓ (tap to reopen)" : "Submit my part"}
+        </button>
+      </div>
+    );
   }
 
   return (
@@ -13840,6 +13934,94 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
           <button onClick={() => onNavigate ? onNavigate("dist-dashboard") : window.history.back()} className="p-2 rounded-xl" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }} title="Close"><X size={18}/></button>
         </div>
       </div>
+      {/* ── TEAM ORDER ROUND — manager panel ── */}
+      {isManager && !loading && (
+        <div className="flex-shrink-0 px-4 sm:px-6 py-2" style={{ backgroundColor: "#FBF6EC", borderBottom: "1px solid #E8DCC6" }}>
+          {!round ? (
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="text-xs" style={{ color: "#9A8770" }}>Split this order between the team: assign categories to staff, they fill in their parts, you place one compiled order.</div>
+              <button onClick={async()=>{ try { await createOrderRound(activeStoreId, currentUser); reloadRound(activeStoreId); } catch(e){ setErr(e.message||String(e)); } }}
+                className="px-3 py-1.5 rounded-xl text-xs font-bold" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>Start team order round</button>
+            </div>
+          ) : (() => {
+            const sums = {};
+            (round.lines || []).forEach(l => {
+              if (!sums[l.itemId]) sums[l.itemId] = { qty: 0, who: [] };
+              sums[l.itemId].qty += l.qty; sums[l.itemId].who.push(`${l.requestedByName||"?"} ${l.qty}`);
+            });
+            const lineCount = Object.keys(sums).length;
+            const doneN = (round.assignments||[]).filter(x=>x.status==="done").length;
+            return (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="text-xs font-semibold" style={{ color: "#3A2E26" }}>
+                    Team round open · {doneN}/{(round.assignments||[]).length} parts submitted · {lineCount} item{lineCount!==1?"s":""} requested
+                  </div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button onClick={async()=>{ try { const us = await fetchUsers(); setRoundUsers(us.filter(u=>!u.storeIds||u.storeIds.length===0||u.storeIds.includes(activeStoreId))); setRoundBasis(round.assignments?.[0]?.groupBy || "category"); const m={}; (round.assignments||[]).forEach(x=>{m[x.section]=x.userId;}); setRoundAssignMap(m); setRoundAssignOpen(true); } catch(e){ setErr(e.message||String(e)); } }}
+                      className="px-3 py-1.5 rounded-xl text-xs font-bold" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }}>Assign categories</button>
+                    <button disabled={!lineCount} onClick={()=>{ setCart(prev=>{ const next={...prev}; Object.entries(sums).forEach(([id,s])=>{ next[id]=(next[id]||0)+s.qty; }); return next; }); setRoundLoaded(true); setCartOpen(true); }}
+                      className="px-3 py-1.5 rounded-xl text-xs font-bold disabled:opacity-40" style={{ backgroundColor: "#2E7D32", color: "#fff" }}>Load compiled list into cart</button>
+                    <button onClick={async()=>{ if(!window.confirm("Cancel this round? Staff entries will be discarded."))return; try { await closeOrderRound(round.id,{status:"cancelled"}); setRoundLoaded(false); reloadRound(activeStoreId); } catch(e){ setErr(e.message||String(e)); } }}
+                      className="px-3 py-1.5 rounded-xl text-xs" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#9A8770" }}>Cancel round</button>
+                  </div>
+                </div>
+                {(round.assignments||[]).length > 0 && (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {(round.assignments||[]).map(x => (
+                      <span key={x.id} className="text-[11px] px-2 py-1 rounded-lg" style={{ backgroundColor: x.status==="done" ? "#E4F2E4" : "#FDF2E0", border: "1px solid #E8DCC6", color: x.status==="done" ? "#2E7D32" : "#844429" }}>
+                        {x.userName||"?"} · {x.section}{x.status==="done" ? " ✓" : "…"}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* Round assignment modal */}
+      {roundAssignOpen && round && (() => {
+        const cats = {};
+        catalogue.forEach(i => { const c = roundSectionOf(i, roundBasis); cats[c]=(cats[c]||0)+1; });
+        const names = Object.keys(cats).sort();
+        return (
+          <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={()=>!roundBusy&&setRoundAssignOpen(false)}>
+            <div onClick={e=>e.stopPropagation()} className="w-full max-w-lg bg-slate-900 border border-slate-700 rounded-2xl p-5 space-y-4 max-h-[88vh] overflow-auto">
+              <div>
+                <div className="text-base font-bold text-white">Split the order between the team</div>
+                <div className="text-xs text-slate-500 mt-0.5">Each person only sees the sections you give them. Unassigned sections are yours to order directly.</div>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-slate-400">Split by</span>
+                {[["category","Category"],["department","Department"],["frequency","Daily / Weekly"]].map(([k,l])=>(
+                  <button key={k} onClick={()=>{ setRoundBasis(k); setRoundAssignMap({}); }}
+                    className={`px-3 py-1.5 rounded-full text-xs font-semibold ${roundBasis===k?"bg-indigo-600 text-white":"bg-slate-800 border border-slate-700 text-slate-400"}`}>{l}</button>
+                ))}
+              </div>
+              <div className="space-y-2">
+                {names.map(sec => (
+                  <div key={sec} className="flex items-center justify-between gap-3 rounded-xl bg-slate-800/50 border border-slate-800 px-3 py-2">
+                    <div className="text-sm text-slate-200 min-w-0 truncate">{sec} <span className="text-slate-500 text-xs">· {cats[sec]} items</span></div>
+                    <select value={roundAssignMap[sec]||""} onChange={e=>setRoundAssignMap(m=>({...m,[sec]:e.target.value||null}))}
+                      className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white w-40 flex-shrink-0">
+                      <option value="">— unassigned (me) —</option>
+                      {roundUsers.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
+                    </select>
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <button onClick={()=>setRoundAssignOpen(false)} disabled={roundBusy} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+                <button onClick={async()=>{ setRoundBusy(true); try { const rows=Object.entries(roundAssignMap).filter(([,uid])=>uid).map(([section,uid])=>({section,userId:uid,userName:roundUsers.find(u=>u.id===uid)?.name||""})); await saveOrderRoundAssignments(round.id, rows, roundBasis); reloadRound(activeStoreId); setRoundAssignOpen(false); } catch(e){ setErr(e.message||String(e)); } setRoundBusy(false); }}
+                  disabled={roundBusy} className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-bold">{roundBusy?"Saving…":"Save assignments"}</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Faceted filter bar: one dropdown per facet + active-filter chips.
           OR within a facet, AND across facets. Hides non-matching items but
           keeps the collection structure intact. */}
@@ -15432,7 +15614,7 @@ function RecipeCardBuilder() {
 }
 
 
-function CogsView({ stores = [], canFeature = () => true, initialTab, initialSub, hideTabs }) {
+function CogsView({ stores = [], canFeature = () => true, initialTab, initialSub, hideTabs, currentUser }) {
   const [tab, setTab] = useState(initialTab || "inventory");
   const ALL_TABS = [
     { key: "inventory", label: "Inventory" },
@@ -15479,7 +15661,7 @@ function CogsView({ stores = [], canFeature = () => true, initialTab, initialSub
       {effectiveTab === "reconcile" && <CogsReconciliation stores={stores}/>}
       {effectiveTab === "tillaudit" && <TillAudit stores={stores}/>}
       {effectiveTab === "modmapper" && <ModifierMapper stores={stores}/>}
-      {effectiveTab === "actualcogs" && <ActualCogs stores={stores} initialSub={initialSub} hideTabs={hideTabs}/>}
+      {effectiveTab === "actualcogs" && <ActualCogs stores={stores} initialSub={initialSub} hideTabs={hideTabs} currentUser={currentUser}/>}
       {effectiveTab === "recipecards" && <RecipeCardBuilder/>}
     </div>
   );
@@ -16750,7 +16932,7 @@ function OrderInspector({ stores = [] }) {
   );
 }
 
-function ActualCogs({ stores = [], initialSub, hideTabs }) {
+function ActualCogs({ stores = [], initialSub, hideTabs, currentUser }) {
   const activeStores = (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading" && isShopSite(s));
   const [storeId, setStoreId] = useState(activeStores[0]?.id || null);
   const [sub, setSub] = useState(initialSub || "counts"); // counts | purchases | variance | settings | pricechanges
@@ -16772,7 +16954,7 @@ function ActualCogs({ stores = [], initialSub, hideTabs }) {
         )}
       </div>
       <p className="text-xs text-slate-500">Actual COGS = opening stock value + purchases − closing stock value. Weekly full counts: each count is both that week's closing and next week's opening. Variance compares actual against the theoretical (recipe × sales) engine — the gap is waste, over-portioning, or loss.</p>
-      {storeId && sub === "counts" && <StockCounts storeId={storeId} money={money}/>}
+      {storeId && sub === "counts" && <StockCounts storeId={storeId} money={money} currentUser={currentUser}/>}
       {storeId && sub === "purchases" && <Purchases storeId={storeId} money={money}/>}
       {storeId && sub === "variance" && <Variance storeId={storeId} money={money}/>}
       {storeId && sub === "itemvar" && <ItemVariance storeId={storeId}/>}
@@ -17086,7 +17268,7 @@ function PriceChanges({ stores = [], money }) {
   );
 }
 
-function StockCounts({ storeId, money }) {
+function StockCounts({ storeId, money, currentUser }) {
   const [counts, setCounts] = useState(null);
   const [openId, setOpenId] = useState(null);
   const [err, setErr] = useState(null);
@@ -17102,7 +17284,7 @@ function StockCounts({ storeId, money }) {
   };
   const remove = async (id) => { if(!window.confirm("Delete this count?"))return; try{ await deleteStockCount(id); if(openId===id)setOpenId(null); await load(); }catch(e){setErr(e.message);} };
 
-  if (openId) return <StockCountEditor countId={openId} storeId={storeId} money={money} onBack={()=>{setOpenId(null);load();}}/>;
+  if (openId) return <StockCountEditor countId={openId} storeId={storeId} money={money} currentUser={currentUser} onBack={()=>{setOpenId(null);load();}}/>;
 
   return (
     <div className="space-y-3">
@@ -17134,9 +17316,16 @@ function StockCounts({ storeId, money }) {
   );
 }
 
-function StockCountEditor({ countId, storeId, money, onBack }) {
+function StockCountEditor({ countId, storeId, money, currentUser, onBack }) {
   const [inv, setInv] = useState(null);
   const [head, setHead] = useState(null);
+  // ── SPLIT COUNT: section assignments (manager assigns, staff see only theirs) ──
+  const [assignments, setAssignments] = useState([]);
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [assignUsers, setAssignUsers] = useState([]);   // pickable staff
+  const [assignBasis, setAssignBasis] = useState("location");
+  const [assignMap, setAssignMap] = useState({});       // section -> userId
+  const [assignBusy, setAssignBusy] = useState(false);
   const [qtys, setQtys] = useState({});      // "scope:id" -> qty string
   const [err, setErr] = useState(null);
   const [q, setQ] = useState("");
@@ -17149,8 +17338,8 @@ function StockCountEditor({ countId, storeId, money, onBack }) {
   useEffect(() => {
     (async () => {
       try {
-        const [invD, countD] = await Promise.all([fetchInventoryForStore(storeId), fetchStockCount(countId)]);
-        setInv(invD); setHead(countD.head);
+        const [invD, countD, asg] = await Promise.all([fetchInventoryForStore(storeId), fetchStockCount(countId), fetchCountAssignments(countId).catch(()=>[])]);
+        setInv(invD); setHead(countD.head); setAssignments(asg);
         const m = {}; countD.lines.forEach(l => { m[l.itemScope+":"+l.itemId] = l.qty==null?"":String(l.qty); });
         setQtys(m);
       } catch(e){ setErr(e.message); }
@@ -17185,18 +17374,64 @@ function StockCountEditor({ countId, storeId, money, onBack }) {
     return true;
   });
 
-  // group
-  const sectionOf = (i) => groupBy === "location" ? (i.location || "Unassigned")
-    : groupBy === "category" ? (i.category || "Uncategorised") : "All items";
+  // ── SPLIT COUNT: who am I, what's mine ──
+  const isManager = ["owner","hq_staff","manager"].includes(currentUser?.role);
+  const myAsg = assignments.filter(x => x.userId && x.userId === currentUser?.id);
+  const staffRestricted = !isManager && assignments.length > 0;
+  // When restricted, the grouping basis is fixed to the one the manager split by.
+  const effGroupBy = staffRestricted ? (assignments[0]?.groupBy || "location") : groupBy;
+  const sectionBy = (i, basis) => basis === "location" ? (i.location || "Unassigned")
+    : basis === "category" ? (i.category || "Uncategorised") : "All items";
+  const sectionOf = (i) => sectionBy(i, effGroupBy);
+  const mySections = new Set(myAsg.map(x => x.section));
+  // Staff scope: only items in their assigned sections; managers see everything.
+  const scopeItems = staffRestricted ? items.filter(i => mySections.has(sectionBy(i, effGroupBy))) : items;
+  const scopeFiltered = filtered.filter(i => !staffRestricted || mySections.has(sectionBy(i, effGroupBy)));
+
   const sections = {};
-  filtered.forEach(i => { const s = sectionOf(i); (sections[s] = sections[s] || []).push(i); });
+  scopeFiltered.forEach(i => { const s = sectionOf(i); (sections[s] = sections[s] || []).push(i); });
   const sectionNames = Object.keys(sections).sort((a,b) =>
     a==="Unassigned"||a==="Uncategorised"?1 : b==="Unassigned"||b==="Uncategorised"?-1 : a.localeCompare(b));
 
-  const countedN = items.filter(isCounted).length;
-  const totalN = items.length;
+  const countedN = scopeItems.filter(isCounted).length;
+  const totalN = scopeItems.length;
   const pct = totalN ? Math.round((countedN/totalN)*100) : 0;
-  const totalValue = items.reduce((s,i)=>{ const v=qtys[keyOf(i)]; const c=costOf(i); return (v!==""&&v!=null&&c!=null)? s+Number(v)*c : s; }, 0);
+  const totalValue = scopeItems.reduce((s,i)=>{ const v=qtys[keyOf(i)]; const c=costOf(i); return (v!==""&&v!=null&&c!=null)? s+Number(v)*c : s; }, 0);
+
+  // Per-assignment progress (manager panel + staff done-button state).
+  const asgProgress = assignments.map(x => {
+    const list = items.filter(i => sectionBy(i, x.groupBy) === x.section);
+    return { ...x, total: list.length, counted: list.filter(isCounted).length };
+  });
+  const openAssign = async () => {
+    try {
+      const us = await fetchUsers();
+      const pool = us.filter(u => !u.storeIds || u.storeIds.length === 0 || u.storeIds.includes(storeId));
+      setAssignUsers(pool);
+      const basis = assignments[0]?.groupBy || (groupBy === "category" ? "category" : "location");
+      setAssignBasis(basis);
+      const m = {}; assignments.forEach(x => { m[x.section] = x.userId; });
+      setAssignMap(m); setAssignOpen(true);
+    } catch (e) { setErr(e.message || String(e)); }
+  };
+  const saveAssign = async () => {
+    setAssignBusy(true); setErr(null);
+    try {
+      const rows = Object.entries(assignMap).filter(([,uid]) => uid).map(([section, uid]) => ({
+        section, userId: uid, userName: assignUsers.find(u => u.id === uid)?.name || "",
+      }));
+      await saveCountAssignments(countId, assignBasis, rows);
+      setAssignments(await fetchCountAssignments(countId));
+      setAssignOpen(false);
+    } catch (e) { setErr(e.message || String(e)); }
+    setAssignBusy(false);
+  };
+  const markMyPart = async (done) => {
+    try {
+      for (const x of myAsg) await setCountAssignmentStatus(x.id, done);
+      setAssignments(await fetchCountAssignments(countId));
+    } catch (e) { setErr(e.message || String(e)); }
+  };
 
   const finalised = head?.status === "finalised";
 
@@ -17228,11 +17463,17 @@ function StockCountEditor({ countId, storeId, money, onBack }) {
               {l}{k==="uncounted"?` (${totalN-countedN})`:k==="counted"?` (${countedN})`:""}
             </button>
           ))}
-          <span className="w-px h-5 bg-slate-700 mx-1"/>
+          {!staffRestricted && <><span className="w-px h-5 bg-slate-700 mx-1"/>
           {[["location","By location"],["category","By category"],["none","Flat list"]].map(([k,l])=>(
             <button key={k} onClick={()=>setGroupBy(k)}
               className={`px-3 py-1.5 rounded-full text-xs font-semibold ${groupBy===k?"bg-slate-700 text-white":"bg-slate-900 border border-slate-700 text-slate-400"}`}>{l}</button>
-          ))}
+          ))}</>}
+          {isManager && !finalised && <>
+            <span className="w-px h-5 bg-slate-700 mx-1"/>
+            <button onClick={openAssign} className={`px-3 py-1.5 rounded-full text-xs font-semibold ${assignments.length?"bg-purple-700 text-white":"bg-slate-900 border border-purple-700/50 text-purple-300"}`}>
+              {assignments.length ? `Sections assigned (${assignments.length})` : "Split & assign"}
+            </button>
+          </>}
           <span className="w-px h-5 bg-slate-700 mx-1"/>
           <button onClick={()=>setCollapsed(Object.fromEntries(sectionNames.map(s=>[s,false])))}
             className="px-3 py-1.5 rounded-full text-xs font-semibold bg-slate-900 border border-slate-700 text-slate-400 hover:text-white">Expand all</button>
@@ -17249,6 +17490,43 @@ function StockCountEditor({ countId, storeId, money, onBack }) {
       </div>
 
       {finalised && <div className="text-[11px] text-emerald-400">This count is finalised (read-only).</div>}
+
+      {/* SPLIT COUNT — staff view: your sections + done toggle */}
+      {staffRestricted && myAsg.length > 0 && (
+        <div className="rounded-2xl border border-purple-700/40 bg-purple-950/10 p-3 flex items-center justify-between gap-3 flex-wrap">
+          <div className="text-xs text-slate-300">
+            <b className="text-purple-300">Your part:</b> {myAsg.map(x=>x.section).join(", ")}
+            <span className="text-slate-500"> · count only these areas — the rest is assigned to others.</span>
+          </div>
+          {myAsg.every(x=>x.status==="done")
+            ? <button onClick={()=>markMyPart(false)} className="px-3 py-1.5 rounded-full bg-emerald-700 text-white text-xs font-bold">Done ✓ (tap to reopen)</button>
+            : <button onClick={()=>{ if (countedN < totalN && !window.confirm(`You have ${totalN-countedN} item(s) not counted yet. Mark your part done anyway?`)) return; markMyPart(true); }} className="px-3 py-1.5 rounded-full bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold">Mark my part done</button>}
+        </div>
+      )}
+      {staffRestricted && myAsg.length === 0 && (
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-6 text-center text-sm text-slate-400">
+          This count has been split between team members, and no section is assigned to you.<br/>
+          <span className="text-xs text-slate-500">Ask your manager to assign you a part.</span>
+        </div>
+      )}
+
+      {/* SPLIT COUNT — manager view: per-person progress */}
+      {isManager && asgProgress.length > 0 && (
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/40 p-3 space-y-1.5">
+          <div className="text-xs font-bold text-slate-300">Assignments</div>
+          {asgProgress.map(x => (
+            <div key={x.id} className="flex items-center justify-between gap-2 text-xs">
+              <span className="text-slate-300 min-w-0 truncate"><b>{x.userName || "?"}</b> · {x.section}</span>
+              <span className="flex items-center gap-2 flex-shrink-0 tabular-nums">
+                <span className="text-slate-500">{x.counted}/{x.total}</span>
+                {x.status === "done"
+                  ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-700 text-white font-bold">DONE</span>
+                  : <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-slate-300">counting</span>}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Sections */}
       <div className="space-y-3 pb-20">
@@ -17306,6 +17584,46 @@ function StockCountEditor({ countId, storeId, money, onBack }) {
           );
         })}
       </div>
+
+      {/* SPLIT COUNT — assignment modal */}
+      {assignOpen && (() => {
+        const allSections = {};
+        items.forEach(i => { const s = sectionBy(i, assignBasis); allSections[s] = (allSections[s]||0)+1; });
+        const names = Object.keys(allSections).sort((x,y)=>x.localeCompare(y));
+        return (
+          <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={()=>!assignBusy&&setAssignOpen(false)}>
+            <div onClick={e=>e.stopPropagation()} className="w-full max-w-lg bg-slate-900 border border-slate-700 rounded-2xl p-5 space-y-4 max-h-[88vh] overflow-auto">
+              <div>
+                <div className="text-base font-bold text-white">Split the count between the team</div>
+                <div className="text-xs text-slate-500 mt-0.5">Each person will only see the sections you assign to them. Unassigned sections stay with you.</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-400">Split by</span>
+                {[["location","Location"],["category","Category"]].map(([k,l])=>(
+                  <button key={k} onClick={()=>setAssignBasis(k)}
+                    className={`px-3 py-1.5 rounded-full text-xs font-semibold ${assignBasis===k?"bg-indigo-600 text-white":"bg-slate-800 border border-slate-700 text-slate-400"}`}>{l}</button>
+                ))}
+              </div>
+              <div className="space-y-2">
+                {names.map(sec => (
+                  <div key={sec} className="flex items-center justify-between gap-3 rounded-xl bg-slate-800/50 border border-slate-800 px-3 py-2">
+                    <div className="text-sm text-slate-200 min-w-0 truncate">{sec} <span className="text-slate-500 text-xs">· {allSections[sec]} items</span></div>
+                    <select value={assignMap[sec]||""} onChange={e=>setAssignMap(m=>({...m,[sec]:e.target.value||null}))}
+                      className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1.5 text-xs text-white w-40 flex-shrink-0">
+                      <option value="">— unassigned (me) —</option>
+                      {assignUsers.map(u=><option key={u.id} value={u.id}>{u.name}</option>)}
+                    </select>
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <button onClick={()=>setAssignOpen(false)} disabled={assignBusy} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+                <button onClick={saveAssign} disabled={assignBusy} className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-bold">{assignBusy?"Saving…":"Save assignments"}</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -58642,7 +58960,7 @@ export default function App() {
             {effectiveActiveView === "setup" && setupPanel === "dist-order-builder" && currentUser.role === "owner" && <DistOrderBuilderView stores={stores}/>}
             {effectiveActiveView === "setup" && setupPanel === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms} brands={brands} stores={stores} opsTeam={opsTeam} entityOverrides={entityOverrides} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} defaultStoreScope={defaultStoreScope} onSaveDefaultScope={async (role, scope) => { try { const next = await setDefaultStoreScopeForRole(role, scope); setDefaultStoreScope(next); } catch (e) { console.error(e); } }}/>}
             {effectiveActiveView === "invoices" && canSeeView("invoices") && <InvoicesView currentUser={currentUser}/>}
-            {effectiveActiveView === "setup" && setupPanel === "cogs" && canSeeView("cogs") && <CogsView stores={stores} canFeature={canFeature} initialTab={setupSubtab} initialSub={setupSubsub} hideTabs={true}/>}
+            {effectiveActiveView === "setup" && setupPanel === "cogs" && canSeeView("cogs") && <CogsView stores={stores} canFeature={canFeature} initialTab={setupSubtab} initialSub={setupSubsub} hideTabs={true} currentUser={currentUser}/>}
             {effectiveActiveView === "central-kitchen" && (["owner","hq_staff"].includes(currentUser.role) || canAccessEntity("entity.central-kitchen")) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "dist-dashboard" && <DistDashboard currentUser={currentUser}/>}
             {effectiveActiveView === "dist-items" && <DistItemsView currentUser={currentUser}/>}

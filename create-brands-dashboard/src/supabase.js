@@ -6997,6 +6997,127 @@ export async function createStockCount(storeId, countDate, countedBy) {
   if (error) throw error; return data.id;
 }
 
+// ── SPLIT COUNTS: section assignments ────────────────────────────────────────
+// Managers partition a count into sections (by location/category) and assign
+// them to staff; staff see only their sections. All ids stored as text.
+
+export async function fetchCountAssignments(countId) {
+  const { data, error } = await supabase.from("cogs_count_assignments")
+    .select("*").eq("count_id", String(countId)).order("section");
+  if (error) throw error;
+  return (data || []).map(a => ({
+    id: a.id, countId: a.count_id, groupBy: a.group_by || "location", section: a.section,
+    userId: a.assignee_user_id || null, userName: a.assignee_name || "",
+    status: a.status || "open", completedAt: a.completed_at || null,
+  }));
+}
+
+// Replace-all save: the manager's assignment modal writes the full picture.
+export async function saveCountAssignments(countId, groupBy, rows) {
+  await supabase.from("cogs_count_assignments").delete().eq("count_id", String(countId));
+  const ins = (rows || []).filter(r => r.section && r.userId).map(r => ({
+    count_id: String(countId), group_by: groupBy || "location", section: r.section,
+    assignee_user_id: r.userId, assignee_name: r.userName || "",
+  }));
+  if (ins.length) {
+    const { error } = await supabase.from("cogs_count_assignments").insert(ins);
+    if (error) throw error;
+  }
+  return true;
+}
+
+export async function setCountAssignmentStatus(assignmentId, done) {
+  const { error } = await supabase.from("cogs_count_assignments").update({
+    status: done ? "done" : "open", completed_at: done ? new Date().toISOString() : null,
+  }).eq("id", assignmentId);
+  if (error) throw error;
+  return true;
+}
+
+// ── ORDER ROUNDS: team-filled shared order draft ─────────────────────────────
+// Manager starts a round + assigns categories; staff enter needed quantities
+// for their sections only; manager compiles into one sales order.
+
+export async function fetchOpenOrderRound(storeId) {
+  const { data: head } = await supabase.from("dist_order_rounds")
+    .select("*").eq("store_id", storeId).eq("status", "open")
+    .order("created_at", { ascending: false }).limit(1).maybeSingle();
+  if (!head) return null;
+  const [{ data: asg }, { data: lines }] = await Promise.all([
+    supabase.from("dist_order_round_assignments").select("*").eq("round_id", head.id).order("section"),
+    supabase.from("dist_order_round_lines").select("*").eq("round_id", head.id),
+  ]);
+  return {
+    id: head.id, storeId: head.store_id, status: head.status, note: head.note || "",
+    createdBy: head.created_by || null, createdByName: head.created_by_name || "",
+    createdAt: head.created_at,
+    assignments: (asg || []).map(a => ({
+      id: a.id, section: a.section, groupBy: a.group_by || "category",
+      userId: a.assignee_user_id || null,
+      userName: a.assignee_name || "", status: a.status || "open",
+    })),
+    lines: (lines || []).map(l => ({
+      id: l.id, itemId: l.item_id, qty: Number(l.qty) || 0,
+      requestedBy: l.requested_by || null, requestedByName: l.requested_by_name || "",
+    })),
+  };
+}
+
+export async function createOrderRound(storeId, user) {
+  const { data, error } = await supabase.from("dist_order_rounds")
+    .insert({ store_id: storeId, status: "open", created_by: user?.id || null, created_by_name: user?.name || null })
+    .select("id").single();
+  if (error) throw error;
+  return data.id;
+}
+
+export async function saveOrderRoundAssignments(roundId, rows, groupBy = "category") {
+  await supabase.from("dist_order_round_assignments").delete().eq("round_id", roundId);
+  const ins = (rows || []).filter(r => r.section && r.userId).map(r => ({
+    round_id: roundId, section: r.section, group_by: groupBy,
+    assignee_user_id: r.userId, assignee_name: r.userName || "",
+  }));
+  if (ins.length) {
+    const { error } = await supabase.from("dist_order_round_assignments").insert(ins);
+    if (error) throw error;
+  }
+  return true;
+}
+
+// One line per (round, item, user): each person's request is kept separate so
+// the compiled view can show who asked for what; the manager's order sums them.
+export async function setOrderRoundLine(roundId, itemId, qty, user) {
+  const q = Number(qty) || 0;
+  if (q <= 0) {
+    await supabase.from("dist_order_round_lines").delete()
+      .eq("round_id", roundId).eq("item_id", itemId).eq("requested_by", user?.id || "");
+    return true;
+  }
+  const { error } = await supabase.from("dist_order_round_lines").upsert({
+    round_id: roundId, item_id: itemId, qty: q,
+    requested_by: user?.id || "", requested_by_name: user?.name || "",
+    updated_at: new Date().toISOString(),
+  }, { onConflict: "round_id,item_id,requested_by" });
+  if (error) throw error;
+  return true;
+}
+
+export async function setOrderRoundPartStatus(assignmentId, done) {
+  const { error } = await supabase.from("dist_order_round_assignments").update({
+    status: done ? "done" : "open", completed_at: done ? new Date().toISOString() : null,
+  }).eq("id", assignmentId);
+  if (error) throw error;
+  return true;
+}
+
+export async function closeOrderRound(roundId, { status = "placed", soId = null } = {}) {
+  const { error } = await supabase.from("dist_order_rounds").update({
+    status, placed_so_id: soId,
+  }).eq("id", roundId);
+  if (error) throw error;
+  return true;
+}
+
 export async function setStockCountLine(countId, itemScope, itemId, qty, costPerUnit) {
   const { data: existing } = await supabase.from("cogs_stock_count_lines")
     .select("id").eq("count_id", countId).eq("item_scope", itemScope).eq("item_id", itemId).maybeSingle();
