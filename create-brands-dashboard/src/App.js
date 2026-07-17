@@ -58109,7 +58109,6 @@ export default function App() {
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["manager"] },
       { key: "google-hub", label: "Google Command", icon: Globe, roles: ["owner", "hq_staff"] },
       { key: "central-kitchen", label: "Central Kitchen", icon: ChefHat, roles: ["owner", "hq_staff"], requiresEntity: "central-kitchen" },
-      { key: "ck-dist-items", label: "Distribution Items", icon: Package, roles: ["owner", "hq_staff"], requiresEntity: "central-kitchen" },
     ]},
     { group: "OPERATIONS", items: [
       { key: "operations",     label: "Operations",      icon: Activity, badge: openIssueCount > 0 ? openIssueCount.toString() : null, children: [
@@ -58628,7 +58627,6 @@ export default function App() {
             {effectiveActiveView === "invoices" && canSeeView("invoices") && <InvoicesView currentUser={currentUser}/>}
             {effectiveActiveView === "setup" && setupPanel === "cogs" && canSeeView("cogs") && <CogsView stores={stores} canFeature={canFeature} initialTab={setupSubtab} initialSub={setupSubsub} hideTabs={true}/>}
             {effectiveActiveView === "central-kitchen" && (["owner","hq_staff"].includes(currentUser.role) || canAccessEntity("entity.central-kitchen")) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
-            {effectiveActiveView === "ck-dist-items" && (["owner","hq_staff"].includes(currentUser.role) || canAccessEntity("entity.central-kitchen")) && <DistTypedItemsView itemType="ck" currentUser={currentUser}/>}
             {effectiveActiveView === "dist-dashboard" && <DistDashboard currentUser={currentUser}/>}
             {effectiveActiveView === "dist-items" && <DistItemsView currentUser={currentUser}/>}
             {effectiveActiveView === "dist-vendors" && <DistVendorsView currentUser={currentUser} stores={stores}/>}
