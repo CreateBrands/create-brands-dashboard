@@ -13959,7 +13959,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
                     Team round open · {doneN}/{(round.assignments||[]).length} parts submitted · {lineCount} item{lineCount!==1?"s":""} requested
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    <button onClick={async()=>{ try { const us = await fetchUsers(); setRoundUsers(us.filter(u=>!u.storeIds||u.storeIds.length===0||u.storeIds.includes(activeStoreId))); setRoundBasis(round.assignments?.[0]?.groupBy || "category"); const m={}; (round.assignments||[]).forEach(x=>{m[x.section]=x.userId;}); setRoundAssignMap(m); setRoundAssignOpen(true); } catch(e){ setErr(e.message||String(e)); } }}
+                    <button onClick={async()=>{ try { const us = await fetchUsers(); setRoundUsers(us.filter(u=>(u.storeIds||[]).includes(activeStoreId) && !["owner","hq_staff"].includes(u.role))); setRoundBasis(round.assignments?.[0]?.groupBy || "category"); const m={}; (round.assignments||[]).forEach(x=>{m[x.section]=x.userId;}); setRoundAssignMap(m); setRoundAssignOpen(true); } catch(e){ setErr(e.message||String(e)); } }}
                       className="px-3 py-1.5 rounded-xl text-xs font-bold" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }}>Assign categories</button>
                     <button disabled={!lineCount} onClick={()=>{ setCart(prev=>{ const next={...prev}; Object.entries(sums).forEach(([id,s])=>{ next[id]=(next[id]||0)+s.qty; }); return next; }); setRoundLoaded(true); setCartOpen(true); }}
                       className="px-3 py-1.5 rounded-xl text-xs font-bold disabled:opacity-40" style={{ backgroundColor: "#2E7D32", color: "#fff" }}>Load compiled list into cart</button>
@@ -17407,7 +17407,9 @@ function StockCountEditor({ countId, storeId, money, currentUser, onBack }) {
   const openAssign = async () => {
     try {
       const us = await fetchUsers();
-      const pool = us.filter(u => !u.storeIds || u.storeIds.length === 0 || u.storeIds.includes(storeId));
+      // Employee list = users who belong to THIS store. HQ/owner accounts have
+      // no store restriction, which is exactly why they must NOT pass the filter.
+      const pool = us.filter(u => (u.storeIds || []).includes(storeId) && !["owner", "hq_staff"].includes(u.role));
       setAssignUsers(pool);
       const basis = assignments[0]?.groupBy || (groupBy === "category" ? "category" : "location");
       setAssignBasis(basis);
