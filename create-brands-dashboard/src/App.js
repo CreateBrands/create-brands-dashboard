@@ -76,7 +76,7 @@ import {
   fetchEmployeeCertifications, addEmployeeCertification,
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
-  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, updateCkGoodsIn, computeCkStock, fetchCkOrders, saveCkOrder, submitCkOrder, cancelCkOrder, deleteCkOrder, fulfilCkOrder, computeCkOrderDemand, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, upsertCkIngredientsByName, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchScheduleJobs, saveScheduleJobs, detectAllergensInText, diffAllergens, scanLabelText, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock, fetchIncomingCkDeliveries, fetchCkDeliveryDetail, saveCkDeliveryReceipt, confirmCkDelivery, ckLineEquivalent, fetchFleetVehicles, upsertFleetVehicle, startFuelFill, cancelFuelFill, completeFuelFill, fetchFuelTransactions, fetchMyPendingFill, reviewFuelTransaction,
+  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, updateCkGoodsIn, computeCkStock, fetchCkOrders, saveCkOrder, submitCkOrder, cancelCkOrder, deleteCkOrder, fulfilCkOrder, computeCkOrderDemand, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, upsertCkIngredientsByName, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchScheduleJobs, saveScheduleJobs, detectAllergensInText, diffAllergens, scanLabelText, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock, fetchIncomingCkDeliveries, fetchCkDeliveryDetail, saveCkDeliveryReceipt, confirmCkDelivery, ckLineEquivalent, computeCkDemandViaDist, fetchFleetVehicles, upsertFleetVehicle, startFuelFill, cancelFuelFill, completeFuelFill, fetchFuelTransactions, fetchMyPendingFill, reviewFuelTransaction,
   archiveEmployeeDocument, fetchArchivedDocuments,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
   signContractDocument,
@@ -5082,8 +5082,8 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   const load = useCallback(() => {
     if (!siteId) { setLoading(false); return; }
     setLoading(true);
-    Promise.all([fetchCkIngredients(siteId), fetchCkGoodsIn(siteId), fetchCkCategories(siteId), fetchCkSuppliers(siteId), fetchCkProducts(siteId).catch(()=>[]), fetchCkProductComponents().catch(()=>[]), fetchProductionRuns(siteId).catch(()=>[]), fetchDispatches({ fromSiteId: siteId }).catch(()=>[]), fetchDispatchedByRun().catch(()=>({})), fetchCkPreps(siteId).catch(()=>[]), fetchCkPrepComponents().catch(()=>[]), fetchProductionPlans(siteId).catch(()=>[]), fetchCkOrders({ status: ["submitted","fulfilled"] }).catch(()=>[]), fetchIncomingCkDeliveries(siteId).catch(()=>[])])
-      .then(([i, g, c, s, kp, comps, rn, dsp, dbr, pr, pc, pl, ord, inDel]) => { setIngredients(i); setGoodsIn(g); setCategories(c); setSuppliers(s); setCkProducts(kp); setAllComponents(comps); setRuns(rn); setDispatches(dsp); setDispatchedByRun(dbr); setCkPreps(pr); setAllPrepComps(pc); setPlans(pl); setCkOrders(ord); setIncomingDel(inDel); })
+    Promise.all([fetchCkIngredients(siteId), fetchCkGoodsIn(siteId), fetchCkCategories(siteId), fetchCkSuppliers(siteId), fetchCkProducts(siteId).catch(()=>[]), fetchCkProductComponents().catch(()=>[]), fetchProductionRuns(siteId).catch(()=>[]), fetchDispatches({ fromSiteId: siteId }).catch(()=>[]), fetchDispatchedByRun().catch(()=>({})), fetchCkPreps(siteId).catch(()=>[]), fetchCkPrepComponents().catch(()=>[]), fetchProductionPlans(siteId).catch(()=>[]), fetchCkOrders({ status: ["submitted","fulfilled"] }).catch(()=>[]), fetchIncomingCkDeliveries(siteId).catch(()=>[]), computeCkDemandViaDist().catch(()=>[])])
+      .then(([i, g, c, s, kp, comps, rn, dsp, dbr, pr, pc, pl, ord, inDel, dvd]) => { setIngredients(i); setGoodsIn(g); setCategories(c); setSuppliers(s); setCkProducts(kp); setAllComponents(comps); setRuns(rn); setDispatches(dsp); setDispatchedByRun(dbr); setCkPreps(pr); setAllPrepComps(pc); setPlans(pl); setCkOrders(ord); setIncomingDel(inDel); setDistDemand(dvd); })
       .catch(e => setErr(e?.message || String(e)))
       .finally(() => setLoading(false));
   }, [siteId]);
@@ -5091,6 +5091,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
 
   // ── Incoming from Distribution (Dist→CK bridge) ──
   const [incomingDel, setIncomingDel] = useState([]);
+  const [distDemand, setDistDemand] = useState([]);   // store demand via Dist (hub model)
   const [ckRecvDel, setCkRecvDel] = useState(null);        // { head, lines } being received
   const [ckRecvQty, setCkRecvQty] = useState({});          // lineId -> qty (kitchen units)
   const [ckRecvBusy, setCkRecvBusy] = useState(false);
@@ -5899,6 +5900,37 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
               {card("Finished on hand", finishedOnHand.length, `${fgUnits.toFixed(0)} units${fgExpiring.length ? ` · ${fgExpiring.length} use-by soon` : ""}`, fgExpiring.length ? "border-red-800/50" : "border-slate-800", () => ckCanFeature("feat.ck.finished") && setTab("finished"))}
               {card("Pending dispatch", pendingDispatch.length, pendingDispatch.length ? "sent, awaiting receipt" : "none in transit", pendingDispatch.length ? "border-sky-800/50" : "border-slate-800", () => ckCanFeature("feat.ck.dispatch") && setTab("dispatch"))}
             </div>
+
+            {/* Store orders vs warehouse stock — hub model, MAKE-TO-STOCK: CK
+                bulk-produces to par (the "Below par" card drives production);
+                orders dispatch from stored stock. This card is the EXCEPTION
+                check only — it shouts when open store orders exceed what's on
+                the shelf, so the kitchen can make the shortfall on the go. */}
+            {distDemand.length > 0 && (() => {
+              const shorts = distDemand.filter(d => d.netToMake > 0);
+              const activeRows = distDemand.filter(d => d.pendingQty > 0);
+              return (
+                <div className={`rounded-2xl border p-4 ${shorts.length ? "border-amber-700/50 bg-amber-950/10" : "border-slate-800 bg-slate-900/30"}`}>
+                  <div className={`text-sm font-bold mb-0.5 ${shorts.length ? "text-amber-300" : "text-slate-200"}`}>🏪 Store orders vs warehouse stock</div>
+                  <div className="text-[11px] text-slate-500 mb-2">Orders dispatch from stock made in bulk. Anything short here needs a make-on-the-go run before dispatch — routine production is driven by par, not by orders.</div>
+                  <div className="space-y-1.5">
+                    {(shorts.length ? shorts : activeRows).slice(0, 10).map(d => (
+                      <div key={d.distItemId} className="flex items-center justify-between gap-2 text-xs">
+                        <span className="text-slate-300 min-w-0 truncate">{d.name}{!d.ckProductId && <span className="ml-1.5 text-[9px] px-1 py-0.5 rounded bg-amber-600/80 text-white align-middle">not linked to a CK product</span>}</span>
+                        <span className="flex items-center gap-3 flex-shrink-0 tabular-nums">
+                          <span className="text-slate-500">ordered <b className="text-slate-300">{d.pendingQty}</b></span>
+                          <span className="text-slate-500">on hand <b className="text-slate-300">{d.onHand}</b></span>
+                          <b className={d.netToMake > 0 ? "text-amber-400" : "text-emerald-400"}>{d.netToMake > 0 ? `short ${d.netToMake} — make to dispatch` : "covered from stock"}</b>
+                        </span>
+                      </div>
+                    ))}
+                    {!shorts.length && !activeRows.length && (
+                      <div className="text-xs text-slate-500">No open store orders for kitchen items right now — stock levels are ahead of demand.</div>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
 
             {belowPar.length > 0 && (
               <div className="rounded-2xl border border-indigo-800/40 bg-indigo-950/10 p-4">

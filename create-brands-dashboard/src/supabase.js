@@ -11686,6 +11686,30 @@ export async function computeDistCommitted(itemId) {
   return m;
 }
 
+// ── CK DEMAND VIA DISTRIBUTION ───────────────────────────────────────────────
+// The kitchen's "what needs making" view under the hub model: stores order from
+// Dist only; CK observes that demand THROUGH Dist rather than receiving orders.
+// Demand = open store SO lines for CK-type dist items; net = demand − Dist
+// on-hand. No explicit Dist→CK orders exist or are needed.
+export async function computeCkDemandViaDist() {
+  const [items, onHand, committed] = await Promise.all([
+    fetchDistItems(), computeDistOnHand(), computeDistCommitted(),
+  ]);
+  return items
+    .filter(i => (i.itemType || "warehouse") === "ck")
+    .map(i => {
+      const oh = onHand.get(i.id) || 0;
+      const pending = committed.get(i.id) || 0;
+      return {
+        distItemId: i.id, name: i.name, sku: i.sku || "",
+        ckProductId: i.ckProductId || null,
+        pendingQty: pending, onHand: oh,
+        netToMake: Math.max(0, pending - oh),
+      };
+    })
+    .sort((a, b) => b.netToMake - a.netToMake || b.pendingQty - a.pendingQty);
+}
+
 // ============================================================================
 // DISTRIBUTION — SELL SIDE (B): FEFO allocation, picks, dispatch (stock OUT +
 // COGS), invoices, payments received, credit notes. Journals via postJournalEntry.
