@@ -13429,6 +13429,13 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   const [detailItem, setDetailItem] = useState(null);  // item whose stock popup is open
   const [consumption, setConsumption] = useState(null); // { byDist, days } from recipe-based usage
 
+
+  const storeIds = currentUser?.storeIds || [];
+  // The store whose sales history to use = the SELECTED customer's store (each
+  // distribution customer is linked to one store). Falls back to the user's
+  // first store. This is what item_day_aggregates.store_id matches.
+  const activeStoreId = (customers.find(c => c.id === customerId)?.storeId) || storeIds[0] || "";
+
   // ── TEAM ORDER ROUND: manager assigns categories, staff fill their part,
   //    manager compiles into ONE sales order. ──
   const [round, setRound] = useState(null);
@@ -13454,12 +13461,6 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
     setRoundQty(m);
     /* eslint-disable-next-line */
   }, [round?.id, staffRoundMode]);
-
-  const storeIds = currentUser?.storeIds || [];
-  // The store whose sales history to use = the SELECTED customer's store (each
-  // distribution customer is linked to one store). Falls back to the user's
-  // first store. This is what item_day_aggregates.store_id matches.
-  const activeStoreId = (customers.find(c => c.id === customerId)?.storeId) || storeIds[0] || "";
 
   // Recipe-based consumption for the active store (last 28 days), computed once
   // and looked up per item in the stock popup. Uses the COGS chain: sale →
