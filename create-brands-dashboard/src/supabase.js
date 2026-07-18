@@ -12227,8 +12227,11 @@ export async function deleteDistDispatch(dispatchId) {
   const { data: lines } = await supabase.from("dist_dispatch_lines").select("*").eq("dispatch_id", dispatchId);
 
   // 1. Return stock to each batch (positive movement, distinct reversal ref).
+  //    Batchless lines (fresh / negative-stock override) moved NO stock on
+  //    dispatch, so there is nothing to return — skip them, or the movement
+  //    insert dies on the batch_id not-null constraint.
   let cogsValue = 0;
-  for (const l of lines || []) {
+  for (const l of (lines || []).filter(x => x.batch_id)) {
     await addDistMovement({
       itemId: l.item_id, batchId: l.batch_id, qty: Math.abs(Number(l.qty) || 0), type: "return",
       sourceKind: "dispatch_reversal", sourceRef: `distdispREV:${dispatchId}:${l.item_id}:${l.batch_id}`,
