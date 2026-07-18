@@ -12074,10 +12074,18 @@ export async function advanceDistOrderToPick(soId, createdBy) {
     }
     const alloc = await suggestDistFefo(l.itemId, l.qty).catch(() => []);
     const got = alloc.reduce((s, a) => s + a.qty, 0);
-    if (got + 0.0005 < Number(l.qty)) {
-      throw new Error(`Not enough stock to pick ${l.qty} of an item (only ${got.toFixed(2)} available). Receive stock first.`);
-    }
     for (const a of alloc) lines.push({ itemId: l.itemId, batchId: a.batchId, qty: a.qty, unitPrice: l.unitPrice || 0, taxRateId: l.taxRateId || null });
+    if (got + 0.0005 < Number(l.qty)) {
+      // OVERRIDE (owner decision): physical reality wins — the van can carry
+      // goods the system hasn't received yet, so a stock shortfall must not
+      // block dispatch. Allocate every batch that exists and pass the
+      // remainder through UNBATCHED: it still dispatches and invoices at full
+      // quantity, but moves no stock and books no stock-COGS for the missing
+      // portion (there is no batch to draw down — batch-level tracking cannot
+      // go negative). The gap self-documents: receive the goods when they
+      // arrive and counts/COGS come back into line.
+      lines.push({ itemId: l.itemId, batchId: null, qty: Number(l.qty) - got, unitPrice: l.unitPrice || 0, taxRateId: l.taxRateId || null });
+    }
   }
   if (!lines.length) throw new Error("Nothing to pick on this order.");
   return createDistPick({ soId, customerId: so.customerId, status: "picked", createdBy }, lines);
