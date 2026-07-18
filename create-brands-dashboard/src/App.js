@@ -7942,7 +7942,7 @@ function DistVendorsView({ currentUser, stores = [] }) {
                 <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40"><tr><th className="text-left px-4 py-2.5 font-semibold">Name</th><th className="text-left px-4 py-2.5 font-semibold">Company</th><th className="text-left px-4 py-2.5 font-semibold">Email</th><th className="text-left px-4 py-2.5 font-semibold">Phone</th><th className="px-2 py-2.5 w-10"></th></tr></thead>
                 <tbody>{filtered.map(v => (
                   <tr key={v.id} onClick={() => setDetail(v)} className="border-t border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
-                    <td className="px-4 py-2.5"><span className="text-indigo-300 font-medium hover:underline">{v.displayName}</span>{v.isCentralKitchen && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-amber-500 text-amber-950">CENTRAL KITCHEN</span>}</td>
+                    <td className="px-4 py-2.5"><span className="text-indigo-300 font-medium hover:underline">{v.displayName}</span>{v.isCentralKitchen && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-amber-500 text-amber-950">CENTRAL KITCHEN</span>}{v.visibleToStores && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-emerald-600 text-white">STORE-VISIBLE</span>}</td>
                     <td className="px-4 py-2.5 text-slate-300">{v.companyName || "—"}</td>
                     <td className="px-4 py-2.5 text-slate-400">{v.email || "—"}</td>
                     <td className="px-4 py-2.5 text-slate-400">{v.workPhone || v.mobile || v.phone || "—"}</td>
@@ -7984,6 +7984,8 @@ function DistVendorsView({ currentUser, stores = [] }) {
               <label className="text-xs text-slate-400">Opening balance (£)<input type="number" value={edit.openingBalance || ""} onChange={e => setEdit({ ...edit, openingBalance: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
               <label className="text-xs text-slate-400">Payment terms<select value={edit.paymentTerms || "due_on_receipt"} onChange={e => setEdit({ ...edit, paymentTerms: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white">{DIST_PAYMENT_TERMS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}</select></label>
               <label className="text-xs text-slate-400 flex items-end gap-2 pb-1"><input type="checkbox" checked={!!edit.isCentralKitchen} onChange={e => setEdit({ ...edit, isCentralKitchen: e.target.checked })}/> This vendor is the Central Kitchen</label>
+              <label className="text-xs text-slate-400 flex items-end gap-2 pb-1" title="Off = stores never see this supplier anywhere. On = stores can see and pick it as a direct supplier (use for the meat man etc. — suppliers who deliver to stores anyway).">
+                <input type="checkbox" checked={!!edit.visibleToStores} onChange={e => setEdit({ ...edit, visibleToStores: e.target.checked })}/> Visible to stores (direct supplier)</label>
             </div>
             <div className="text-[11px] uppercase tracking-wide text-slate-500 border-t border-slate-800 pt-3">Address</div>
             <div className="grid grid-cols-2 gap-3">
@@ -13477,7 +13479,9 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   useEffect(() => {
     if (!activeStoreId) return;
     fetchStoreSupplierOverrides(activeStoreId).then(setSupplierOverrides).catch(() => setSupplierOverrides({}));
-    fetchDistContacts({ kind: "vendor" }).then(v => setPortalVendors((v || []).filter(x => x.active !== false))).catch(() => {});
+    // PRIVACY: stores only ever see vendors explicitly flagged visible — the
+    // rest of Dist's supplier book never reaches the store side.
+    fetchDistContacts({ kind: "vendor" }).then(v => setPortalVendors((v || []).filter(x => x.active !== false && x.visibleToStores))).catch(() => {});
     /* eslint-disable-next-line */
   }, [activeStoreId]);
   const vendorNameOf = (id) => { const v = portalVendors.find(x => x.id === id); return v ? (v.displayName || v.name || "Supplier") : "Supplier"; };
@@ -14565,6 +14569,7 @@ function DistItemDetail({ item, taxName, categories = [], onClose, onEdit, onDel
 
 function DistItemsView({ currentUser }) {
   const [items, setItems] = useState([]);
+  const [itemVendors, setItemVendors] = useState([]);  // direct suppliers for "Fulfilled by"
   const [taxRates, setTaxRates] = useState([]);
   const [ckProducts, setCkProducts] = useState([]);
   const [categories, setCategories] = useState([]);   // Chart of Accounts (finance) for income/expense dropdowns
@@ -14955,7 +14960,7 @@ function DistItemsView({ currentUser }) {
                     <option value="">Distribution (warehouse fulfils)</option>
                     {itemVendors.map(v => <option key={v.id} value={v.id}>{v.displayName || v.name} — direct to store</option>)}
                   </select>
-                  {editItem.fulfilledBy && <span className="text-[10px] text-amber-300">Store orders for this item become a separate order to this supplier, delivered direct — it never enters Distribution's sales, stock, or invoicing.</span>}
+                  {editItem.fulfilledBy && <span className="text-[10px] text-amber-300">Store orders for this item become a separate order to this supplier, delivered direct — it never enters Distribution's sales, stock, or invoicing.{(() => { const v = itemVendors.find(x => x.id === editItem.fulfilledBy); return v && !v.visibleToStores ? " ⚠ This vendor is not marked visible to stores — stores will see the split but not be able to pick this supplier themselves; enable it on the vendor if they should." : ""; })()}</span>}
                 </label>
               )}
               {(editItem.itemType === "ck" || (!editItem.itemType && editItem.ckProductId)) && (
