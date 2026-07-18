@@ -76,7 +76,7 @@ import {
   fetchEmployeeCertifications, addEmployeeCertification,
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
-  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, updateCkGoodsIn, computeCkStock, fetchCkOrders, saveCkOrder, submitCkOrder, cancelCkOrder, deleteCkOrder, fulfilCkOrder, computeCkOrderDemand, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, upsertCkIngredientsByName, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchScheduleJobs, saveScheduleJobs, detectAllergensInText, diffAllergens, scanLabelText, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock, fetchIncomingCkDeliveries, fetchCkDeliveryDetail, saveCkDeliveryReceipt, confirmCkDelivery, ckLineEquivalent, computeCkDemandViaDist, fetchCountAssignments, saveCountAssignments, setCountAssignmentStatus, fetchOpenOrderRound, createOrderRound, saveOrderRoundAssignments, setOrderRoundLine, setOrderRoundPartStatus, closeOrderRound, createFreshPurchaseDeliveries, fetchFleetVehicles, upsertFleetVehicle, startFuelFill, cancelFuelFill, completeFuelFill, fetchFuelTransactions, fetchMyPendingFill, reviewFuelTransaction,
+  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, updateCkGoodsIn, computeCkStock, fetchCkOrders, saveCkOrder, submitCkOrder, cancelCkOrder, deleteCkOrder, fulfilCkOrder, computeCkOrderDemand, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, upsertCkIngredientsByName, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchScheduleJobs, saveScheduleJobs, detectAllergensInText, diffAllergens, scanLabelText, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock, fetchIncomingCkDeliveries, fetchCkDeliveryDetail, saveCkDeliveryReceipt, confirmCkDelivery, ckLineEquivalent, computeCkDemandViaDist, fetchCountAssignments, saveCountAssignments, setCountAssignmentStatus, fetchOpenOrderRound, createOrderRound, saveOrderRoundAssignments, setOrderRoundLine, setOrderRoundPartStatus, closeOrderRound, createFreshPurchaseDeliveries, lastVehicleOdometer, addVehicleMileage, fetchVehicleMileageLogs, fetchFleetVehicles, upsertFleetVehicle, startFuelFill, cancelFuelFill, completeFuelFill, fetchFuelTransactions, fetchMyPendingFill, reviewFuelTransaction,
   archiveEmployeeDocument, fetchArchivedDocuments,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
   signContractDocument,
@@ -20125,8 +20125,40 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
       document.removeEventListener("visibilitychange", onVis);
     };
   }, [trackingActive, myOpenPunch?.id]);
+  // ── DRIVER MILEAGE GATE: drivers must record the van odometer at clock-in
+  //    and clock-out. The punch does not proceed without it. ──
+  const [mileageGate, setMileageGate] = useState(null); // { action, vans, vanId, odo, lastOdo, busy, err }
+  const openMileageGate = async (action) => {
+    try {
+      const vans = await fetchFleetVehicles();
+      if (!vans.length) { setMileageGate(null); return doPhoneClockCore(action, null); } // no fleet configured → don't block clocking
+      // Prefill the van from today's shift_start (clock-out should be the same van).
+      let vanId = vans.length === 1 ? vans[0].id : "";
+      setMileageGate({ action, vans, vanId, odo: "", lastOdo: null, busy: false, err: "" });
+      if (vanId) { const lo = await lastVehicleOdometer(vanId); setMileageGate(g => g ? { ...g, lastOdo: lo } : g); }
+    } catch (e) { setClockMsg({ type: "error", msg: e.message || String(e) }); }
+  };
+  const pickGateVan = async (vanId) => {
+    setMileageGate(g => g ? { ...g, vanId, lastOdo: null } : g);
+    if (vanId) { const lo = await lastVehicleOdometer(vanId); setMileageGate(g => g ? { ...g, lastOdo: lo } : g); }
+  };
+  const confirmMileageGate = async () => {
+    const g = mileageGate; if (!g) return;
+    const odo = Number(g.odo);
+    if (!g.vanId) { setMileageGate({ ...g, err: "Pick your van." }); return; }
+    if (!(odo > 0)) { setMileageGate({ ...g, err: "Enter the odometer reading." }); return; }
+    if (g.lastOdo != null && odo < g.lastOdo) { setMileageGate({ ...g, err: `Reading can't be below the last recorded ${g.lastOdo.toLocaleString()} mi.` }); return; }
+    setMileageGate({ ...g, busy: true, err: "" });
+    await doPhoneClockCore(g.action, { vehicleId: g.vanId, odometer: odo });
+    setMileageGate(null);
+  };
+
   const doPhoneClock = async () => {
     const action = myOpenPunch ? "out" : "in";
+    if (isDriverRole) return openMileageGate(action);   // enforced: no mileage, no punch
+    return doPhoneClockCore(action, null);
+  };
+  const doPhoneClockCore = async (action, mileage) => {
     setClockMsg(null); setClockBusy(true);
     try {
       if (!myClockStore) throw new Error("No store is linked to your account — ask your manager.");
@@ -20144,13 +20176,19 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
       if (dist > radius) throw new Error(`You're about ${Math.round(dist)}m from ${myClockStore.shortName || myClockStore.name}. You must be within ${radius}m to clock ${action === "in" ? "in" : "out"}.`);
       const todayStr = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; })();
       if (action === "in") {
+        const punchId = `pr-${Date.now()}`;
         await onEmpPunchIn({
-          id: `pr-${Date.now()}`, brandId: myClockStore.brandId, storeId: myClockStore.id,
+          id: punchId, brandId: myClockStore.brandId, storeId: myClockStore.id,
           employeeId: (currentUser.opsTeamMemberId || currentUser.id), employeeName: `${myOpsMember.firstName} ${myOpsMember.lastName}`.trim(),
           date: todayStr, punchIn: new Date().toISOString(), punchOut: null, hoursWorked: null,
           hourlyRate: myOpsMember.hourlyRate || 0, grossPay: null, status: "open", notes: "phone clock-in",
         });
-        setClockMsg({ type: "ok", msg: "Clocked in ✓" });
+        if (mileage) {
+          try { await addVehicleMileage({ ...mileage, kind: "shift_start", punchId,
+            memberId: currentUser.opsTeamMemberId || currentUser.id, memberName: `${myOpsMember.firstName} ${myOpsMember.lastName}`.trim() }); }
+          catch (e) { console.error("mileage log failed:", e.message); }
+        }
+        setClockMsg({ type: "ok", msg: mileage ? "Clocked in ✓ · mileage recorded" : "Clocked in ✓" });
       } else {
         const nowIso = new Date().toISOString();
         const { hours } = computePunchHours({
@@ -20165,7 +20203,12 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
         if (savedOut && !(savedOut.punchOut || savedOut.punch_out)) {
           throw new Error("Clock-out didn't go through — you're still clocked in. Please try again.");
         }
-        setClockMsg({ type: "ok", msg: "Clocked out ✓" });
+        if (mileage) {
+          try { await addVehicleMileage({ ...mileage, kind: "shift_end", punchId: myOpenPunch.id,
+            memberId: currentUser.opsTeamMemberId || currentUser.id, memberName: `${myOpsMember.firstName} ${myOpsMember.lastName}`.trim() }); }
+          catch (e) { console.error("mileage log failed:", e.message); }
+        }
+        setClockMsg({ type: "ok", msg: mileage ? "Clocked out ✓ · mileage recorded" : "Clocked out ✓" });
       }
     } catch (e) {
       setClockMsg({ type: "error", msg: e.message || String(e) });
@@ -20516,6 +20559,41 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
             />
           )}
           {activeView === "recipes" && <StoreRecipesView />}
+
+          {/* DRIVER MILEAGE GATE — clocking is blocked until the reading is in */}
+          {mileageGate && (
+            <div className="fixed inset-0 z-[60] bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-5 space-y-4">
+                <div>
+                  <div className="text-base font-bold text-white">{mileageGate.action === "in" ? "Start of shift — van mileage" : "End of shift — van mileage"}</div>
+                  <div className="text-xs text-slate-500 mt-0.5">Enter the odometer reading to {mileageGate.action === "in" ? "clock in" : "clock out"}. This is required for drivers.</div>
+                </div>
+                {mileageGate.err && <div className="text-xs text-red-400 bg-red-950/30 rounded-xl px-3 py-2">{mileageGate.err}</div>}
+                <div>
+                  <label className="text-[11px] text-slate-500 uppercase font-semibold">Van</label>
+                  <select value={mileageGate.vanId} onChange={e=>pickGateVan(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white">
+                    <option value="">— pick your van —</option>
+                    {mileageGate.vans.map(v=><option key={v.id} value={v.id}>{v.reg}{v.label?` · ${v.label}`:""}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-[11px] text-slate-500 uppercase font-semibold">Odometer (miles)</label>
+                  <input type="number" inputMode="numeric" value={mileageGate.odo}
+                    onChange={e=>setMileageGate(g=>g?{...g, odo:e.target.value}:g)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-3 text-lg text-white text-center tabular-nums" placeholder="e.g. 48210"/>
+                  {mileageGate.lastOdo != null && <div className="text-[11px] text-slate-500 mt-1">Last recorded: {mileageGate.lastOdo.toLocaleString()} mi — reading must not be lower.</div>}
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={()=>setMileageGate(null)} disabled={mileageGate.busy} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+                  <button onClick={confirmMileageGate} disabled={mileageGate.busy}
+                    className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm font-bold">
+                    {mileageGate.busy ? "Saving…" : mileageGate.action === "in" ? "Record & clock in" : "Record & clock out"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
           {activeView === "smallware" && (
             <SmallwareView
               brands={myBrands} stores={stores} visibleStoreIds={myVisibleStoreIds}
@@ -54010,15 +54088,17 @@ function FleetFuelView({ currentUser }) {
   const [flaggedOnly, setFlaggedOnly] = useState(false);
   const [editV, setEditV] = useState(null);      // vehicle being edited / "new"
   const [saveErr, setSaveErr] = useState(null);
+  const [mileage, setMileage] = useState([]);    // 14d shift-bookend odometer logs
 
   const load = async () => {
     setLoading(true);
     try {
-      const [vs, ts] = await Promise.all([
+      const [vs, ts, ml] = await Promise.all([
         fetchFleetVehicles({ includeInactive: true }),
         fetchFuelTransactions({ vehicleId: filterVehicle || null, days: 60, flaggedOnly }),
+        fetchVehicleMileageLogs({ days: 14 }).catch(() => []),
       ]);
-      setVehicles(vs); setTxns(ts);
+      setVehicles(vs); setTxns(ts); setMileage(ml);
     } catch (e) { console.error(e); }
     setLoading(false);
   };
@@ -54027,6 +54107,35 @@ function FleetFuelView({ currentUser }) {
   const vehById = new Map(vehicles.map(v => [v.id, v]));
   const flaggedCount = txns.filter(t => t.flagStatus === "flagged").length;
   const monthSpend = txns.filter(t => t.status === "complete" && t.completedAt && new Date(t.completedAt).getMonth() === new Date().getMonth()).reduce((a, t) => a + (t.amount || 0), 0);
+
+  // ── UTILISATION (14d): shift-bookend mileage × fuel = miles, £/mile, real MPG.
+  //    Miles per shift = shift_end − shift_start pairs (per member per day);
+  //    fuel litres/£ from completed fills in the same window. ──
+  const utilisation = useMemo(() => {
+    const byVan = {};
+    const byDriver = {};
+    const dayOf = (iso) => (iso || "").slice(0, 10);
+    // Pair starts with ends: same vehicle + member + day.
+    const starts = mileage.filter(m => m.kind === "shift_start");
+    const ends = mileage.filter(m => m.kind === "shift_end");
+    starts.forEach(s => {
+      const e = ends.find(x => x.vehicle_id === s.vehicle_id && x.member_id === s.member_id && dayOf(x.logged_at) === dayOf(s.logged_at) && Number(x.odometer) >= Number(s.odometer));
+      if (!e) return;
+      const miles = Number(e.odometer) - Number(s.odometer);
+      if (!(miles >= 0)) return;
+      const v = (byVan[s.vehicle_id] = byVan[s.vehicle_id] || { shifts: 0, miles: 0 });
+      v.shifts++; v.miles += miles;
+      const d = (byDriver[s.member_id] = byDriver[s.member_id] || { name: s.member_name || "?", shifts: 0, miles: 0 });
+      d.shifts++; d.miles += miles;
+    });
+    const since = Date.now() - 14 * 86400000;
+    txns.filter(t => t.status === "complete" && t.completedAt && new Date(t.completedAt).getTime() >= since).forEach(t => {
+      const v = (byVan[t.vehicleId] = byVan[t.vehicleId] || { shifts: 0, miles: 0 });
+      v.litres = (v.litres || 0) + (Number(t.litres) || 0);
+      v.spend = (v.spend || 0) + (Number(t.amount) || 0);
+    });
+    return { byVan, byDriver };
+  }, [mileage, txns]);
 
   const saveVehicle = async (v) => {
     setSaveErr(null);
@@ -54072,6 +54181,46 @@ function FleetFuelView({ currentUser }) {
             </button>
           ))}
         </div>
+        {/* ── Utilisation (14 days): miles per van from the clock-in/out odometer
+              bookends, joined with fuel to give real MPG and £/mile. ── */}
+        {Object.keys(utilisation.byVan).length > 0 && (
+          <div className="rounded-xl border border-slate-800 bg-slate-950/50 p-3 space-y-2">
+            <div className="text-xs font-bold text-slate-300">Utilisation — last 14 days</div>
+            <div className="space-y-1">
+              {Object.entries(utilisation.byVan).map(([vid, u]) => {
+                const v = vehById.get(vid);
+                const gallons = (u.litres || 0) / 4.546;
+                const mpg = gallons > 0 && u.miles > 0 ? (u.miles / gallons) : null;
+                const ppm = u.miles > 0 && u.spend > 0 ? (u.spend / u.miles) : null;
+                return (
+                  <div key={vid} className="flex items-center justify-between gap-2 text-xs">
+                    <span className="text-slate-300 font-mono">{v?.reg || vid}</span>
+                    <span className="flex items-center gap-3 tabular-nums text-slate-400">
+                      <span>{u.shifts} shift{u.shifts!==1?"s":""}</span>
+                      <span><b className="text-slate-200">{Math.round(u.miles).toLocaleString()}</b> mi</span>
+                      {u.litres != null && <span>{Math.round(u.litres)} L</span>}
+                      {mpg != null && <span className={mpg < 20 ? "text-amber-400" : "text-emerald-400"}><b>{mpg.toFixed(1)}</b> mpg</span>}
+                      {ppm != null && <span>£{ppm.toFixed(2)}/mi</span>}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+            {Object.keys(utilisation.byDriver).length > 0 && (
+              <div className="pt-1 border-t border-slate-800/60 space-y-1">
+                <div className="text-[10px] uppercase tracking-wide text-slate-600">By driver</div>
+                {Object.values(utilisation.byDriver).sort((x,y)=>y.miles-x.miles).map((d,i) => (
+                  <div key={i} className="flex items-center justify-between gap-2 text-xs">
+                    <span className="text-slate-400 truncate">{d.name}</span>
+                    <span className="tabular-nums text-slate-400">{d.shifts} shift{d.shifts!==1?"s":""} · <b className="text-slate-200">{Math.round(d.miles).toLocaleString()}</b> mi</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="text-[10px] text-slate-600">Miles come from the odometer readings drivers enter at clock-in and clock-out. Low mpg (amber) can mean short urban runs, heavy loads — or fuel going elsewhere.</div>
+          </div>
+        )}
+
         {editV && (
           <div className="rounded-xl border border-indigo-700/50 bg-slate-950 p-3 space-y-2">
             <div className="grid gap-2 sm:grid-cols-2">

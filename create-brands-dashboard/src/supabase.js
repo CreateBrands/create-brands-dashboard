@@ -15609,6 +15609,41 @@ export async function completeFuelFill(id, { litres, amount, station = "", recei
 
 // Admin fetch. Also sweeps stale pending fills (>2h) into expired+flagged —
 // someone entered a mileage, fuelled, and never logged the amount.
+// ── VEHICLE MILEAGE (shift bookends) ─────────────────────────────────────────
+// Odometer at clock-in and clock-out, enforced for drivers. The highest known
+// reading (mileage logs ∪ fuel logs) is the floor for the next entry — same
+// hard-block the fuel flow uses, so odometers can only go forward.
+
+export async function lastVehicleOdometer(vehicleId) {
+  const [{ data: m }, { data: f }] = await Promise.all([
+    supabase.from("vehicle_mileage_logs").select("odometer").eq("vehicle_id", vehicleId)
+      .order("odometer", { ascending: false }).limit(1),
+    supabase.from("fuel_transactions").select("odometer").eq("vehicle_id", vehicleId)
+      .order("odometer", { ascending: false }).limit(1),
+  ]);
+  const a = m && m[0] ? Number(m[0].odometer) : null;
+  const b = f && f[0] ? Number(f[0].odometer) : null;
+  if (a == null && b == null) return null;
+  return Math.max(a ?? -Infinity, b ?? -Infinity);
+}
+
+export async function addVehicleMileage({ vehicleId, memberId, memberName, kind, odometer, punchId }) {
+  const { data, error } = await supabase.from("vehicle_mileage_logs").insert({
+    vehicle_id: vehicleId, member_id: memberId || null, member_name: memberName || null,
+    kind, odometer: Number(odometer), punch_id: punchId || null,
+  }).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function fetchVehicleMileageLogs({ days = 14 } = {}) {
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+  const { data, error } = await supabase.from("vehicle_mileage_logs")
+    .select("*").gte("logged_at", since).order("logged_at", { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+
 export async function fetchFuelTransactions({ vehicleId = null, days = 30, flaggedOnly = false } = {}) {
   const cutoff = new Date(Date.now() - 2 * 36e5).toISOString();
   await supabase.from("fuel_transactions")
