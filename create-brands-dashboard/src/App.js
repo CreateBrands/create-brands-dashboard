@@ -14329,14 +14329,39 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
       )}
 
       {confirmOpen && (
-        <Modal onClose={() => setConfirmOpen(false)} title="Confirm your order" maxW="max-w-lg">
-          <div className="space-y-3">
-            <div className="max-h-72 overflow-y-auto divide-y divide-slate-800/60 border border-slate-800 rounded-xl">
+        <Modal onClose={() => setConfirmOpen(false)} title="Review your order" maxW="max-w-xl">
+          <div className="space-y-4">
+            {/* ── Deliver-to header (ecommerce: always confirm the destination) ── */}
+            <div className="flex items-center justify-between rounded-xl px-3 py-2.5" style={{ backgroundColor: "#F3EADA" }}>
+              <div className="text-xs" style={{ color: "#6B5D4F" }}>Delivering to</div>
+              <div className="text-sm font-bold" style={{ color: "#3A2E26" }}>{customers.find(c => c.id === customerId)?.name || "Your store"}</div>
+            </div>
+
+            {/* ── Line items: thumbnail · name/pack · qty · line total ── */}
+            <div className="max-h-72 overflow-y-auto divide-y rounded-xl border" style={{ borderColor: "#E8DCC6" }}>
               {cartLines.map(l => (
-                <div key={l.id} className="px-3 py-2 flex justify-between text-sm"><span className="text-slate-300">{l.qty} × {cleanName(l.name)}</span><span className="text-white">{gbp(l.qty*Number(l.price))}</span></div>
+                <div key={l.id} className="px-3 py-2.5 flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-lg flex-shrink-0 overflow-hidden flex items-center justify-center" style={{ backgroundColor: "#F3EADA" }}>
+                    {l.imageUrl ? <img src={l.imageUrl} alt="" className="w-full h-full object-cover"/> : <Package size={18} style={{ color: "#C9B99F" }}/>}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-semibold truncate" style={{ color: "#3A2E26" }}>{cleanName(l.name)}</div>
+                    <div className="text-[11px]" style={{ color: "#9A8770" }}>{gbp(Number(l.price))} each{resolveSupplier(l) ? ` · ${vendorNameOf(resolveSupplier(l))}` : ""}</div>
+                  </div>
+                  <div className="text-xs tabular-nums flex-shrink-0" style={{ color: "#6B5D4F" }}>× {l.qty}</div>
+                  <div className="text-sm font-bold tabular-nums flex-shrink-0 w-16 text-right" style={{ color: "#3A2E26" }}>{gbp(l.qty*Number(l.price))}</div>
+                </div>
               ))}
             </div>
-            <div className="flex justify-between text-sm font-bold"><span className="text-white">Total (excl. VAT)</span><span className="text-white">{gbp(cartTotal)}</span></div>
+
+            {/* ── Order summary ── */}
+            <div className="rounded-xl px-3 py-2.5 space-y-1" style={{ backgroundColor: "#FDF8EF", border: "1px solid #E8DCC6" }}>
+              <div className="flex justify-between text-xs" style={{ color: "#6B5D4F" }}><span>Items</span><span className="tabular-nums">{cartCount}</span></div>
+              <div className="flex justify-between text-xs" style={{ color: "#6B5D4F" }}><span>Subtotal (excl. VAT)</span><span className="tabular-nums">{gbp(cartTotal)}</span></div>
+              <div className="flex justify-between text-base font-black pt-1 border-t" style={{ color: "#3A2E26", borderColor: "#E8DCC6" }}><span>Total</span><span className="tabular-nums">{gbp(cartTotal)}</span></div>
+              <div className="text-[10px]" style={{ color: "#9A8770" }}>Direct-supplier items are billed by the supplier — their prices aren't included here.</div>
+            </div>
+
             {/* SUPPLIER SPLIT — OPT-IN: default = everything via Distribution.
                 Tick a supplier to carve their items out into a direct order
                 for THIS checkout only. */}
@@ -14347,37 +14372,43 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
               if (!vids.length) return null;
               const chosen = vids.filter(v => splitVendors.includes(v));
               const distN = cartLines.length - chosen.reduce((s2, v) => s2 + direct[v].n, 0);
-              const total = (distN ? 1 : 0) + chosen.length;
               return (
-                <div className="rounded-xl bg-amber-950/15 border border-amber-700/40 px-3 py-2 space-y-1.5">
-                  <div className="text-xs font-bold text-amber-300">Send parts of this order to their suppliers directly?</div>
+                <div className="rounded-xl px-3 py-2.5 space-y-2" style={{ backgroundColor: "#FFF6E8", border: "1px solid #E0A664" }}>
+                  <div className="text-xs font-bold" style={{ color: "#B45309" }}>Delivery — how should this order be fulfilled?</div>
+                  <label className="flex items-start gap-2.5 rounded-lg px-2.5 py-2 cursor-default" style={{ backgroundColor: "#FDF8EF" }}>
+                    <input type="checkbox" checked disabled className="mt-0.5"/>
+                    <span className="text-xs" style={{ color: "#3A2E26" }}><b>Distribution</b> — {distN} item{distN!==1?"s":""}, delivered on the usual run <span style={{ color: "#9A8770" }}>(default)</span></span>
+                  </label>
                   {vids.map(v => (
-                    <label key={v} className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
-                      <input type="checkbox" checked={splitVendors.includes(v)}
+                    <label key={v} className="flex items-start gap-2.5 rounded-lg px-2.5 py-2 cursor-pointer" style={{ backgroundColor: splitVendors.includes(v) ? "#FDF8EF" : "transparent" }}>
+                      <input type="checkbox" className="mt-0.5" checked={splitVendors.includes(v)}
                         onChange={e => setSplitVendors(sv => e.target.checked ? [...sv, v] : sv.filter(x => x !== v))}/>
-                      <span><b>{vendorNameOf(v)}</b> — {direct[v].n} item{direct[v].n!==1?"s":""}, delivered direct to the store</span>
+                      <span className="text-xs" style={{ color: "#3A2E26" }}><b>{vendorNameOf(v)}</b> — send their {direct[v].n} item{direct[v].n!==1?"s":""} as a separate order, delivered direct to the store</span>
                     </label>
                   ))}
-                  <div className="text-xs text-slate-400 pt-0.5 border-t border-amber-700/30">
-                    Placing <b>{total}</b> order{total !== 1 ? "s" : ""}: {distN > 0 && <>Distribution ({distN} item{distN!==1?"s":""})</>}
-                    {chosen.map(v => <span key={v}>{distN > 0 || chosen.indexOf(v) > 0 ? " · " : ""}{vendorNameOf(v)} ({direct[v].n})</span>)}
-                    {!chosen.length && <span className="text-slate-500"> — everything through Distribution (default)</span>}
+                  <div className="text-[11px] pt-1 border-t" style={{ color: "#6B5D4F", borderColor: "#E8DCC6" }}>
+                    Placing <b>{(distN ? 1 : 0) + chosen.length}</b> order{(distN ? 1 : 0) + chosen.length !== 1 ? "s" : ""}
+                    {!chosen.length ? " — everything through Distribution." : `: Distribution (${distN}) ${chosen.map(v => `· ${vendorNameOf(v)} (${direct[v].n})`).join(" ")}`}
                   </div>
                 </div>
               );
             })()}
-            <div className="grid sm:grid-cols-2 gap-3 pt-1">
-              <div>
-                <label className="block text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-1">Requested delivery date</label>
-                <input type="date" value={deliveryDate} min={new Date().toISOString().slice(0,10)} onChange={e => setDeliveryDate(e.target.value)} className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/>
-              </div>
-              <div>
-                <label className="block text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-1">Note (optional)</label>
-                <input value={orderNote} onChange={e => setOrderNote(e.target.value)} placeholder="e.g. deliver before 10am" className="w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/>
-              </div>
+
+            {/* ── Note (delivery date removed by design) ── */}
+            <div>
+              <label className="block text-[10px] uppercase tracking-wide font-bold mb-1" style={{ color: "#9A8770" }}>Note for the order (optional)</label>
+              <input value={orderNote} onChange={e => setOrderNote(e.target.value)} placeholder="e.g. deliver before 10am" className="w-full px-3 py-2 rounded-lg text-sm" style={{ backgroundColor: "#FFFFFF", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
             </div>
-            {err && err !== "no-link" && <div className="text-xs text-red-400">{err}</div>}
-            <div className="flex justify-end gap-2"><button onClick={() => setConfirmOpen(false)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Keep editing</button><button onClick={placeOrder} disabled={placing} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold">{placing?"Placing…":"Confirm & place order"}</button></div>
+
+            {err && err !== "no-link" && <div className="text-xs px-3 py-2 rounded-lg" style={{ color: "#B3261E", backgroundColor: "#FBEAEA" }}>{err}</div>}
+
+            {/* ── CTA: full-width primary with the total on the button (ecommerce pattern) ── */}
+            <div className="space-y-2 pt-1">
+              <button onClick={placeOrder} disabled={placing} className="w-full py-3 rounded-xl text-sm font-bold disabled:opacity-40" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>
+                {placing ? "Placing your order…" : `Place order · ${gbp(cartTotal)}`}
+              </button>
+              <button onClick={() => setConfirmOpen(false)} disabled={placing} className="w-full py-2 rounded-xl text-sm font-semibold" style={{ backgroundColor: "#F3EADA", color: "#6B5D4F" }}>Keep editing</button>
+            </div>
           </div>
         </Modal>
       )}
