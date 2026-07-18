@@ -10403,6 +10403,7 @@ const mapDistTaxRate = (r) => ({ id: r.id, name: r.name || "", percent: Number(r
 const mapDistContact = (c) => ({
   id: c.id, kind: c.kind || "customer", displayName: c.display_name || "", companyName: c.company_name || "",
   storeId: c.store_id || null, entityId: c.entity_id || null, isCentralKitchen: !!c.is_central_kitchen,
+  visibleToStores: !!c.visible_to_stores,  // vendors only: may stores see/pick this supplier?
   email: c.email || "", phone: c.phone || "", billingAddress: c.billing_address || "", shippingAddress: c.shipping_address || "",
   openingBalance: Number(c.opening_balance) || 0, active: c.active !== false, createdAt: c.created_at,
   salutation: c.salutation || "", firstName: c.first_name || "", lastName: c.last_name || "",
@@ -10454,7 +10455,7 @@ export async function upsertDistContact(c) {
   const row = {
     id: c.id || distId("dc"), kind: c.kind || "customer", display_name: c.displayName || "",
     company_name: c.companyName || null, store_id: c.storeId || null, entity_id: c.entityId || null,
-    is_central_kitchen: !!c.isCentralKitchen, email: c.email || null, phone: c.phone || null,
+    is_central_kitchen: !!c.isCentralKitchen, visible_to_stores: !!c.visibleToStores, email: c.email || null, phone: c.phone || null,
     billing_address: c.billingAddress || null, shipping_address: c.shippingAddress || null,
     opening_balance: c.openingBalance != null && c.openingBalance !== "" ? Number(c.openingBalance) : 0,
     active: c.active !== false,
@@ -11657,6 +11658,8 @@ export async function fetchDistPortalCatalogue(customerId) {
       taxRateId: i.taxRateId, imageUrl: i.imageUrl || "",
       supplier: i.supplier || "", location: i.location || "",
       tagFrequency: i.tagFrequency || "", tagCategory: i.tagCategory || "",
+      itemType: i.itemType || "warehouse",
+      fulfilledBy: i.fulfilledBy || null,   // direct supplier routing — checkout splits on this
       collectionIds,
       price: priceByItem.has(i.id) ? priceByItem.get(i.id) : (i.sellRate != null ? Number(i.sellRate) : 0),
     };
