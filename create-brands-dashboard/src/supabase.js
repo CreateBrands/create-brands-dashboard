@@ -14962,6 +14962,36 @@ async function ensureStoreItemForDistItem(distItemId, fallbackName, unitCost) {
   return created.id;
 }
 
+// ── FRESH PURCHASE → STORE DELIVERIES ────────────────────────────────────────
+// When a driver buys produce (Tesco/Costco run) and allocates receipt line
+// items to stores, each store gets a normal incoming delivery: same list, same
+// receive flow, same shortfall flags as Distribution dispatches. Lines carry
+// no dist/store item link (fresh is unstocked), so receiving records expected
+// vs received without stock side effects.
+export async function createFreshPurchaseDeliveries(perStore, meta = {}) {
+  const created = [];
+  for (const [storeId, s] of Object.entries(perStore || {})) {
+    const items = (s && s.items) || [];
+    if (!storeId || !items.length) continue;
+    const { data: deliv, error: hErr } = await supabase.from("store_deliveries")
+      .insert({ store_id: storeId, dist_order_id: null,
+                dispatch_id: meta.ref ? `fresh:${meta.ref}` : "fresh-purchase",
+                status: "incoming", dispatched_at: new Date().toISOString() })
+      .select().single();
+    if (hErr) { console.error("fresh delivery header failed:", hErr.message); continue; }
+    const rows = items.map(it => ({
+      delivery_id: deliv.id, dist_item_id: null, store_item_id: null,
+      item_name: `${it.desc || "Item"}${meta.vendor ? ` (${meta.vendor})` : ""}`,
+      qty_dispatched: Number(it.units) || 0,
+      unit_cost: it.price != null ? Number(it.price) : null,
+    }));
+    const { error: lErr } = await supabase.from("store_delivery_lines").insert(rows);
+    if (lErr) console.error("fresh delivery lines failed:", lErr.message);
+    created.push({ storeId, deliveryId: deliv.id });
+  }
+  return created;
+}
+
 export async function confirmStoreDelivery(deliveryId, receivedBy) {
   const { head, lines } = await fetchStoreDeliveryDetail(deliveryId);
   if (!head) throw new Error("Delivery not found.");

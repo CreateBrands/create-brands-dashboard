@@ -76,7 +76,7 @@ import {
   fetchEmployeeCertifications, addEmployeeCertification,
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
-  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, updateCkGoodsIn, computeCkStock, fetchCkOrders, saveCkOrder, submitCkOrder, cancelCkOrder, deleteCkOrder, fulfilCkOrder, computeCkOrderDemand, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, upsertCkIngredientsByName, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchScheduleJobs, saveScheduleJobs, detectAllergensInText, diffAllergens, scanLabelText, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock, fetchIncomingCkDeliveries, fetchCkDeliveryDetail, saveCkDeliveryReceipt, confirmCkDelivery, ckLineEquivalent, computeCkDemandViaDist, fetchCountAssignments, saveCountAssignments, setCountAssignmentStatus, fetchOpenOrderRound, createOrderRound, saveOrderRoundAssignments, setOrderRoundLine, setOrderRoundPartStatus, closeOrderRound, fetchFleetVehicles, upsertFleetVehicle, startFuelFill, cancelFuelFill, completeFuelFill, fetchFuelTransactions, fetchMyPendingFill, reviewFuelTransaction,
+  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, updateCkGoodsIn, computeCkStock, fetchCkOrders, saveCkOrder, submitCkOrder, cancelCkOrder, deleteCkOrder, fulfilCkOrder, computeCkOrderDemand, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, upsertCkIngredientsByName, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchScheduleJobs, saveScheduleJobs, detectAllergensInText, diffAllergens, scanLabelText, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock, fetchIncomingCkDeliveries, fetchCkDeliveryDetail, saveCkDeliveryReceipt, confirmCkDelivery, ckLineEquivalent, computeCkDemandViaDist, fetchCountAssignments, saveCountAssignments, setCountAssignmentStatus, fetchOpenOrderRound, createOrderRound, saveOrderRoundAssignments, setOrderRoundLine, setOrderRoundPartStatus, closeOrderRound, createFreshPurchaseDeliveries, fetchFleetVehicles, upsertFleetVehicle, startFuelFill, cancelFuelFill, completeFuelFill, fetchFuelTransactions, fetchMyPendingFill, reviewFuelTransaction,
   archiveEmployeeDocument, fetchArchivedDocuments,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
   signContractDocument,
@@ -19567,10 +19567,37 @@ function EmpThemeStyle() {
 function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [], myClaims = [], onSubmit, onSubmitMany, accountOptions = [], currentUser }) {
   const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
   const ec = "w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none";
-  const [mode, setMode] = useState("new"); // new | mine
+  const [mode, setMode] = useState("new"); // new | split | mine
   const [form, setForm] = useState({ vendor:"", expenseTypeId:"", categoryId:"", storeId:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), reference:"", description:"" });
   const [busy, setBusy] = useState(false); const [err, setErr] = useState(""); const [ok, setOk] = useState("");
   const setF = (k,v) => setForm(f=>({ ...f, [k]: v }));
+  // Receipt scan on the simple form: extract line items so the purchase is
+  // itemised, the receipt is attached, and the chosen store gets an incoming
+  // delivery listing exactly what's arriving.
+  const [receiptUrl, setReceiptUrl] = useState(null);
+  const [scanLines, setScanLines] = useState([]);   // [{desc, units, price}]
+  const [scanBusy, setScanBusy] = useState(false);
+  const scanReceipt = async (file) => {
+    setScanBusy(true); setErr("");
+    try {
+      const rUrl = await uploadExpenseReceipt(file, currentUser?.opsTeamMemberId || currentUser?.id || null);
+      setReceiptUrl(rUrl);
+      const inv = await uploadInvoiceFile(file, "expense", currentUser?.id);
+      try { await extractInvoice(inv.id); } catch { /* best-effort */ }
+      const { invoice, lines: rawLines } = await getInvoiceWithLines(inv.id);
+      if (invoice?.supplier_name && !form.vendor) setF("vendor", invoice.supplier_name);
+      const items = (rawLines || []).map((l, i) => ({
+        desc: l.raw_description || `Item ${i+1}`,
+        units: l.pack_qty_base != null ? Number(l.pack_qty_base) : 1,
+        price: l.pack_price_ex_vat != null ? Number(l.pack_price_ex_vat) : 0,
+      }));
+      setScanLines(items);
+      const total = items.reduce((s2, it) => s2 + it.units * it.price, 0);
+      if (total > 0 && !form.amount) setF("amount", String(Math.round(total * 100) / 100));
+      if (items.length && !form.description) setF("description", `${items.length} item purchase`);
+    } catch (e) { setErr(e?.message || "Could not scan the receipt — you can still submit without it."); }
+    setScanBusy(false);
+  };
 
   const submit = async () => {
     setErr(""); setOk("");
@@ -19578,9 +19605,20 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
     if (!(Number(form.amount) > 0)) { setErr("Enter an amount greater than zero."); return; }
     setBusy(true);
     try {
-      await onSubmit?.({ ...form, amount: Number(form.amount) });
+      const itemised = scanLines.length ? scanLines.map(it=>`${it.units}× ${it.desc}`).join("; ").slice(0,500) : "";
+      await onSubmit?.({ ...form, amount: Number(form.amount), receiptUrl,
+        reference: form.reference || itemised });
+      // If the purchase is for a store and we have line items, raise the
+      // incoming delivery so the store can receive it item by item.
+      if (form.storeId && scanLines.length) {
+        try { await createFreshPurchaseDeliveries(
+          { [form.storeId]: { items: scanLines } },
+          { vendor: form.vendor, ref: `${form.expenseDate}-${(form.vendor||"purchase").slice(0,20)}` }
+        ); } catch (e2) { console.error("delivery create failed:", e2.message); }
+      }
       setForm({ vendor:"", expenseTypeId:"", categoryId:"", storeId:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), reference:"", description:"" });
-      setOk("Expense submitted for approval."); setMode("mine");
+      setReceiptUrl(null); setScanLines([]);
+      setOk(`Expense submitted${form.storeId && scanLines.length ? " — delivery raised for the store" : ""}.`); setMode("mine");
       setTimeout(()=>setOk(""), 4000);
     } catch (e) { setErr(e?.message || "Could not submit."); }
     setBusy(false);
@@ -19617,6 +19655,16 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
         />
       ) : mode==="new" ? (
         <div className="space-y-3">
+          <label className={`flex items-center justify-center gap-2 px-3 py-4 rounded-2xl border-2 border-dashed ${scanBusy?"border-slate-700 text-slate-500":"border-indigo-500/50 text-indigo-300 cursor-pointer"} text-sm font-semibold`}>
+            {scanBusy ? "Scanning…" : receiptUrl ? "Receipt scanned ✓ — tap to rescan" : <><Camera size={16}/> Scan receipt (pulls the line items)</>}
+            <input type="file" accept="image/*" capture="environment" disabled={scanBusy} className="hidden"
+              onChange={e=>{ const f=e.target.files?.[0]; if(f) scanReceipt(f); e.target.value=""; }}/>
+          </label>
+          {scanLines.length > 0 && (
+            <div className="rounded-xl bg-slate-800/50 border border-slate-700 px-3 py-2 text-[11px] text-slate-400 max-h-28 overflow-auto">
+              {scanLines.map((it,i)=><div key={i} className="flex justify-between gap-2"><span className="truncate">{it.units}× {it.desc}</span><span className="tabular-nums">£{(it.units*it.price).toFixed(2)}</span></div>)}
+            </div>
+          )}
           <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Vendor / paid to</label><input value={form.vendor} onChange={e=>setF("vendor",e.target.value)} placeholder="Who was paid" className={ec}/></div>
           {/* No "type" field: the P&L classification comes from CATEGORY, and the
               paying account is fixed at reconciliation — type was a petty-cash
@@ -42016,6 +42064,10 @@ function ExpenseSplitFlow({ stores = [], categories = [], expenseTypes = [], acc
         };
       });
       await handlers.submitMany?.(claims);
+      // Mirror the purchase into store deliveries: each store sees exactly what
+      // the driver is bringing, receives it item by item, shortfalls flagged —
+      // the same principle as Distribution dispatches.
+      try { await createFreshPurchaseDeliveries(perStore, { vendor, ref: `${expenseDate}-${(vendor||"purchase").slice(0,20)}` }); } catch (e) { console.error("fresh deliveries failed:", e.message); }
       onDone?.();
     } catch (e) { setErr(e?.message || "Could not submit the split."); }
     finally { setBusy(false); }
