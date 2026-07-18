@@ -11901,7 +11901,10 @@ export async function createDistPick(pick, lines = []) {
   };
   const { error } = await supabase.from("dist_picks").insert(row);
   if (error) throw error;
-  const lr = lines.filter(l => l.itemId && Number(l.qty) > 0 && (l.batchId || l.nonStock)).map(l => ({
+  // Batchless lines are allowed: fresh/CK (nonStock) AND stocked items picked
+  // beyond available batches (the negative-stock dispatch override). Picks
+  // never touch stock, so storing them is safe; dispatch decides movements.
+  const lr = lines.filter(l => l.itemId && Number(l.qty) > 0).map(l => ({
     id: distId("dpickl"), pick_id: id, item_id: l.itemId, batch_id: l.batchId || null, qty: Number(l.qty) || 0,
     unit_price: Number(l.unitPrice) || 0, tax_rate_id: l.taxRateId || null,
   }));
@@ -11918,7 +11921,7 @@ export async function updateDistPick(pick, lines = []) {
     pick_date: pick.pickDate || new Date().toISOString().slice(0, 10), note: pick.note || null,
   }).eq("id", pick.id);
   await supabase.from("dist_pick_lines").delete().eq("pick_id", pick.id);
-  const lr = lines.filter(l => l.itemId && l.batchId && Number(l.qty) > 0).map(l => ({
+  const lr = lines.filter(l => l.itemId && Number(l.qty) > 0).map(l => ({
     id: distId("dpickl"), pick_id: pick.id, item_id: l.itemId, batch_id: l.batchId, qty: Number(l.qty) || 0,
     unit_price: Number(l.unitPrice) || 0, tax_rate_id: l.taxRateId || null,
   }));
@@ -12110,7 +12113,10 @@ export async function advanceDistOrderToDispatch(soId, createdBy, freshCosts = {
     return {
       itemId: l.itemId, batchId: l.batchId, qty: l.qty,
       unitPrice: isFresh ? (cost != null ? cost : (Number(l.unitPrice) || 0)) : (Number(l.unitPrice) || 0),
-      taxRateId: l.taxRateId || null, nonStock: isFresh,
+      // Batchless = nothing to draw down: fresh items by design, or a stocked
+      // item dispatched beyond available batches (negative-stock override).
+      // Either way: dispatch + invoice at full qty, no stock movement.
+      taxRateId: l.taxRateId || null, nonStock: isFresh || !l.batchId,
     };
   });
   if (!lines.length) throw new Error("This pick has no lines to dispatch.");
