@@ -19564,7 +19564,7 @@ function EmpThemeStyle() {
 }
 
 
-function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [], myClaims = [], onSubmit }) {
+function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [], myClaims = [], onSubmit, onSubmitMany, accountOptions = [], currentUser }) {
   const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
   const ec = "w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none";
   const [mode, setMode] = useState("new"); // new | mine
@@ -19596,20 +19596,31 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
   return (
     <div className="space-y-4 max-w-lg">
       <div className="flex gap-1 bg-slate-800 rounded-xl p-1">
-        {[["new","New expense"],["mine",`My expenses${myClaims.length?` (${myClaims.length})`:""}`]].map(([k,l])=>(
+        {[["new","New expense"],["split","Split stores"],["mine",`My expenses${myClaims.length?` (${myClaims.length})`:""}`]].map(([k,l])=>(
           <button key={k} onClick={()=>setMode(k)} className={`flex-1 py-2 rounded-lg text-xs font-semibold ${mode===k?"bg-indigo-600 text-white":"text-slate-400"}`}>{l}</button>
         ))}
       </div>
 
       {ok && <div className="text-xs text-emerald-300 bg-emerald-950/30 border border-emerald-500/30 rounded-xl px-3 py-2">{ok}</div>}
 
-      {mode==="new" ? (
+      {mode==="split" ? (
+        /* The SAME split flow Finance uses — scan the receipt, the extractor
+           pulls line items, allocate units per store (e.g. 10 boxes: 4 to
+           Cardiff, 6 to Bolton), one claim per store lands in Finance. Scoped
+           to the member's stores, categories and assigned card. */
+        <ExpenseSplitFlow
+          stores={myStores} categories={myCategories} expenseTypes={[]}
+          accountOptions={accountOptions} currentUser={currentUser}
+          onCancel={()=>setMode("new")}
+          onDone={()=>{ setOk("Split submitted — one expense per store."); setMode("mine"); setTimeout(()=>setOk(""), 4000); }}
+          handlers={{ submitMany: onSubmitMany }}
+        />
+      ) : mode==="new" ? (
         <div className="space-y-3">
           <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Vendor / paid to</label><input value={form.vendor} onChange={e=>setF("vendor",e.target.value)} placeholder="Who was paid" className={ec}/></div>
-          {/* Expense type is a petty-cash concept with no per-member assign UI —
-              when a member has no types (i.e. everyone, currently) the dropdown
-              would be an empty trap, so hide it; Category is the classifier. */}
-          {myTypes.length > 0 && <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Expense type</label><select value={form.expenseTypeId} onChange={e=>setF("expenseTypeId",e.target.value)} className={ec}><option value="">—</option>{myTypes.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select></div>}
+          {/* No "type" field: the P&L classification comes from CATEGORY, and the
+              paying account is fixed at reconciliation — type was a petty-cash
+              convenience with no assignment UI, so it's gone from this form. */}
           <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Category</label><select value={form.categoryId} onChange={e=>setF("categoryId",e.target.value)} className={ec}><option value="">—</option>{myCategories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
           <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Store</label><select value={form.storeId} onChange={e=>setF("storeId",e.target.value)} className={ec}><option value="">—</option>{myStores.map(s=><option key={s.id} value={s.id}>{s.shortName||s.name}</option>)}</select></div>
           <div className="grid grid-cols-2 gap-2">
@@ -19884,7 +19895,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
   schedules, punchRecords, onAmendPunch, onAddPunchComment,
   onEmpPunchIn, onEmpPunchOut,
   expenseClaims = [], expenseTypes = [], expenseCategories = [], cashAccounts = [], bankAccounts = [],
-  memberExpTypes = {}, memberExpCategories = {}, memberExpStores = {}, memberExpAccounts = {}, onSubmitExpense,
+  memberExpTypes = {}, memberExpCategories = {}, memberExpStores = {}, memberExpAccounts = {}, onSubmitExpense, onSubmitExpenseMany,
   onLogout }) {
 
   const brand = brands.find(b => b.id === currentUser.brandIds[0]);
@@ -19900,6 +19911,16 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
   const myExpStores = (stores || []).filter(s => !s.archivedAt && (memberExpStores[myExpMemberId] || []).includes(s.id));
   const myExpClaims = (expenseClaims || []).filter(c => c.submittedById === myExpMemberId);
   const hasExpenseAccess = myExpTypes.length > 0 || myExpStores.length > 0;
+  // The member's assigned paying accounts (their company card) as picker options.
+  const myExpAccountOptions = (() => {
+    const mine = memberExpAccounts[myExpMemberId] || [];
+    const cashSet = new Set(mine.filter(x => x.accountKind === "cash").map(x => x.accountId));
+    const bankSet = new Set(mine.filter(x => x.accountKind === "bank").map(x => x.accountId));
+    const out = [];
+    (cashAccounts || []).forEach(acc => { if (cashSet.has(acc.id)) out.push({ key: `cash:${acc.id}`, label: `${acc.name} (cash)` }); });
+    (bankAccounts || []).filter(acc => !acc.archived).forEach(acc => { if (bankSet.has(acc.id)) out.push({ key: `bank:${acc.id}`, label: `${acc.name} (card/bank)` }); });
+    return out;
+  })();
   // Soft prompt: nudge staff with no profile photo to add one (skippable).
   const [photoPromptDismissed, setPhotoPromptDismissed] = useState(false);
   const [photoUploadBusy, setPhotoUploadBusy] = useState(false);
@@ -20556,6 +20577,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
             <EmployeeExpenseSubmit
               myTypes={myExpTypes} myCategories={myExpCategories} myStores={myExpStores}
               myClaims={myExpClaims} onSubmit={onSubmitExpense}
+              onSubmitMany={onSubmitExpenseMany} accountOptions={myExpAccountOptions} currentUser={currentUser}
             />
           )}
         </main>
@@ -42145,10 +42167,10 @@ function ExpenseSplitFlow({ stores = [], categories = [], expenseTypes = [], acc
             <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Date</label><input type="date" value={expenseDate} onChange={e=>setExpenseDate(e.target.value)} className={ec}/></div>
           </div>
           <div className="grid grid-cols-2 gap-2">
-            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Type</label><select value={expenseTypeId} onChange={e=>setExpenseTypeId(e.target.value)} className={ec}><option value="">—</option>{expenseTypes.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select></div>
+            {expenseTypes.length > 0 && <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Type</label><select value={expenseTypeId} onChange={e=>setExpenseTypeId(e.target.value)} className={ec}><option value="">—</option>{expenseTypes.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select></div>}
             <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Category</label><select value={categoryId} onChange={e=>setCategoryId(e.target.value)} className={ec}><option value="">—</option>{categories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
           </div>
-          <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Bank assigned</label><select value={accountKey} onChange={e=>setAccountKey(e.target.value)} className={ec}><option value="">—</option>{accountOptions.map(o=><option key={o.key} value={o.key}>{o.label}</option>)}</select></div>
+          {accountOptions.length > 0 && <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Paid with (card / account)</label><select value={accountKey} onChange={e=>setAccountKey(e.target.value)} className={ec}><option value="">—</option>{accountOptions.map(o=><option key={o.key} value={o.key}>{o.label}</option>)}</select></div>}
 
           <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 space-y-2">
             <div className="text-[11px] uppercase font-semibold text-slate-500">This will create {assignedStoreIds.length} claim(s)</div>
@@ -58384,7 +58406,7 @@ export default function App() {
           expenseClaims={expenseClaims} expenseTypes={cashExpenseTypes} expenseCategories={categories}
           cashAccounts={cashAccounts} bankAccounts={bankAccounts}
           memberExpTypes={memberExpTypes} memberExpCategories={memberExpCategories} memberExpStores={memberExpStores} memberExpAccounts={memberExpAccounts}
-          onSubmitExpense={expenseHandlers.submit}
+          onSubmitExpense={expenseHandlers.submit} onSubmitExpenseMany={expenseHandlers.submitMany}
           onLogout={handleLogout}
         />
         {toast && (
