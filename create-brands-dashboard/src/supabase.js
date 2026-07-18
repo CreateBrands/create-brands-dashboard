@@ -15020,6 +15020,22 @@ export async function confirmStoreDelivery(deliveryId, receivedBy) {
         ref: `delivery-${deliveryId}`, unit_cost: l.unit_cost != null ? Number(l.unit_cost) : null,
         note: `Received on delivery ${deliveryId}`, created_by: receivedBy || null,
       });
+      // ACCOUNTS: auto-record the received goods into the store's purchases
+      // register (cogs_purchases) so Actual COGS (opening + purchases − closing)
+      // picks them up without re-keying. Ref ties back to the delivery.
+      // Fresh-purchase lines (no store item) are deliberately EXCLUDED — their
+      // cost is already in Finance as the driver's card expense; recording them
+      // here too would double-count food cost.
+      try {
+        await supabase.from("cogs_purchases").insert({
+          store_id: storeId, purchase_date: new Date().toISOString().slice(0, 10),
+          item_scope: "store", item_id: storeItemId,
+          qty: recv,
+          total_cost: l.unit_cost != null ? Math.round(Number(l.unit_cost) * recv * 100) / 100 : null,
+          supplier: "Distribution", invoice_ref: `delivery-${deliveryId}`,
+          note: l.item_name || null,
+        });
+      } catch (e) { console.error("auto purchase record failed:", e.message); }
       // Upsert live level (qty += recv; moving cost := latest delivery cost if given)
       const { data: existing } = await supabase.from("store_stock")
         .select("id, qty_on_hand").eq("store_id", storeId).eq("item_id", storeItemId).maybeSingle();
