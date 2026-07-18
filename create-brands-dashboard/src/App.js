@@ -183,7 +183,7 @@ import {
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
-  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls,
+  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
 } from "./supabase";
@@ -8899,6 +8899,7 @@ function DistPriceListView() {
 function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, onDelete, onNavigate }) {
   const { navigate } = useDistDocLink();
   const [detail, setDetail] = useState(null);
+  const [receipt, setReceipt] = useState(null);   // the store's receipt of this order's delivery
   const [err, setErr] = useState("");
   const [freshPrompt, setFreshPrompt] = useState(null); // { lines:[{itemId,name,qty}], costs:{} } before dispatch
   const [freshScan, setFreshScan] = useState(""); // scan status message
@@ -8906,6 +8907,7 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
   useEffect(() => {
     let alive = true;
     fetchDistSalesOrderDetail(so.id).then(d => { if (alive) setDetail(d); }).catch(e => { if (alive) setErr(e.message); });
+    fetchOrderStoreReceipt(so.id).then(r => { if (alive) setReceipt(r); }).catch(() => {});
     return () => { alive = false; };
   }, [so.id]);
 
@@ -9070,7 +9072,23 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
               <StatusRow label="Payment" value={detail ? (detail.status.paid ? "Paid" : "Unpaid") : "…"} tone={detail?.status.paid ? "text-emerald-300" : "text-amber-300"}/>
               <StatusRow label="Picked" value={detail ? (detail.status.picked ? "Picked" : "Pending") : "…"} tone={detail?.status.picked ? "text-emerald-300" : "text-amber-300"}/>
               <StatusRow label="Shipment" value={detail ? (detail.status.dispatched ? "Dispatched" : "Pending") : "…"} tone={detail?.status.dispatched ? "text-emerald-300" : "text-amber-300"}/>
+              <StatusRow label="Store receipt" value={!receipt ? (detail?.status.dispatched ? "Awaiting store" : "—") : receipt.status === "confirmed" ? (receipt.lines.some(l=>l.short) ? `Received · ${receipt.lines.filter(l=>l.short).length} short` : "Received in full") : "Receiving…"} tone={!receipt ? "text-slate-400" : receipt.status === "confirmed" ? (receipt.lines.some(l=>l.short) ? "text-red-300" : "text-emerald-300") : "text-amber-300"}/>
             </div>
+
+            {/* DISCREPANCIES — attached to the order: what the store says arrived
+                vs what was sent, only when something's short. */}
+            {receipt && receipt.status === "confirmed" && receipt.lines.some(l => l.short) && (
+              <div className="rounded-xl border border-red-700/40 bg-red-950/15 p-3 space-y-1.5">
+                <div className="text-xs font-bold text-red-300">Store reported discrepancies{receipt.receivedBy ? ` — received by ${receipt.receivedBy}` : ""}{receipt.receivedAt ? ` · ${new Date(receipt.receivedAt).toLocaleDateString("en-GB")}` : ""}</div>
+                {receipt.lines.filter(l => l.short).map(l => (
+                  <div key={l.id} className="flex items-center justify-between gap-2 text-xs">
+                    <span className="text-slate-300 min-w-0 truncate">{cleanName(l.itemName)}</span>
+                    <span className="tabular-nums flex-shrink-0"><span className="text-slate-500">sent {l.qtySent}</span> · <span className="text-red-300 font-bold">received {l.qtyReceived ?? 0}</span> · <span className="text-red-400 font-bold">short {l.qtySent - (l.qtyReceived ?? 0)}</span></span>
+                  </div>
+                ))}
+                <div className="text-[10px] text-slate-500">Short quantities were not booked into store stock and were still invoiced — issue a credit note if the goods genuinely never arrived.</div>
+              </div>
+            )}
             <div className="mt-3 pt-3 border-t border-slate-800/60 space-y-1.5">
               <div><div className="text-[10px] uppercase tracking-wide text-slate-500">Order date</div><div className="text-sm text-white">{fmtDate(so.orderDate)}</div></div>
               <div><div className="text-[10px] uppercase tracking-wide text-slate-500">Payment terms</div><div className="text-sm text-white capitalize">{(so.paymentTerms||"").replace(/_/g," ")||"—"}</div></div>

@@ -15146,6 +15146,27 @@ export async function confirmStoreDelivery(deliveryId, receivedBy) {
   return { confirmed: true, shortfalls };
 }
 
+// The store's receipt for a given sales order — attached to the order so
+// Dist sees exactly what the store says arrived, line by line, short flags
+// included. Null until the dispatch mirror created the delivery.
+export async function fetchOrderStoreReceipt(soId) {
+  const { data: deliv } = await supabase.from("store_deliveries")
+    .select("*").eq("dist_order_id", soId).order("dispatched_at", { ascending: false }).limit(1).maybeSingle();
+  if (!deliv) return null;
+  const { data: lines } = await supabase.from("store_delivery_lines")
+    .select("*").eq("delivery_id", deliv.id).order("item_name");
+  return {
+    id: deliv.id, status: deliv.status, receivedAt: deliv.received_at || null,
+    receivedBy: deliv.received_by || "", supplierName: deliv.supplier_name || null,
+    lines: (lines || []).map(l => ({
+      id: l.id, itemName: l.item_name || "Item",
+      qtySent: Number(l.qty_dispatched) || 0,
+      qtyReceived: l.qty_received != null ? Number(l.qty_received) : null,
+      short: !!l.short_reported,
+    })),
+  };
+}
+
 // Shortfall report for Dist: confirmed deliveries with any short line.
 export async function fetchDeliveryShortfalls({ storeId } = {}) {
   let q = supabase.from("store_delivery_lines")
