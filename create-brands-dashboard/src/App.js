@@ -58488,6 +58488,7 @@ export default function App() {
         { key: "dist-receipts",   label: "Payments Received", icon: PoundSterling },
         { key: "dist-credit-notes", label: "Credit Notes", icon: Receipt },
       ]},
+      { key: "fresh-produce", label: "Fresh Produce", icon: Truck, requiresEntity: "brand-distribution" },
       { key: "dist-reports", label: "Reports", icon: BarChart2, requiresEntity: "brand-distribution" },
       { key: "dist-fuel", label: "Fleet Fuel", icon: Truck, requiresEntity: "brand-distribution" },
     ]},
@@ -58590,7 +58591,6 @@ export default function App() {
       { key: "spend", label: "Spend", icon: TrendingDown },
       { key: "petty-cash", label: "Petty Cash", icon: Wallet },
       { key: "expenses", label: "Expenses", icon: Receipt },
-      { key: "fresh-produce", label: "Fresh Produce", icon: Truck },
     ].filter(i => !FINANCE_NAV_FEAT[i.key] || canFeature(FINANCE_NAV_FEAT[i.key])) },
   ];
   // Distribution entity — same focused-workspace treatment as Finance: inside
@@ -58603,7 +58603,7 @@ export default function App() {
   // group, plus People (Team + Communication), Reports and Setup. The store
   // Dashboard, Invoices, Google Command, store Order portal, Agent Inbox and
   // EOD stay outside — the warehouse has its own dashboard in the group.
-  const DIST_KEEP = new Set(["operations", "team", "comms", "reports", "setup"]);
+  const DIST_KEEP = new Set(["operations", "team", "comms", "reports", "setup", "fresh-produce"]);
   const DIST_NAV = NAV_GROUPS
     .map(g => ({ ...g, items: g.items
       .filter(i => DIST_KEEP.has(i.key) || (i.key.startsWith("dist-") && i.key !== "dist-order"))
