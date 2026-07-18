@@ -19606,7 +19606,10 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
       {mode==="new" ? (
         <div className="space-y-3">
           <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Vendor / paid to</label><input value={form.vendor} onChange={e=>setF("vendor",e.target.value)} placeholder="Who was paid" className={ec}/></div>
-          <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Expense type</label><select value={form.expenseTypeId} onChange={e=>setF("expenseTypeId",e.target.value)} className={ec}><option value="">—</option>{myTypes.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select></div>
+          {/* Expense type is a petty-cash concept with no per-member assign UI —
+              when a member has no types (i.e. everyone, currently) the dropdown
+              would be an empty trap, so hide it; Category is the classifier. */}
+          {myTypes.length > 0 && <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Expense type</label><select value={form.expenseTypeId} onChange={e=>setF("expenseTypeId",e.target.value)} className={ec}><option value="">—</option>{myTypes.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}</select></div>}
           <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Category</label><select value={form.categoryId} onChange={e=>setF("categoryId",e.target.value)} className={ec}><option value="">—</option>{myCategories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
           <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Store</label><select value={form.storeId} onChange={e=>setF("storeId",e.target.value)} className={ec}><option value="">—</option>{myStores.map(s=><option key={s.id} value={s.id}>{s.shortName||s.name}</option>)}</select></div>
           <div className="grid grid-cols-2 gap-2">
@@ -58489,6 +58492,7 @@ export default function App() {
         { key: "dist-credit-notes", label: "Credit Notes", icon: Receipt },
       ]},
       { key: "fresh-produce", label: "Fresh Produce", icon: Truck, requiresEntity: "brand-distribution" },
+      { key: "expenses", label: "Expenses", icon: Receipt, requiresEntity: "brand-distribution" },
       { key: "dist-reports", label: "Reports", icon: BarChart2, requiresEntity: "brand-distribution" },
       { key: "dist-fuel", label: "Fleet Fuel", icon: Truck, requiresEntity: "brand-distribution" },
     ]},
@@ -58603,7 +58607,7 @@ export default function App() {
   // group, plus People (Team + Communication), Reports and Setup. The store
   // Dashboard, Invoices, Google Command, store Order portal, Agent Inbox and
   // EOD stay outside — the warehouse has its own dashboard in the group.
-  const DIST_KEEP = new Set(["operations", "team", "comms", "reports", "setup", "fresh-produce"]);
+  const DIST_KEEP = new Set(["operations", "team", "comms", "reports", "setup", "fresh-produce", "expenses"]);
   const DIST_NAV = NAV_GROUPS
     .map(g => ({ ...g, items: g.items
       .filter(i => DIST_KEEP.has(i.key) || (i.key.startsWith("dist-") && i.key !== "dist-order"))
