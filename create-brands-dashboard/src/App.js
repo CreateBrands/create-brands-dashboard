@@ -58449,7 +58449,6 @@ export default function App() {
         { key: "dashboard:overview", view: "dashboard", tab: "overview", label: "Dashboard", icon: LayoutDashboard },
         { key: "dashboard:chain", view: "dashboard", tab: "chain", label: "Chain Performance", icon: Globe, gateRole: ["owner","hq_staff"] },
         { key: "dashboard:store-analytics", view: "dashboard", tab: "store-analytics", label: "Store Analytics", icon: BarChart2, gateView: "store-analytics" },
-        { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
       ]},
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["manager"] },
       { key: "google-hub", label: "Google Command", icon: Globe, roles: ["owner", "hq_staff"] },
@@ -58495,6 +58494,7 @@ export default function App() {
     { group: "PEOPLE", items: [
       { key: "team",         label: "Team",              icon: Users, badge: (pendingSetupCount + hiringBadge) > 0 ? (pendingSetupCount + hiringBadge).toString() : null, badgeClearOnView: true, children: [
         { key: "team:team",            view: "team", tab: "team",            label: "Team",              icon: Users },
+        { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
         { key: "team:time-attend",     view: "team", tab: "time-attend",     label: "Time & Attendance", icon: Clock },
         { key: "team:hiring",          view: "team", tab: "hiring",          label: "Hiring",            icon: UserPlus, badge: hiringBadge > 0 ? hiringBadge.toString() : null, gateView: "hiring" },
         { key: "team:onboarding-board",view: "team", tab: "onboarding-board",label: "Onboarding Board",  icon: ClipboardList, gateView: "onboarding-board" },
@@ -58593,7 +58593,25 @@ export default function App() {
       { key: "fresh-produce", label: "Fresh Produce", icon: Truck },
     ].filter(i => !FINANCE_NAV_FEAT[i.key] || canFeature(FINANCE_NAV_FEAT[i.key])) },
   ];
-  const effectiveNavGroups = isFinanceEntity ? FINANCE_NAV : NAV_GROUPS;
+  // Distribution entity — same focused-workspace treatment as Finance: inside
+  // the warehouse, only warehouse nav. Store-side groups (Operations, EOD,
+  // People, store dashboards…) don't belong here; users step back out via the
+  // entity switcher for those.
+  const isDistEntity = selectedEntityBrand === "brand-distribution";
+  // Per the owner's spec: inside the warehouse show the main Dashboard (overview
+  // only — no chain/store analytics), the full Operations section (temps,
+  // deliveries, assets etc. apply to a warehouse too), and the Warehouse group.
+  // Everything else (Invoices, Google Command, store Order portal, Agent Inbox,
+  // EOD, People, Reports, Setup) stays outside.
+  const DIST_NAV = NAV_GROUPS
+    .map(g => ({ ...g, items: g.items
+      .filter(i => i.key === "dashboard" || i.key === "operations" || (i.key.startsWith("dist-") && i.key !== "dist-order"))
+      .map(i => i.key === "dashboard"
+        ? { ...i, children: (i.children || []).filter(c => c.key === "dashboard:overview") }
+        : i)
+    }))
+    .filter(g => g.items.length > 0);
+  const effectiveNavGroups = isFinanceEntity ? FINANCE_NAV : isDistEntity ? DIST_NAV : NAV_GROUPS;
 
   // If after role-filtering the current activeView is no longer in the menu
   // (e.g. owner impersonated into a manager while sitting on Chain Performance),
