@@ -20673,15 +20673,18 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     { key: "__more",       label: "More",      icon: MoreHorizontal },
   ];
 
-  // EMP_BOTTOMNAV_V1: everything else lives in the More sheet
+  // EMP_BOTTOMNAV_V1: everything else lives in the More sheet.
+  // Drivers get a focused menu: Fresh Produce (their shopping list) added,
+  // store-floor items (recipes, review QR / impact) removed as irrelevant.
   const MORE_NAV = [
+    ...(isDriverRole ? [{ key: "fresh-produce", label: "Fresh Produce", icon: ShoppingCart }] : []),
     { key: "ops-temps",      label: "Temperature Log", icon: Thermometer },
     { key: "ops-deliveries", label: "Deliveries",      icon: Truck },
     { key: "ops-network",    label: "Ops Status",      icon: ShieldCheck },
     { key: "issues",         label: "Report an Issue", icon: Wrench },
     { key: "emp-eod",        label: "EOD Report",      icon: ClipboardList },
     { key: "smallware",      label: "Assets",          icon: Package },
-    { key: "recipes",        label: "Recipes",         icon: BookOpen },
+    ...(isDriverRole ? [] : [{ key: "recipes", label: "Recipes", icon: BookOpen }]),
     { key: "comms",          label: "Communication",   icon: MessageSquare, badge: chatUnread > 0 ? chatUnread.toString() : null },
     { key: "availability",   label: "Availability",    icon: Calendar },
     { key: "my-hours",       label: "My Overtime",        icon: Clock },
@@ -20689,8 +20692,10 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     { key: "my-documents",   label: "My Documents",    icon: FolderOpen },
     { key: "my-loans",       label: "My Loans",        icon: PoundSterling },
     { key: "emp-contracts",  label: "Contracts",       icon: FileText },
-    { key: "review-qr",      label: "Review QR",       icon: QrCode },
-    { key: "my-review",      label: "Review Impact",   icon: Star },
+    ...(isDriverRole ? [] : [
+      { key: "review-qr",      label: "Review QR",       icon: QrCode },
+      { key: "my-review",      label: "Review Impact",   icon: Star },
+    ]),
     ...(hasExpenseAccess ? [{ key: "my-expenses", label: "Submit Expense", icon: Receipt }] : []),
   ];
 
@@ -20705,6 +20710,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     "emp-schedule":   "My Schedule",
     "emp-training":   "Training",
     "emp-contracts":  "Contracts",
+    "fresh-produce":  "Fresh Produce",
     "review-qr":      "Review QR",
     "recipes":        "Recipes",
     "my-review":      "Review Impact",
@@ -20952,6 +20958,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
             />
           )}
           {activeView === "recipes" && <StoreRecipesView />}
+          {activeView === "fresh-produce" && <DistTypedItemsView itemType="fresh" currentUser={currentUser}/>}
 
           {/* DRIVER MILEAGE GATE — clocking is blocked until the reading is in */}
           {mileageGate && (
