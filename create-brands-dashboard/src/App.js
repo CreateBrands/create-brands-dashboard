@@ -204,7 +204,7 @@ import {
   ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar, Camera, Sparkles, Scale,
   Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks, Hash, UserCheck, CalendarDays,
   LifeBuoy, Inbox, Send, Paperclip, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign, Briefcase,
-  Globe, FileText, FolderOpen, Megaphone, ChefHat, PoundSterling, Search, GraduationCap, Maximize2, Minimize2, Wallet, Receipt, Save, ShoppingCart, Package,
+  Globe, FileText, FolderOpen, Megaphone, ChefHat, PoundSterling, Search, GraduationCap, Maximize2, Minimize2, Wallet, Receipt, Save, ShoppingCart, Printer, Package,
   Video, Quote, Table as TableIcon, Lightbulb, Bold as BoldIcon, ListOrdered, Heading as HeadingIcon, Image, Type,
   Ship, Plane
 } from "lucide-react";
@@ -8710,6 +8710,16 @@ function DistCustomerDetail({ customer, stores = [], onClose, onEdit }) {
         {/* STATEMENT */}
         {data && tab === "statement" && (
           <div className="space-y-3">
+            <div className="flex justify-end">
+              <button onClick={() => printDistDoc({
+                docTitle: "CUSTOMER STATEMENT", docNo: customer.displayName,
+                meta: [["Customer", customer.displayName], ["Printed", new Date().toLocaleDateString("en-GB")], ["Invoiced", gbp(data.invoicedTotal)], ["Received", gbp(data.receivedTotal)], ["Balance due", gbp(data.receivables)]],
+                columns: [{ label: "Date" }, { label: "Transaction" }, { label: "Details" }, { label: "Amount", align: "right" }, { label: "Payment", align: "right" }, { label: "Balance", align: "right" }],
+                rows: (data.statement || []).map(e => [fmtDate(e.date), e.type, e.details || "", e.amount ? gbp(e.amount) : "", e.payment ? gbp(e.payment) : "", e.balance != null ? gbp(e.balance) : ""]),
+                totals: [["Balance due", gbp(data.receivables), true]],
+                note: "Please reference invoice numbers with payments. Generated from the Create Brands dashboard.",
+              })} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5"><Printer size={13}/> Print statement</button>
+            </div>
             <div className="grid grid-cols-4 gap-2">
               <div className="rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2.5 text-center"><div className="text-[10px] uppercase tracking-wide text-slate-500">Opening</div><div className="text-sm font-bold text-white">{gbp(0)}</div></div>
               <div className="rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2.5 text-center"><div className="text-[10px] uppercase tracking-wide text-slate-500">Invoiced</div><div className="text-sm font-bold text-white">{gbp(data.invoicedTotal)}</div></div>
@@ -8896,6 +8906,58 @@ function DistPriceListView() {
 }
 
 // ── SALES ORDERS (Zoho format; commit stock; blind) ──
+// ── PRINTABLE DOCUMENTS ──────────────────────────────────────────────────────
+// One clean A4 print layout for every Distribution document (orders, invoices,
+// payment lists, statements): brand header, meta grid, category-aware table,
+// totals block. Opens a print window; the browser's dialog does paper/PDF.
+function printDistDoc({ docTitle, docNo, meta = [], columns, rows, totals = [], note }) {
+  const w = window.open("", "_blank", "width=920,height=760");
+  if (!w) { alert("Allow pop-ups for this site to print."); return; }
+  const esc = (t) => String(t ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  const html = `<!doctype html><html><head><title>${esc(docNo || docTitle)}</title><style>
+    body{font-family:Arial,Helvetica,sans-serif;color:#222;margin:34px}
+    .hd{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #844429;padding-bottom:12px;margin-bottom:16px}
+    .co{font-size:20px;font-weight:800;color:#844429}.co small{display:block;font-size:11px;color:#777;font-weight:400}
+    .doc{text-align:right}.doc .t{font-size:22px;font-weight:800;letter-spacing:1px}.doc .n{font-family:monospace;font-size:13px;color:#555}
+    .meta{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:0 0 14px}
+    .meta div{font-size:12px}.meta b{display:block;font-size:10px;text-transform:uppercase;color:#999;letter-spacing:.5px}
+    table{width:100%;border-collapse:collapse;font-size:12px}
+    th{background:#F3EADA;color:#5c4632;text-align:left;padding:7px 9px;border-bottom:2px solid #C9B99F}
+    td{padding:6px 9px;border-bottom:1px solid #eee;vertical-align:top}
+    tr.cat td{background:#FBF6EC;color:#844429;font-weight:700;font-size:10.5px;text-transform:uppercase;letter-spacing:.5px}
+    .r{text-align:right}
+    .tot{margin-top:12px;margin-left:auto;width:290px;font-size:13px}
+    .tot div{display:flex;justify-content:space-between;padding:4px 0}
+    .tot .g{border-top:2px solid #844429;font-weight:800;font-size:15px}
+    .note{margin-top:22px;font-size:11px;color:#777;border-top:1px solid #eee;padding-top:10px}
+    @media print{body{margin:10mm}}
+  </style></head><body>
+  <div class="hd"><div class="co">Create Brands<small>Distribution</small></div>
+  <div class="doc"><div class="t">${esc(docTitle)}</div><div class="n">${esc(docNo || "")}</div></div></div>
+  <div class="meta">${meta.filter(m => m && m[1] != null && m[1] !== "").map(([k, v]) => `<div><b>${esc(k)}</b>${esc(v)}</div>`).join("")}</div>
+  <table><thead><tr>${columns.map(c => `<th class="${c.align === "right" ? "r" : ""}">${esc(c.label)}</th>`).join("")}</tr></thead>
+  <tbody>${rows.map(r => r && r.header != null
+    ? `<tr class="cat"><td colspan="${columns.length}">${esc(r.header)}</td></tr>`
+    : `<tr>${r.map((v, i) => `<td class="${columns[i].align === "right" ? "r" : ""}">${esc(v)}</td>`).join("")}</tr>`).join("")}
+  </tbody></table>
+  ${totals.length ? `<div class="tot">${totals.map(([k, v, g]) => `<div class="${g ? "g" : ""}"><span>${esc(k)}</span><span>${esc(v)}</span></div>`).join("")}</div>` : ""}
+  ${note ? `<div class="note">${esc(note)}</div>` : ""}
+  <script>window.onload = () => { window.print(); };</scr` + `ipt></body></html>`;
+  w.document.write(html); w.document.close();
+}
+
+// Category-sorted plain rows for printing (mirrors catRows, but data not JSX).
+function catPrintRows(lines, catOf, toCells) {
+  const withCat = (lines || []).map((l, i) => ({ l, i, c: (catOf(l) || "Other") }));
+  withCat.sort((x, y) => x.c.localeCompare(y.c) || x.i - y.i);
+  const out = []; let prev = null;
+  withCat.forEach(({ l, c }) => {
+    if (c !== prev) { out.push({ header: c }); prev = c; }
+    out.push(toCells(l));
+  });
+  return out;
+}
+
 // ── CATEGORY-GROUPED LINE RENDERING ──────────────────────────────────────────
 // Big orders are unreadable as a flat list in entry order. Everywhere lines
 // appear (order sheet, SO, dispatch, invoice) we sort by category and inject a
@@ -8949,7 +9011,20 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
         {/* Header actions */}
         <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
           <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${so.status==="dispatched"||so.status==="invoiced"?"bg-emerald-600 text-white":so.status==="cancelled"?"bg-slate-800 text-slate-500":"bg-indigo-600 text-white"}`}>{(so.status||"").toUpperCase()}</span>
-          <button onClick={onEdit} className="ml-auto px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5"><Edit size={13}/> Edit</button>
+          <button onClick={() => printDistDoc({
+            docTitle: "SALES ORDER", docNo: so.soNumber,
+            meta: [["Customer", customer?.displayName || ""], ["Order date", fmtDate(so.orderDate)], ["Status", (so.status || "").toUpperCase()], ["VAT mode", so.vatMode === "inclusive" ? "Inclusive" : "Exclusive"]],
+            columns: [{ label: "Item" }, { label: "Qty", align: "right" }, { label: "Rate", align: "right" }, { label: "Amount", align: "right" }],
+            rows: catPrintRows(so.lines, l => itemById.get(l.itemId)?.category, l => {
+              const it = itemById.get(l.itemId); const qty = Number(l.qty) || 0; const rate = Number(l.unitPrice) || 0;
+              const disc = Number(l.discount) || 0; const gross = qty * rate;
+              const amount = l.discountType === "percent" ? gross * (1 - disc / 100) : gross - disc;
+              return [it?.name || l.itemId, qty, gbp(rate), gbp(amount)];
+            }),
+            totals: [["Subtotal", gbp(totals.subTotal)], ["VAT", gbp(totals.taxTotal)], ...(Number(so.shippingCharge) ? [["Shipping", gbp(so.shippingCharge)]] : []), ["Total", gbp(grand), true]],
+            note: "Generated from the Create Brands dashboard.",
+          })} className="ml-auto px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5"><Printer size={13}/> Print</button>
+          <button onClick={onEdit} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5"><Edit size={13}/> Edit</button>
           {onDelete && <button onClick={onDelete} className="px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5"><Trash2 size={13}/> Delete</button>}
         </div>
         {/* What's next — advance the order one stage (engine, in place) */}
@@ -9805,6 +9880,14 @@ function DistInvoiceDetail({ invoiceId, onClose, onDelete }) {
                   <div className="text-2xl font-bold text-white tracking-wide">INVOICE</div>
                   <div className="text-xs text-slate-400">Invoice# <span className="font-mono text-white">{d.invoiceNumber}</span></div>
                   <div className="mt-2"><div className="text-[10px] uppercase tracking-wide text-slate-500">Balance Due</div><div className="text-lg font-bold text-amber-300">{gbp(d.balance)}</div></div>
+                  <button onClick={() => printDistDoc({
+                    docTitle: "INVOICE", docNo: d.invoiceNumber,
+                    meta: [["Bill to", d.customer?.displayName || ""], ["Invoice date", d.invoiceDate ? new Date(d.invoiceDate).toLocaleDateString("en-GB") : ""], ["Due date", d.dueDate ? new Date(d.dueDate).toLocaleDateString("en-GB") : ""], ["Status", (d.status || "").replace("_", " ").toUpperCase()]],
+                    columns: [{ label: "Item" }, { label: "Qty", align: "right" }, { label: "Rate", align: "right" }, { label: "VAT", align: "right" }, { label: "Amount", align: "right" }],
+                    rows: catPrintRows(d.lines, l => l.item?.category, l => [l.item?.name || l.itemId, l.qty, gbp(l.rate), gbp(l.vat), gbp(l.amount != null ? l.amount : (Number(l.qty) || 0) * (Number(l.rate) || 0))]),
+                    totals: [["Subtotal", gbp(d.net)], ["VAT", gbp(d.vat)], ...(d.shipping > 0 ? [["Shipping", gbp(d.shipping)]] : []), ["Total", gbp(d.grand), true], ...(d.balance > 0.005 ? [["Balance due", gbp(d.balance)]] : [["Paid", gbp(d.grand)]])],
+                    note: `Please reference ${d.invoiceNumber} with your payment. Generated from the Create Brands dashboard.`,
+                  })} className="mt-2 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5"><Printer size={13}/> Print invoice</button>
                 </div>
               </div>
               <div className="grid grid-cols-4 gap-3 mt-4 pt-3 border-t border-slate-800/60">
@@ -10040,6 +10123,15 @@ function DistReceiptsView({ currentUser, pendingConvert, setPendingConvert }) {
       {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
           {pays.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No payments received yet.</div>}
+          <div className="flex justify-end px-4 pt-2">
+            <button onClick={() => printDistDoc({
+              docTitle: "PAYMENTS RECEIVED", docNo: `${pays.length} payment${pays.length!==1?"s":""}`,
+              meta: [["Printed", new Date().toLocaleDateString("en-GB")]],
+              columns: [{ label: "Date" }, { label: "Payment #" }, { label: "Customer" }, { label: "Method" }, { label: "Invoices", align: "right" }, { label: "Amount", align: "right" }],
+              rows: pays.map(p => [p.payDate, p.paymentNumber, cName(p.customerId), p.method, p.allocations.length, gbp(p.amount)]),
+              totals: [["Total received", gbp(pays.reduce((s, p) => s + (Number(p.amount) || 0), 0)), true]],
+            })} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5"><Printer size={13}/> Print list</button>
+          </div>
           {pays.map(p => (
             <div key={p.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50 group">
               <div><span className="text-white font-mono text-xs">{p.paymentNumber}</span> <span className="text-slate-400">{cName(p.customerId)}</span><div className="text-[11px] text-slate-500">{p.payDate} · {p.method} · {p.allocations.length} invoice{p.allocations.length!==1?"s":""}</div></div>
@@ -14364,8 +14456,16 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
       )}
 
       {confirmOpen && (
-        <Modal onClose={() => setConfirmOpen(false)} title="Review your order" maxW="max-w-xl">
-          <div className="space-y-4">
+        /* FULL-SCREEN review: long orders don't fit a popup. Fixed overlay with
+           its own header, a scrolling body, and a sticky CTA bar. */
+        <div className="fixed inset-0 z-50 flex flex-col" style={{ backgroundColor: "#FBF6EC" }}>
+          <div className="flex-shrink-0 flex items-center justify-between px-4 sm:px-8 py-3" style={{ backgroundColor: "#FDF8EF", borderBottom: "1px solid #E8DCC6" }}>
+            <button onClick={() => setConfirmOpen(false)} className="text-sm font-semibold flex items-center gap-1.5" style={{ color: "#844429" }}>← Back to cart</button>
+            <div className="text-base font-bold" style={{ color: "#3A2E26" }}>Review your order</div>
+            <div className="text-sm tabular-nums font-bold" style={{ color: "#844429" }}>{gbp(cartTotal)}</div>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+          <div className="max-w-3xl mx-auto w-full px-4 sm:px-6 py-5 space-y-4 pb-32">
             {/* ── Deliver-to header (ecommerce: always confirm the destination) ── */}
             <div className="flex items-center justify-between rounded-xl px-3 py-2.5" style={{ backgroundColor: "#F3EADA" }}>
               <div className="text-xs" style={{ color: "#6B5D4F" }}>Delivering to</div>
@@ -14373,7 +14473,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
             </div>
 
             {/* ── Line items: thumbnail · name/pack · qty · line total ── */}
-            <div className="max-h-72 overflow-y-auto divide-y rounded-xl border" style={{ borderColor: "#E8DCC6" }}>
+            <div className="divide-y rounded-xl border" style={{ borderColor: "#E8DCC6", backgroundColor: "#FFFFFF" }}>
               {catHeaderRows(l => (
                 <div key={l.id} className="px-3 py-2.5 flex items-center gap-3">
                   <div className="w-11 h-11 rounded-lg flex-shrink-0 overflow-hidden flex items-center justify-center" style={{ backgroundColor: "#F3EADA" }}>
@@ -14437,15 +14537,18 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
 
             {err && err !== "no-link" && <div className="text-xs px-3 py-2 rounded-lg" style={{ color: "#B3261E", backgroundColor: "#FBEAEA" }}>{err}</div>}
 
-            {/* ── CTA: full-width primary with the total on the button (ecommerce pattern) ── */}
-            <div className="space-y-2 pt-1">
-              <button onClick={placeOrder} disabled={placing} className="w-full py-3 rounded-xl text-sm font-bold disabled:opacity-40" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>
+          </div>
+          </div>
+          {/* ── Sticky CTA bar (ecommerce pattern: always reachable on long orders) ── */}
+          <div className="flex-shrink-0 px-4 sm:px-8 py-3" style={{ backgroundColor: "#FDF8EF", borderTop: "1px solid #E8DCC6" }}>
+            <div className="max-w-3xl mx-auto w-full flex items-center gap-3">
+              <button onClick={() => setConfirmOpen(false)} disabled={placing} className="px-5 py-3 rounded-xl text-sm font-semibold flex-shrink-0" style={{ backgroundColor: "#F3EADA", color: "#6B5D4F" }}>Keep editing</button>
+              <button onClick={placeOrder} disabled={placing} className="flex-1 py-3 rounded-xl text-sm font-bold disabled:opacity-40" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>
                 {placing ? "Placing your order…" : `Place order · ${gbp(cartTotal)}`}
               </button>
-              <button onClick={() => setConfirmOpen(false)} disabled={placing} className="w-full py-2 rounded-xl text-sm font-semibold" style={{ backgroundColor: "#F3EADA", color: "#6B5D4F" }}>Keep editing</button>
             </div>
           </div>
-        </Modal>
+        </div>
       )}
       {detailItem && (
         <StockDetailModal
