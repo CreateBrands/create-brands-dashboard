@@ -183,7 +183,7 @@ import {
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
-  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt,
+  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
 } from "./supabase";
@@ -4841,25 +4841,56 @@ function DistTypedItemsView({ itemType, currentUser }) {
   const [expanded, setExpanded] = useState({});
   const [busy, setBusy] = useState({}); // key -> true while toggling
   const uid = currentUser?.id || currentUser?.name || null;
+  // ── DRIVER CLAIMS (fresh only): who is shopping which order ──
+  const [claims, setClaims] = useState({});                 // soId -> { driverId, driverName }
+  const [claimFilter, setClaimFilter] = useState("all");    // "mine" | "unclaimed" | "all"
+  const myId = currentUser?.opsTeamMemberId || currentUser?.id || null;
+  const myName = currentUser?.name || "Me";
 
   const load = useCallback(async () => {
     setLoading(true); setErr("");
-    try { setOrders(await fetchDistOrdersByItemType(itemType, { includeDone: showDone })); }
+    try {
+      const [ords, cls] = await Promise.all([
+        fetchDistOrdersByItemType(itemType, { includeDone: showDone }),
+        isFresh ? fetchFreshClaims().catch(() => ({})) : Promise.resolve({}),
+      ]);
+      setOrders(ords); setClaims(cls);
+      // Sensible default: if I already claimed orders, open on MY list.
+      if (isFresh && myId && Object.values(cls).some(c => c.driverId === myId)) setClaimFilter(f => f === "all" ? "mine" : f);
+    }
     catch (e) { setErr(e.message); }
     setLoading(false);
+    /* eslint-disable-next-line */
   }, [itemType, showDone]);
   useEffect(() => { load(); }, [load]);
 
   const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
+  // Claim scope first (fresh only): my orders / unclaimed / all — the whole
+  // screen (KPIs, shopping list, by-order) follows this scope.
+  const claimScoped = useMemo(() => {
+    if (!isFresh || claimFilter === "all") return orders;
+    if (claimFilter === "mine") return orders.filter(o => claims[o.soId]?.driverId === myId);
+    return orders.filter(o => !claims[o.soId]); // "unclaimed"
+  }, [orders, claims, claimFilter, isFresh, myId]);
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return orders;
-    return orders.filter(o =>
+    if (!q) return claimScoped;
+    return claimScoped.filter(o =>
       (o.soNumber || "").toLowerCase().includes(q) ||
       (o.customerName || "").toLowerCase().includes(q) ||
       o.lines.some(l => (l.name || "").toLowerCase().includes(q))
     );
-  }, [orders, search]);
+  }, [claimScoped, search]);
+
+  const setClaim = async (soId, take) => {
+    const key = `claim:${soId}`; setBusy(b => ({ ...b, [key]: true }));
+    const prev = claims[soId];
+    setClaims(c => { const n = { ...c }; if (take) n[soId] = { driverId: myId, driverName: myName }; else delete n[soId]; return n; });
+    try { await setFreshClaim(soId, take ? { id: myId, name: myName } : null); }
+    catch (e) { setErr(e.message); setClaims(c => { const n = { ...c }; if (prev) n[soId] = prev; else delete n[soId]; return n; }); }
+    setBusy(b => ({ ...b, [key]: false }));
+  };
 
   // Combined per item, tracking done-ness across its order lines.
   const combined = useMemo(() => {
@@ -4940,6 +4971,49 @@ function DistTypedItemsView({ itemType, currentUser }) {
         <WhButton variant="ghost" size="sm" icon={RefreshCw} onClick={load}>Refresh</WhButton>
       </>}
     >
+      {/* ── DRIVER ORDER PICK-UP (fresh only): claim whole orders; your
+             shopping list combines only what you claimed. ── */}
+      {!loading && isFresh && orders.length > 0 && (
+        <WhCard title="Who's shopping what">
+          <div className="text-[11px] mb-2.5" style={{ color: WH.inkFaint }}>Pick up orders — your shopping list then combines only your orders' items.</div>
+          <div className="flex flex-wrap gap-2">
+            {orders.map(o => {
+              const cl = claims[o.soId];
+              const mine = cl && cl.driverId === myId;
+              const other = cl && !mine;
+              const k = `claim:${o.soId}`;
+              return (
+                <div key={o.soId} className="rounded-xl px-3 py-2 flex items-center gap-2.5"
+                  style={{ border: `1.5px solid ${mine ? "#3F6B3A" : other ? WH.line : "#E0A664"}`, background: mine ? "#EAF3E7" : other ? WH.surface : "#FFF6E8" }}>
+                  <div>
+                    <div className="text-xs font-bold" style={{ color: WH.ink }}>{o.soNumber} · {o.customerName}</div>
+                    <div className="text-[10px]" style={{ color: WH.inkFaint }}>{o.lines.length} item{o.lines.length!==1?"s":""}{o.allDone ? " · all bought" : ""}</div>
+                  </div>
+                  {mine ? (
+                    <button disabled={busy[k]} onClick={() => setClaim(o.soId, false)}
+                      className="text-[11px] font-bold px-2 py-1 rounded-lg" style={{ background: "#3F6B3A", color: "#fff" }}>Mine ✓ · release</button>
+                  ) : other ? (
+                    <button disabled={busy[k]} onClick={() => { if (window.confirm(`${cl.driverName || "Another driver"} picked this up. Take it over?`)) setClaim(o.soId, true); }}
+                      className="text-[11px] font-semibold px-2 py-1 rounded-lg" style={{ background: WH.surfaceAlt || "#EFE7D8", color: WH.inkSoft }}>{cl.driverName || "Claimed"}</button>
+                  ) : (
+                    <button disabled={busy[k] || !myId} onClick={() => setClaim(o.soId, true)}
+                      className="text-[11px] font-bold px-2 py-1 rounded-lg" style={{ background: "#B45309", color: "#fff" }}>Pick up</button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex gap-1.5 mt-3">
+            {[["mine", `Mine (${orders.filter(o => claims[o.soId]?.driverId === myId).length})`],
+              ["unclaimed", `Unclaimed (${orders.filter(o => !claims[o.soId]).length})`],
+              ["all", `All (${orders.length})`]].map(([k, l]) => (
+              <button key={k} onClick={() => setClaimFilter(k)} className="px-3 py-1.5 rounded-lg text-xs font-bold"
+                style={{ background: claimFilter === k ? WH.accent : WH.surface, color: claimFilter === k ? "#fff" : WH.inkSoft, border: `1px solid ${WH.line}` }}>{l}</button>
+            ))}
+          </div>
+        </WhCard>
+      )}
+
       {!loading && (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <WhKpi label="Pending items" value={pendingItems} sub={isFresh ? "left to buy" : "left to make"} tone={pendingItems ? "amber" : "green"}/>

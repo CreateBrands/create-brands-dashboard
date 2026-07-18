@@ -14219,6 +14219,27 @@ export async function fetchDistFulfilChecks(soIds = []) {
   return new Set((data || []).map(r => `${r.so_id}:${r.item_id}`));
 }
 // Mark or unmark a single order-line.
+// ── FRESH ORDER CLAIMS: which driver is shopping which order ─────────────────
+export async function fetchFreshClaims() {
+  const { data, error } = await supabase.from("dist_fresh_claims").select("*");
+  if (error) throw error;
+  const m = {};
+  (data || []).forEach(r => { m[r.so_id] = { driverId: r.driver_id, driverName: r.driver_name || "" }; });
+  return m;
+}
+export async function setFreshClaim(soId, user) {
+  if (!user) {
+    const { error } = await supabase.from("dist_fresh_claims").delete().eq("so_id", soId);
+    if (error) throw error;
+    return true;
+  }
+  const { error } = await supabase.from("dist_fresh_claims").upsert({
+    so_id: soId, driver_id: user.id, driver_name: user.name || "", claimed_at: new Date().toISOString(),
+  }, { onConflict: "so_id" });
+  if (error) throw error;
+  return true;
+}
+
 export async function setDistFulfilCheck(soId, itemId, done, userId) {
   if (done) {
     const { error } = await supabase.from("dist_fulfil_checks").upsert({ so_id: soId, item_id: itemId, done_by: userId || null, done_at: new Date().toISOString() });
