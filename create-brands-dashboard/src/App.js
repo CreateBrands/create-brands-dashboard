@@ -58598,17 +58598,15 @@ export default function App() {
   // People, store dashboards…) don't belong here; users step back out via the
   // entity switcher for those.
   const isDistEntity = selectedEntityBrand === "brand-distribution";
-  // Per the owner's spec: inside the warehouse show the main Dashboard (overview
-  // only — no chain/store analytics), the full Operations section (temps,
-  // deliveries, assets etc. apply to a warehouse too), and the Warehouse group.
-  // Everything else (Invoices, Google Command, store Order portal, Agent Inbox,
-  // EOD, People, Reports, Setup) stays outside.
+  // Per the owner's spec: inside the warehouse show the full Operations section
+  // (temps, deliveries, assets etc. apply to a warehouse too), the Warehouse
+  // group, plus People (Team + Communication), Reports and Setup. The store
+  // Dashboard, Invoices, Google Command, store Order portal, Agent Inbox and
+  // EOD stay outside — the warehouse has its own dashboard in the group.
+  const DIST_KEEP = new Set(["operations", "team", "comms", "reports", "setup"]);
   const DIST_NAV = NAV_GROUPS
     .map(g => ({ ...g, items: g.items
-      .filter(i => i.key === "dashboard" || i.key === "operations" || (i.key.startsWith("dist-") && i.key !== "dist-order"))
-      .map(i => i.key === "dashboard"
-        ? { ...i, children: (i.children || []).filter(c => c.key === "dashboard:overview") }
-        : i)
+      .filter(i => DIST_KEEP.has(i.key) || (i.key.startsWith("dist-") && i.key !== "dist-order"))
     }))
     .filter(g => g.items.length > 0);
   const effectiveNavGroups = isFinanceEntity ? FINANCE_NAV : isDistEntity ? DIST_NAV : NAV_GROUPS;
