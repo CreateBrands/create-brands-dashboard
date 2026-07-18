@@ -8896,6 +8896,25 @@ function DistPriceListView() {
 }
 
 // ── SALES ORDERS (Zoho format; commit stock; blind) ──
+// ── CATEGORY-GROUPED LINE RENDERING ──────────────────────────────────────────
+// Big orders are unreadable as a flat list in entry order. Everywhere lines
+// appear (order sheet, SO, dispatch, invoice) we sort by category and inject a
+// header row per category, so like items sit together. `render(l, i, seq)`
+// gets the original index (stable keys) and the sequential display position.
+function catRows(lines, catOf, colSpan, render) {
+  const withCat = (lines || []).map((l, i) => ({ l, i, c: (catOf(l) || "Other") }));
+  withCat.sort((x, y) => x.c.localeCompare(y.c) || x.i - y.i);
+  const out = []; let prev = null;
+  withCat.forEach(({ l, i, c }, seq) => {
+    if (c !== prev) {
+      out.push(<tr key={`cat:${c}`}><td colSpan={colSpan} className="px-3 py-1.5 bg-slate-900/70 text-[10px] uppercase tracking-wide text-amber-500/90 font-bold">{c}</td></tr>);
+      prev = c;
+    }
+    out.push(render(l, i, seq));
+  });
+  return out;
+}
+
 function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, onDelete, onNavigate }) {
   const { navigate } = useDistDocLink();
   const [detail, setDetail] = useState(null);
@@ -9118,7 +9137,7 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
               <tr><th className="text-left px-3 py-2">Item & Description</th><th className="text-right px-3 py-2">Ordered</th><th className="text-right px-3 py-2">Rate</th><th className="text-right px-3 py-2">Discount</th><th className="text-right px-3 py-2">Amount</th></tr>
             </thead>
             <tbody>
-              {(so.lines || []).map((l, idx) => {
+              {catRows(so.lines, l => itemById.get(l.itemId)?.category, 5, (l, idx) => {
                 const it = itemById.get(l.itemId);
                 const qty = Number(l.qty) || 0; const rate = Number(l.unitPrice) || 0;
                 const disc = Number(l.discount) || 0;
@@ -9329,7 +9348,7 @@ function DistPickDetail({ pickId, onClose, onDelete, onEdit }) {
             <div className="rounded-xl border border-slate-800 overflow-hidden">
               <table className="w-full text-xs">
                 <thead className="text-slate-500 bg-slate-950/40"><tr><th className="text-left px-3 py-2">Item</th><th className="text-left px-3 py-2">Batch</th><th className="text-right px-3 py-2">Qty</th></tr></thead>
-                <tbody>{d.lines.map((l, i) => (
+                <tbody>{catRows(d.lines, l => l.item?.category, 3, (l, i) => (
                   <tr key={i} className="border-t border-slate-800/60">
                     <td className="px-3 py-2"><div className="flex items-center gap-2"><div className="w-8 h-8 rounded-lg bg-gradient-to-b from-white to-slate-100 flex items-center justify-center overflow-hidden border border-slate-800 flex-shrink-0">{l.item?.imageUrl ? <img src={l.item.imageUrl} alt="" className="w-full h-full object-contain p-0.5"/> : <Package size={13} className="text-slate-300"/>}</div><span className="text-white">{cleanName(l.item?.name) || l.itemId}</span></div></td>
                     <td className="px-3 py-2 font-mono text-slate-400">{l.batchId || "—"}</td>
@@ -9371,7 +9390,7 @@ function DistDispatchDetail({ dispatchId, onClose, onDelete, onEdit }) {
             <div className="rounded-xl border border-slate-800 overflow-hidden">
               <table className="w-full text-xs">
                 <thead className="text-slate-500 bg-slate-950/40"><tr><th className="text-left px-3 py-2">Item</th><th className="text-left px-3 py-2">Batch</th><th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Cost/unit</th><th className="text-right px-3 py-2">Line cost</th></tr></thead>
-                <tbody>{d.lines.map((l, i) => (
+                <tbody>{catRows(d.lines, l => l.item?.category, 5, (l, i) => (
                   <tr key={i} className="border-t border-slate-800/60">
                     <td className="px-3 py-2"><div className="flex items-center gap-2"><div className="w-8 h-8 rounded-lg bg-gradient-to-b from-white to-slate-100 flex items-center justify-center overflow-hidden border border-slate-800 flex-shrink-0">{l.item?.imageUrl ? <img src={l.item.imageUrl} alt="" className="w-full h-full object-contain p-0.5"/> : <Package size={13} className="text-slate-300"/>}</div><span className="text-white">{cleanName(l.item?.name) || l.itemId}</span></div></td>
                     <td className="px-3 py-2 font-mono text-slate-400">{l.batchId || "—"}</td>
@@ -9800,9 +9819,9 @@ function DistInvoiceDetail({ invoiceId, onClose, onDelete }) {
             <div className="rounded-xl border border-slate-800 overflow-hidden">
               <table className="w-full text-xs">
                 <thead className="text-slate-500 bg-slate-950/40"><tr><th className="text-left px-3 py-2 w-8">#</th><th className="text-left px-3 py-2">Item & Description</th><th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Rate</th><th className="text-right px-3 py-2">VAT %</th><th className="text-right px-3 py-2">VAT</th><th className="text-right px-3 py-2">Amount</th></tr></thead>
-                <tbody>{d.lines.map((l, i) => (
+                <tbody>{catRows(d.lines, l => l.item?.category, 7, (l, i, seq) => (
                   <tr key={i} className="border-t border-slate-800/60">
-                    <td className="px-3 py-2 text-slate-500">{i + 1}</td>
+                    <td className="px-3 py-2 text-slate-500">{seq + 1}</td>
                     <td className="px-3 py-2"><div className="flex items-center gap-2"><div className="w-8 h-8 rounded-lg bg-gradient-to-b from-white to-slate-100 flex items-center justify-center overflow-hidden border border-slate-800 flex-shrink-0">{l.item?.imageUrl ? <img src={l.item.imageUrl} alt="" className="w-full h-full object-contain p-0.5"/> : <Package size={13} className="text-slate-300"/>}</div><span className="text-white">{cleanName(l.item?.name) || l.itemId}</span></div></td>
                     <td className="px-3 py-2 text-right text-slate-300">{l.qty}</td>
                     <td className="px-3 py-2 text-right text-slate-300">{gbp(l.rate)}</td>
@@ -13801,6 +13820,19 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   const cleanName = (name) => name.replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || name;
 
   const cartLines = useMemo(() => Object.entries(cart).map(([itemId, qty]) => { const it = catalogue.find(c => c.id === itemId); return it ? { ...it, qty } : null; }).filter(Boolean), [cart, catalogue]);
+  // Category-sorted view of the cart: like items together, headers injectable.
+  const cartLinesByCat = useMemo(() => [...cartLines].sort((x, y) =>
+    ((x.category || "Other").localeCompare(y.category || "Other")) || cleanName(x.name).localeCompare(cleanName(y.name))
+  ), [cartLines]);
+  const catHeaderRows = (renderRow, headerStyle) => {
+    const rows = []; let prev = null;
+    cartLinesByCat.forEach(l => {
+      const c = l.category || "Other";
+      if (c !== prev) { rows.push(<div key={`cat:${c}`} className="px-3 py-1.5 text-[10px] uppercase tracking-wide font-bold" style={headerStyle}>{c}</div>); prev = c; }
+      rows.push(renderRow(l));
+    });
+    return rows;
+  };
 
   // Reusable single-item renderers so the catalogue can render either as one
   // flat grid (a collection is selected) or grouped under collection headings.
@@ -13879,9 +13911,12 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
       // Split is opt-in: an item leaves the Dist order only if its supplier
       // was ticked at confirm. Default (nothing ticked) = one Dist order.
       const goesDirect = (l) => { const vid = resolveSupplier(l); return vid && splitVendors.includes(vid) ? vid : null; };
-      const distCartLines = cartLines.filter(l => !goesDirect(l));
+      // Lines are written to the SO in category order, so every downstream
+      // document (pick sheet, dispatch, invoice) inherits tidy grouping even
+      // where it renders flat (print/PDF).
+      const distCartLines = cartLinesByCat.filter(l => !goesDirect(l));
       const directGroups = {};
-      cartLines.forEach(l => {
+      cartLinesByCat.forEach(l => {
         const vid = goesDirect(l);
         if (!vid) return;
         if (!directGroups[vid]) directGroups[vid] = { vendorName: vendorNameOf(vid), items: [] };
@@ -14285,12 +14320,12 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
             <div className="px-4 py-3 flex items-center justify-between" style={{ borderBottom: "1px solid #E8DCC6" }}><span className="text-sm font-bold flex items-center gap-2" style={{ color: "#3A2E26" }}><ShoppingCart size={16}/> Your order</span><span className="text-xs" style={{ color: "#9A8770" }}>{cartCount} item{cartCount!==1?"s":""}</span></div>
             <div className="flex-1 overflow-y-auto">
               {cartLines.length === 0 && <div className="px-4 py-10 text-center text-sm" style={{ color: "#9A8770" }}>Your cart is empty.<br/>Tap <span style={{ color: "#844429" }}>Add</span> on any product.</div>}
-              {cartLines.map(l => (
+              {catHeaderRows(l => (
                 <div key={l.id} className="px-4 py-2.5 flex items-center justify-between gap-2" style={{ borderBottom: "1px solid #F0E4D2" }}>
                   <div className="min-w-0"><div className="text-sm truncate" style={{ color: "#3A2E26" }}>{cleanName(l.name)}</div><div className="text-[11px]" style={{ color: "#9A8770" }}>{l.qty} × {gbp(l.price)}</div></div>
                   <div className="flex items-center gap-2 flex-shrink-0"><span className="text-sm font-medium" style={{ color: "#3A2E26" }}>{gbp(l.qty*Number(l.price))}</span><button onClick={() => setQty(l.id, 0)} style={{ color: "#A8835C" }}><Trash2 size={14}/></button></div>
                 </div>
-              ))}
+              ), { backgroundColor: "#EFE3CC", color: "#844429" })}
             </div>
             <div className="px-4 py-3 space-y-2.5" style={{ borderTop: "1px solid #E8DCC6" }}>
               <div className="flex justify-between text-sm"><span style={{ color: "#9A8770" }}>Subtotal (excl. VAT)</span><span className="font-bold" style={{ color: "#C9854F" }}>{gbp(cartTotal)}</span></div>
@@ -14311,7 +14346,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
         <Modal onClose={() => setCartOpen(false)} title="Your order" maxW="max-w-lg">
           <div className="space-y-3">
             <div className="max-h-80 overflow-y-auto divide-y divide-slate-800/60 border border-slate-800 rounded-xl">
-              {cartLines.map(l => (
+              {catHeaderRows(l => (
                 <div key={l.id} className="px-3 py-2.5 flex items-center justify-between gap-2">
                   <div className="min-w-0"><div className="text-sm text-white truncate">{cleanName(l.name)}</div><div className="text-[11px] text-slate-500">{gbp(l.price)} each</div></div>
                   <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -14320,7 +14355,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
                     <button onClick={() => bump(l.id, 1)} className="w-7 h-7 rounded-lg bg-indigo-600 text-white font-bold">+</button>
                   </div>
                 </div>
-              ))}
+              ), { backgroundColor: "#1E293B", color: "#F59E0B" })}
             </div>
             <div className="flex justify-between text-sm font-bold"><span className="text-white">Subtotal (excl. VAT)</span><span className="text-white">{gbp(cartTotal)}</span></div>
             <button onClick={() => { setCartOpen(false); setSplitVendors([]); setConfirmOpen(true); }} disabled={!cartLines.length} className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold">Review &amp; place order</button>
@@ -14339,7 +14374,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
 
             {/* ── Line items: thumbnail · name/pack · qty · line total ── */}
             <div className="max-h-72 overflow-y-auto divide-y rounded-xl border" style={{ borderColor: "#E8DCC6" }}>
-              {cartLines.map(l => (
+              {catHeaderRows(l => (
                 <div key={l.id} className="px-3 py-2.5 flex items-center gap-3">
                   <div className="w-11 h-11 rounded-lg flex-shrink-0 overflow-hidden flex items-center justify-center" style={{ backgroundColor: "#F3EADA" }}>
                     {l.imageUrl ? <img src={l.imageUrl} alt="" className="w-full h-full object-cover"/> : <Package size={18} style={{ color: "#C9B99F" }}/>}
@@ -14351,7 +14386,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
                   <div className="text-xs tabular-nums flex-shrink-0" style={{ color: "#6B5D4F" }}>× {l.qty}</div>
                   <div className="text-sm font-bold tabular-nums flex-shrink-0 w-16 text-right" style={{ color: "#3A2E26" }}>{gbp(l.qty*Number(l.price))}</div>
                 </div>
-              ))}
+              ), { backgroundColor: "#EFE3CC", color: "#844429" })}
             </div>
 
             {/* ── Order summary ── */}
