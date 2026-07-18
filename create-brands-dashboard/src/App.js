@@ -7693,7 +7693,7 @@ function DistPODetail({ poId, onClose, onEdit, onDelete }) {
   const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
   const fmtDate = (x) => x ? new Date(x).toLocaleDateString("en-GB") : "—";
   return (
-    <Modal onClose={onClose} title={d?.poNumber || "Purchase Order"} maxW="max-w-3xl">
+    <Modal onClose={onClose} title={d?.poNumber || "Purchase Order"} maxW="max-w-3xl" fullScreen>
       <div className="space-y-4">
         <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
           {d && <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${d.status==="received"?"bg-emerald-600 text-white":d.status==="partially_received"?"bg-amber-500 text-amber-950":"bg-indigo-600 text-white"}`}>{(d.status||"").replace(/_/g," ").toUpperCase()}</span>}
@@ -7738,7 +7738,7 @@ function DistGRNDetail({ grnId, onClose, onDelete, onEdit }) {
   const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
   const fmtDate = (x) => x ? new Date(x).toLocaleDateString("en-GB") : "—";
   return (
-    <Modal onClose={onClose} title={d?.grnNumber || "Goods Receipt"} maxW="max-w-3xl">
+    <Modal onClose={onClose} title={d?.grnNumber || "Goods Receipt"} maxW="max-w-3xl" fullScreen>
       <div className="space-y-4">
         <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
           <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-600 text-white">{d?.posted ? "RECEIVED" : "DRAFT"}</span>
@@ -7776,7 +7776,7 @@ function DistBillDetail({ billId, onClose, onDelete }) {
   const fmtDate = (x) => x ? new Date(x).toLocaleDateString("en-GB") : "—";
   const badge = (s) => s==="paid"?"bg-emerald-600 text-white":s==="overdue"?"bg-red-600 text-white":s==="part_paid"?"bg-amber-500 text-amber-950":"bg-indigo-600 text-white";
   return (
-    <Modal onClose={onClose} title={d?.billNumber || "Bill"} maxW="max-w-3xl">
+    <Modal onClose={onClose} title={d?.billNumber || "Bill"} maxW="max-w-3xl" fullScreen>
       <div className="space-y-4">
         <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
           {d && <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${badge(d.status)}`}>{d.status.replace("_"," ").toUpperCase()}</span>}
@@ -7826,7 +7826,7 @@ function DistVendorDetail({ vendor, onClose, onEdit }) {
   const fmtDate = (x) => x ? new Date(x).toLocaleDateString("en-GB") : "—";
   const TABS = [["overview","Overview"],["transactions","Transactions"]];
   return (
-    <Modal onClose={onClose} title={vendor.displayName} maxW="max-w-3xl">
+    <Modal onClose={onClose} title={vendor.displayName} maxW="max-w-3xl" fullScreen>
       <div className="space-y-4">
         <div className="flex items-center gap-1 border-b border-slate-800 -mt-1">
           {TABS.map(([k,l]) => <button key={k} onClick={() => setTab(k)} className={`px-3 py-2 text-sm font-semibold border-b-2 -mb-px ${tab===k?"border-indigo-500 text-white":"border-transparent text-slate-400 hover:text-white"}`}>{l}</button>)}
@@ -7865,7 +7865,7 @@ function DistPaymentDetail({ payId, onClose, onDelete }) {
   const allocTotal = (d?.allocations || []).reduce((s, a) => s + a.amount, 0);
   const excess = +((d?.amount || 0) - allocTotal).toFixed(2);
   return (
-    <Modal onClose={onClose} title={d?.paymentNumber || "Payment"} maxW="max-w-2xl">
+    <Modal onClose={onClose} title={d?.paymentNumber || "Payment"} maxW="max-w-2xl" fullScreen>
       <div className="space-y-4">
         <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
           <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-600 text-white">PAYMENT MADE</span>
@@ -8067,7 +8067,7 @@ function DistPOView({ currentUser }) {
         setBusy(false);
       }}/>}
       {creating && (
-        <Modal onClose={() => setCreating(null)} title={creating.id ? `Edit ${creating.poNumber || "purchase order"}` : "New purchase order"} maxW="max-w-4xl">
+        <Modal onClose={() => setCreating(null)} title={creating.id ? `Edit ${creating.poNumber || "purchase order"}` : "New purchase order"} maxW="max-w-4xl" fullScreen>
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <label className="text-xs text-slate-400">Vendor *<select value={creating.vendorId || ""} onChange={e => setCreating({ ...creating, vendorId: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="">Select a vendor</option>{vendors.map(v => <option key={v.id} value={v.id}>{v.displayName}</option>)}</select></label>
@@ -8204,7 +8204,7 @@ function DistGRNView({ currentUser, pendingConvert, setPendingConvert }) {
         </Modal>
       )}
       {creating && (
-        <Modal onClose={() => setCreating(null)} title={creating.id ? `Edit ${creating.grnNumber || "goods receipt"}` : creating.poNumber ? `Receive against ${creating.poNumber}` : "Receive goods into warehouse"} maxW="max-w-4xl">
+        <Modal onClose={() => setCreating(null)} title={creating.id ? `Edit ${creating.grnNumber || "goods receipt"}` : creating.poNumber ? `Receive against ${creating.poNumber}` : "Receive goods into warehouse"} maxW="max-w-4xl" fullScreen>
           <div className="space-y-4">
             {creating.poNumber && <div className="rounded-xl border border-indigo-800/40 bg-indigo-950/20 px-3 py-2.5 text-xs text-indigo-200">Receiving against <span className="font-mono font-semibold">{creating.poNumber}</span>. Quantities are pre-filled with what's still outstanding — reduce any line to receive a <span className="font-semibold">partial</span> delivery; the rest stays open on the PO.</div>}
             <p className="text-[11px] text-slate-500">Raises stock (a receipt movement per line) and posts Dr Stock / Cr GRNI at landed cost.</p>
@@ -8333,7 +8333,7 @@ function DistBillsView({ currentUser, pendingConvert, setPendingConvert }) {
         setBusy(false);
       }}/>}
       {creating && (
-        <Modal onClose={() => setCreating(null)} title="New bill" maxW="max-w-4xl">
+        <Modal onClose={() => setCreating(null)} title="New bill" maxW="max-w-4xl" fullScreen>
           <div className="space-y-4">
             <p className="text-[11px] text-slate-500">Posts Dr GRNI (net) + Dr VAT / Cr Trade creditors (gross).</p>
             <div className="grid grid-cols-3 gap-4">
@@ -8435,7 +8435,7 @@ function DistPaymentsView({ currentUser, pendingConvert, setPendingConvert }) {
         setBusy(false);
       }}/>}
       {creating && (
-        <Modal onClose={() => setCreating(null)} title="Record Payment" maxW="max-w-4xl">
+        <Modal onClose={() => setCreating(null)} title="Record Payment" maxW="max-w-4xl" fullScreen>
           <div className="space-y-4">
             <label className="text-xs text-slate-400 block">Vendor name *<select value={creating.vendorId || ""} onChange={e => setCreating({ ...creating, vendorId: e.target.value, allocations: [] })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="">Select a vendor</option>{vendors.map(v => <option key={v.id} value={v.id}>{v.displayName}</option>)}</select></label>
             <div className="grid grid-cols-2 gap-4">
@@ -8597,7 +8597,7 @@ function DistCustomerDetail({ customer, stores = [], onClose, onEdit }) {
   const maxIncome = data ? Math.max(1, ...data.months.map(m => m.amount)) : 1;
 
   return (
-    <Modal onClose={onClose} title={customer.displayName} maxW="max-w-4xl">
+    <Modal onClose={onClose} title={customer.displayName} maxW="max-w-4xl" fullScreen>
       <div className="space-y-4">
         {/* Tabs + actions */}
         <div className="flex items-center gap-1 border-b border-slate-800 -mt-1">
@@ -9006,7 +9006,7 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
   );
 
   return (
-    <Modal onClose={onClose} title={so.soNumber} maxW="max-w-4xl">
+    <Modal onClose={onClose} title={so.soNumber} maxW="max-w-4xl" fullScreen>
       <div className="space-y-4">
         {/* Header actions */}
         <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
@@ -9368,7 +9368,7 @@ function DistSalesOrderView({ currentUser, setActiveView }) {
       )}
       {detail && <DistSalesOrderDetail so={detail} customer={customers.find(c => c.id === detail.customerId)} items={items} taxRates={taxRates} onClose={() => setDetail(null)} onEdit={() => { editSO(detail); setDetail(null); }} onDelete={() => removeSO(detail)} onNavigate={setActiveView}/>}
       {creating && (
-        <Modal onClose={() => setCreating(null)} title={creating.id ? `Edit ${creating.soNumber || "sales order"}` : "New sales order"} maxW="max-w-4xl">
+        <Modal onClose={() => setCreating(null)} title={creating.id ? `Edit ${creating.soNumber || "sales order"}` : "New sales order"} maxW="max-w-4xl" fullScreen>
           <div className="space-y-4">
             <label className="text-xs text-slate-400 block">Customer name *<select value={creating.customerId || ""} onChange={e => onCustomer(e.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="">Select or add a customer</option>{customers.map(c => <option key={c.id} value={c.id}>{c.displayName}</option>)}</select></label>
             <div className="grid grid-cols-2 gap-4">
@@ -9404,7 +9404,7 @@ function DistPickDetail({ pickId, onClose, onDelete, onEdit }) {
   const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
   const fmtDate = (x) => x ? new Date(x).toLocaleDateString("en-GB") : "—";
   return (
-    <Modal onClose={onClose} title={d?.pickNumber || "Pick"} maxW="max-w-3xl">
+    <Modal onClose={onClose} title={d?.pickNumber || "Pick"} maxW="max-w-3xl" fullScreen>
       <div className="space-y-4">
         <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
           <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${d?.status==="dispatched"?"bg-emerald-600 text-white":"bg-indigo-600 text-white"}`}>{(d?.status||"").toUpperCase()}</span>
@@ -9445,7 +9445,7 @@ function DistDispatchDetail({ dispatchId, onClose, onDelete, onEdit }) {
   const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
   const fmtDate = (x) => x ? new Date(x).toLocaleDateString("en-GB") : "—";
   return (
-    <Modal onClose={onClose} title={d?.dispatchNumber || "Dispatch"} maxW="max-w-3xl">
+    <Modal onClose={onClose} title={d?.dispatchNumber || "Dispatch"} maxW="max-w-3xl" fullScreen>
       <div className="space-y-4">
         <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
           <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-emerald-600 text-white">{d?.posted ? "POSTED" : "DRAFT"}</span>
@@ -9700,7 +9700,7 @@ function DistPicksView({ currentUser, pendingConvert, setPendingConvert }) {
         setBusy(false);
       }}/>}
       {creating && (
-        <Modal onClose={() => setCreating(null)} title={creating.id ? `Edit ${creating.pickNumber || "pick"}` : `Pick ${creating.soNumber}`} maxW="max-w-4xl">
+        <Modal onClose={() => setCreating(null)} title={creating.id ? `Edit ${creating.pickNumber || "pick"}` : `Pick ${creating.soNumber}`} maxW="max-w-4xl" fullScreen>
           <div className="space-y-4">
             <p className="text-[11px] text-slate-500">Batches auto-allocated soonest-expiry first (FEFO). Override the batch or qty per line as needed. A short line (insufficient stock) is flagged.</p>
             <div className="border border-slate-800 rounded-xl overflow-hidden">
@@ -9822,7 +9822,7 @@ function DistDispatchView({ currentUser, pendingConvert, setPendingConvert }) {
         setBusy(false);
       }}/>}
       {creating && (
-        <Modal onClose={() => setCreating(null)} title={creating.id ? `Edit ${creating.dispatchNumber || "dispatch"}` : `Dispatch ${creating.pickNumber}`} maxW="max-w-4xl">
+        <Modal onClose={() => setCreating(null)} title={creating.id ? `Edit ${creating.dispatchNumber || "dispatch"}` : `Dispatch ${creating.pickNumber}`} maxW="max-w-4xl" fullScreen>
           <div className="space-y-4">
             <p className="text-[11px] text-slate-500">Issues stock (negative movement per batch) and posts Dr COGS / Cr Stock at landed cost.</p>
             <div className="border border-slate-800 rounded-xl overflow-hidden">
@@ -9855,7 +9855,7 @@ function DistInvoiceDetail({ invoiceId, onClose, onDelete }) {
   const statusBadge = (s) => s === "paid" ? "bg-emerald-600 text-white" : s === "overdue" ? "bg-red-600 text-white" : s === "part_paid" ? "bg-amber-500 text-amber-950" : "bg-indigo-600 text-white";
 
   return (
-    <Modal onClose={onClose} title={d?.invoiceNumber || "Invoice"} maxW="max-w-3xl">
+    <Modal onClose={onClose} title={d?.invoiceNumber || "Invoice"} maxW="max-w-3xl" fullScreen>
       <div className="space-y-4">
         <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
           {d && <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${statusBadge(d.status)}`}>{d.status.replace("_", " ").toUpperCase()}</span>}
@@ -10058,7 +10058,7 @@ function DistInvoicesView({ currentUser, pendingConvert, setPendingConvert }) {
         setBusy(false);
       }}/>}
       {creating && (
-        <Modal onClose={() => setCreating(null)} title="New invoice" maxW="max-w-4xl">
+        <Modal onClose={() => setCreating(null)} title="New invoice" maxW="max-w-4xl" fullScreen>
           <div className="space-y-4">
             <p className="text-[11px] text-slate-500">Posts Dr Trade debtors / Cr Sales (+ Cr VAT).</p>
             <label className="text-xs text-slate-400 block">Customer name *<select value={creating.customerId || ""} onChange={e => setCreating({ ...creating, customerId: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="">Select or add a customer</option>{customers.map(c => <option key={c.id} value={c.id}>{c.displayName}</option>)}</select></label>
@@ -10144,7 +10144,7 @@ function DistReceiptsView({ currentUser, pendingConvert, setPendingConvert }) {
         </div>
       )}
       {creating && (
-        <Modal onClose={() => setCreating(null)} title="Record Payment" maxW="max-w-4xl">
+        <Modal onClose={() => setCreating(null)} title="Record Payment" maxW="max-w-4xl" fullScreen>
           <div className="space-y-4">
             <label className="text-xs text-slate-400 block">Customer name *<select value={creating.customerId || ""} onChange={e => setCreating({ ...creating, customerId: e.target.value, allocations: [] })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="">Select a customer</option>{customers.map(c => <option key={c.id} value={c.id}>{c.displayName}</option>)}</select></label>
             <div className="grid grid-cols-3 gap-4">
@@ -10223,7 +10223,7 @@ function DistCreditNotesView({ currentUser }) {
         </div>
       )}
       {creating && (
-        <Modal onClose={() => setCreating(null)} title="New credit note" maxW="max-w-4xl">
+        <Modal onClose={() => setCreating(null)} title="New credit note" maxW="max-w-4xl" fullScreen>
           <div className="space-y-4">
             <p className="text-[11px] text-slate-500">Posts Dr Sales (+ Dr VAT) / Cr Trade debtors — reverses part of a sale (returns / short stock).</p>
             <label className="text-xs text-slate-400 block">Customer name *<select value={creating.customerId || ""} onChange={e => setCreating({ ...creating, customerId: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="">Select or add a customer</option>{customers.map(c => <option key={c.id} value={c.id}>{c.displayName}</option>)}</select></label>
@@ -12860,7 +12860,7 @@ function DistCollectionEditModal({ coll, items, allCollections = [], onClose, on
   };
 
   return (
-    <Modal onClose={onClose} title={coll.new ? "New collection" : "Edit collection"} maxW="max-w-4xl">
+    <Modal onClose={onClose} title={coll.new ? "New collection" : "Edit collection"} maxW="max-w-4xl" fullScreen>
       <div className="space-y-3">
         {err && <div className="text-xs text-red-400">{err}</div>}
         <div className="grid sm:grid-cols-2 gap-3">
@@ -32240,7 +32240,25 @@ const inputCls = "w-full bg-slate-900/60 border border-slate-700 rounded-xl px-4
 const labelCls = "text-xs text-slate-600 font-semibold mb-1.5 block";
 const selCls = inputCls; // module-level select styling (used by SmallwareView modals)
 
-function Modal({ title, onClose, children, footer, maxW = "max-w-lg" }) {
+function Modal({ title, onClose, children, footer, maxW = "max-w-lg", fullScreen = false }) {
+  // fullScreen: document views (orders, invoices, dispatches…) carry too many
+  // lines for a popup — they take the whole screen like a page, with a
+  // "← Back" header and a wide centred column. Small dialogs stay popups.
+  if (fullScreen) {
+    return (
+      <div className="fixed inset-0 z-50 bg-slate-950 flex flex-col">
+        <div className="flex items-center gap-4 px-4 sm:px-8 py-3 border-b border-slate-800 flex-shrink-0 bg-slate-900">
+          <button onClick={onClose} className="text-sm font-semibold text-indigo-300 hover:text-indigo-200 flex items-center gap-1.5 flex-shrink-0">← Back</button>
+          <h3 className="font-bold text-white text-base truncate">{title}</h3>
+          <button onClick={onClose} className="ml-auto text-slate-400 hover:text-white flex-shrink-0"><X size={20}/></button>
+        </div>
+        <div className="flex-1 overflow-y-auto">
+          <div className="max-w-5xl mx-auto w-full px-4 sm:px-6 py-5">{children}</div>
+        </div>
+        {footer && <div className="flex gap-3 px-4 sm:px-8 py-3 border-t border-slate-800 flex-shrink-0 bg-slate-900"><div className="max-w-5xl mx-auto w-full flex gap-3">{footer}</div></div>}
+      </div>
+    );
+  }
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center sm:p-4">
       <div className={`bg-slate-900 border border-slate-700 w-full ${maxW} flex flex-col rounded-t-3xl sm:rounded-2xl`}
