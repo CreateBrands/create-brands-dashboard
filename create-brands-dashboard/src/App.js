@@ -76,7 +76,7 @@ import {
   fetchEmployeeCertifications, addEmployeeCertification,
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
-  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, updateCkGoodsIn, computeCkStock, fetchCkOrders, saveCkOrder, submitCkOrder, cancelCkOrder, deleteCkOrder, fulfilCkOrder, computeCkOrderDemand, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, upsertCkIngredientsByName, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchScheduleJobs, saveScheduleJobs, detectAllergensInText, diffAllergens, scanLabelText, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock, fetchIncomingCkDeliveries, fetchCkDeliveryDetail, saveCkDeliveryReceipt, confirmCkDelivery, ckLineEquivalent, computeCkDemandViaDist, fetchCountAssignments, saveCountAssignments, setCountAssignmentStatus, fetchOpenOrderRound, createOrderRound, saveOrderRoundAssignments, setOrderRoundLine, setOrderRoundPartStatus, closeOrderRound, createFreshPurchaseDeliveries, lastVehicleOdometer, addVehicleMileage, fetchVehicleMileageLogs, fetchFleetVehicles, upsertFleetVehicle, startFuelFill, cancelFuelFill, completeFuelFill, fetchFuelTransactions, fetchMyPendingFill, reviewFuelTransaction,
+  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, updateCkGoodsIn, computeCkStock, fetchCkOrders, saveCkOrder, submitCkOrder, cancelCkOrder, deleteCkOrder, fulfilCkOrder, computeCkOrderDemand, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, upsertCkIngredientsByName, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchScheduleJobs, saveScheduleJobs, detectAllergensInText, diffAllergens, scanLabelText, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock, fetchIncomingCkDeliveries, fetchCkDeliveryDetail, saveCkDeliveryReceipt, confirmCkDelivery, ckLineEquivalent, computeCkDemandViaDist, fetchCountAssignments, saveCountAssignments, setCountAssignmentStatus, fetchOpenOrderRound, createOrderRound, saveOrderRoundAssignments, setOrderRoundLine, setOrderRoundPartStatus, closeOrderRound, createFreshPurchaseDeliveries, fetchStoreSupplierOverrides, setStoreSupplierOverride, createDirectOrders, fetchDirectOrders, lastVehicleOdometer, addVehicleMileage, fetchVehicleMileageLogs, fetchFleetVehicles, upsertFleetVehicle, startFuelFill, cancelFuelFill, completeFuelFill, fetchFuelTransactions, fetchMyPendingFill, reviewFuelTransaction,
   archiveEmployeeDocument, fetchArchivedDocuments,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
   signContractDocument,
@@ -13211,7 +13211,7 @@ function AgentAutonomyModal({ autonomy, stores = [], onClose, onSave }) {
 // Item stock-planning popup on the store order page. Shows Stock in hand, Par
 // level, Required stock (manual, saved per store) plus Daily/Weekly requirement
 // calculated from the store's Flipdish sales history.
-function StockDetailModal({ storeId, storeName, item, usage, usageDays, cleanName, unitLabel, onClose, onAddToCart, currentQty }) {
+function StockDetailModal({ storeId, storeName, item, usage, usageDays, cleanName, unitLabel, onClose, onAddToCart, currentQty, supplierCtl }) {
   const [stock, setStock] = useState({ stockInHand: "", parLevel: "", requiredStock: "" });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -13371,6 +13371,26 @@ function StockDetailModal({ storeId, storeName, item, usage, usageDays, cleanNam
                   <div className="text-2xl font-black tabular-nums" style={{ color: "#3F6B3A" }}>{suggestedPacks}</div>
                 </div>
               )}
+              {/* DIRECT SUPPLIER (managers): who fulfils this item for THIS store.
+                  Default follows the global item setting; overriding here only
+                  affects this store's checkout routing. */}
+              {supplierCtl && supplierCtl.isManager && (
+                <div className="rounded-lg p-2.5 mb-2" style={{ backgroundColor: "#F3EADA", border: "1px solid #E8DCC6" }}>
+                  <div className="text-[11px] font-semibold mb-1" style={{ color: "#6B5D4F" }}>Supplier for this store</div>
+                  <select value={supplierCtl.hasOverride ? (supplierCtl.overrideValue || "__dist__") : "__default__"}
+                    onChange={e => {
+                      const v = e.target.value;
+                      if (v === "__default__") supplierCtl.onSet(undefined);          // remove override → follow global
+                      else if (v === "__dist__") supplierCtl.onSet(null);             // force Distribution
+                      else supplierCtl.onSet(v);                                      // this vendor, direct
+                    }}
+                    className="w-full px-2 py-1.5 rounded-lg text-xs" style={{ backgroundColor: "#FDF8EF", border: "1px solid #E8DCC6", color: "#3A2E26" }}>
+                    <option value="__default__">Default — {supplierCtl.globalLabel}</option>
+                    <option value="__dist__">Distribution (override)</option>
+                    {supplierCtl.vendors.map(v => <option key={v.id} value={v.id}>{v.displayName || v.name} — direct</option>)}
+                  </select>
+                </div>
+              )}
               <button onClick={() => { onAddToCart(item.id, (Number(stock.requiredStock) || suggestedPacks || 1)); onClose(); }}
                 className="w-full py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-1.5" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>
                 <Plus size={15}/> Add {(Number(stock.requiredStock) || suggestedPacks || 1)} {casePlural(Number(stock.requiredStock) || suggestedPacks || 1)} to order
@@ -13446,11 +13466,24 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   const [roundBusy, setRoundBusy] = useState(false);
   const [roundLoaded, setRoundLoaded] = useState(false);  // compiled list pulled into cart
   const [roundBasis, setRoundBasis] = useState("category"); // category | department | frequency
+  // ── DIRECT SUPPLIERS: per-store supplier resolution + checkout split ──
+  const [supplierOverrides, setSupplierOverrides] = useState({});   // itemId -> vendorId|null
+  const [portalVendors, setPortalVendors] = useState([]);           // vendor contacts (id, displayName)
   const isManager = ["owner", "hq_staff", "manager"].includes(currentUser?.role);
   const reloadRound = async (sid) => {
     try { setRound(sid ? await fetchOpenOrderRound(sid) : null); } catch { setRound(null); }
   };
   useEffect(() => { setRoundLoaded(false); reloadRound(activeStoreId); /* eslint-disable-next-line */ }, [activeStoreId]);
+  useEffect(() => {
+    if (!activeStoreId) return;
+    fetchStoreSupplierOverrides(activeStoreId).then(setSupplierOverrides).catch(() => setSupplierOverrides({}));
+    fetchDistContacts({ kind: "vendor" }).then(v => setPortalVendors((v || []).filter(x => x.active !== false))).catch(() => {});
+    /* eslint-disable-next-line */
+  }, [activeStoreId]);
+  const vendorNameOf = (id) => { const v = portalVendors.find(x => x.id === id); return v ? (v.displayName || v.name || "Supplier") : "Supplier"; };
+  // Who fulfils this item FOR THIS STORE: store override wins, else the item's
+  // global setting; null/undefined = Distribution.
+  const resolveSupplier = (i) => Object.prototype.hasOwnProperty.call(supplierOverrides, i.id) ? supplierOverrides[i.id] : (i.fulfilledBy || null);
   const myRoundMemberId = currentUser?.opsTeamMemberId || currentUser?.id;
   const myRoundAsg = (round?.assignments || []).filter(x => x.userId === myRoundMemberId || x.userId === currentUser?.id);
   const staffRoundMode = !isManager && !!round && myRoundAsg.length > 0;
@@ -13815,15 +13848,31 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
     if (!cartLines.length) return;
     setPlacing(true); setErr("");
     try {
-      const lines = cartLines.map(l => ({ itemId: l.id, qty: l.qty, unitPrice: Number(l.price) || 0, taxRateId: l.taxRateId || null, discount: 0, discountType: "percent" }));
+      // ── SPLIT BY SUPPLIER: Dist lines → normal sales order; each direct
+      //    supplier gets its own order + incoming delivery. One cart, many rails.
+      const distCartLines = cartLines.filter(l => !resolveSupplier(l));
+      const directGroups = {};
+      cartLines.filter(l => resolveSupplier(l)).forEach(l => {
+        const vid = resolveSupplier(l);
+        if (!directGroups[vid]) directGroups[vid] = { vendorName: vendorNameOf(vid), items: [] };
+        directGroups[vid].items.push({ itemId: l.id, name: l.name, qty: l.qty });
+      });
+
       const noteParts = [];
       if (deliveryDate) noteParts.push(`Requested delivery: ${deliveryDate}`);
       if (orderNote.trim()) noteParts.push(orderNote.trim());
       noteParts.push("Placed via store ordering portal");
-      const id = await createDistSalesOrder({ customerId, status: "confirmed", orderDate: new Date().toISOString().slice(0, 10), vatMode: "exclusive", createdBy: currentUser?.id, note: noteParts.join(" · ") }, lines);
-      // If this order came from a team round, close the round against the SO.
+
+      let id = null;
+      if (distCartLines.length) {
+        const lines = distCartLines.map(l => ({ itemId: l.id, qty: l.qty, unitPrice: Number(l.price) || 0, taxRateId: l.taxRateId || null, discount: 0, discountType: "percent" }));
+        id = await createDistSalesOrder({ customerId, status: "confirmed", orderDate: new Date().toISOString().slice(0, 10), vatMode: "exclusive", createdBy: currentUser?.id, note: noteParts.join(" · ") }, lines);
+      }
+      const directPlaced = Object.keys(directGroups).length
+        ? await createDirectOrders(activeStoreId, directGroups, currentUser) : [];
+      // If this order came from a team round, close the round.
       if (roundLoaded && round) { try { await closeOrderRound(round.id, { status: "placed", soId: id }); } catch {} setRoundLoaded(false); reloadRound(activeStoreId); }
-      setPlaced({ id, count: cartCount, total: cartTotal }); setCart({}); setConfirmOpen(false); setCartOpen(false); setDeliveryDate(""); setOrderNote("");
+      setPlaced({ id, count: cartCount, total: cartTotal, direct: directPlaced }); setCart({}); setConfirmOpen(false); setCartOpen(false); setDeliveryDate(""); setOrderNote("");
     } catch (e) { setErr(e.message); }
     setPlacing(false);
   };
@@ -13839,11 +13888,23 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   );
 
   if (placed) {
+    const directs = placed.direct || [];
+    const sheetText = (d) => `Order — ${d.vendorName}\n${(d.items||[]).map(it=>`${it.qty} × ${it.name}`).join("\n")}\n(Order #D${d.orderId} · placed via Chocoberry portal)`;
     return (
       <div className="max-w-md mx-auto text-center py-16 space-y-4">
         <div className="w-16 h-16 rounded-full bg-emerald-500/15 border border-emerald-500/40 flex items-center justify-center mx-auto"><Check size={30} className="text-emerald-400"/></div>
-        <h2 className="text-2xl font-bold text-white">Order placed</h2>
-        <p className="text-sm text-slate-400">{placed.count} item{placed.count!==1?"s":""} · {gbp(placed.total)} excl. VAT. The Distribution team will pick and deliver it.</p>
+        <h2 className="text-2xl font-bold text-white">{placed.id && directs.length ? `${1+directs.length} orders placed` : "Order placed"}</h2>
+        <p className="text-sm text-slate-400">{placed.count} item{placed.count!==1?"s":""} total{placed.id ? ` · ${gbp(placed.total)} excl. VAT via Distribution` : ""}.</p>
+        {placed.id && <div className="text-xs text-slate-500">Distribution will pick and deliver their part.</div>}
+        {directs.map(d => (
+          <div key={d.orderId} className="rounded-2xl border border-amber-600/40 bg-amber-950/10 p-4 text-left space-y-2">
+            <div className="text-sm font-bold text-amber-300">{d.vendorName} — order #D{d.orderId}</div>
+            <div className="text-xs text-slate-400">{(d.items||[]).map(it=>`${it.qty}× ${it.name}`).join(" · ")}</div>
+            <div className="text-[11px] text-slate-500">Delivered direct to the store — it will appear in your incoming deliveries to receive. Send the order to the supplier:</div>
+            <button onClick={() => { navigator.clipboard?.writeText(sheetText(d)); }}
+              className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold">Copy order sheet (for WhatsApp / email)</button>
+          </div>
+        ))}
         <button onClick={() => setPlaced(null)} className="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold">Start another order</button>
       </div>
     );
@@ -14246,6 +14307,21 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
               ))}
             </div>
             <div className="flex justify-between text-sm font-bold"><span className="text-white">Total (excl. VAT)</span><span className="text-white">{gbp(cartTotal)}</span></div>
+            {/* Supplier split preview: one cart, possibly several orders */}
+            {(() => {
+              const direct = {};
+              cartLines.forEach(l => { const vid = resolveSupplier(l); if (vid) { direct[vid] = direct[vid] || { n: 0 }; direct[vid].n += 1; } });
+              const distN = cartLines.filter(l => !resolveSupplier(l)).length;
+              const vids = Object.keys(direct);
+              if (!vids.length) return null;
+              return (
+                <div className="rounded-xl bg-amber-950/15 border border-amber-700/40 px-3 py-2 text-xs text-slate-300">
+                  This will place <b>{(distN ? 1 : 0) + vids.length}</b> order{(distN ? 1 : 0) + vids.length !== 1 ? "s" : ""}:{" "}
+                  {distN > 0 && <>Distribution ({distN} item{distN!==1?"s":""})</>}
+                  {vids.map(v => <span key={v}>{distN > 0 || vids.indexOf(v) > 0 ? " · " : ""}{vendorNameOf(v)} ({direct[v].n} item{direct[v].n!==1?"s":""}, delivered direct)</span>)}
+                </div>
+              );
+            })()}
             <div className="grid sm:grid-cols-2 gap-3 pt-1">
               <div>
                 <label className="block text-[10px] uppercase tracking-wide text-slate-500 font-bold mb-1">Requested delivery date</label>
@@ -14266,6 +14342,21 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
           storeId={activeStoreId}
           storeName={customers.find(c => c.id === customerId)?.name || activeStoreId}
           item={detailItem}
+          supplierCtl={{
+            isManager,
+            vendors: portalVendors,
+            hasOverride: Object.prototype.hasOwnProperty.call(supplierOverrides, detailItem.id),
+            overrideValue: supplierOverrides[detailItem.id],
+            globalLabel: detailItem.fulfilledBy ? `${vendorNameOf(detailItem.fulfilledBy)} (direct)` : "Distribution",
+            onSet: async (v) => {
+              try {
+                await setStoreSupplierOverride(activeStoreId, detailItem.id, v);
+                const next = { ...supplierOverrides };
+                if (v === undefined) delete next[detailItem.id]; else next[detailItem.id] = v;
+                setSupplierOverrides(next);
+              } catch (e) { console.error("override save failed:", e.message); }
+            },
+          }}
           usage={consumption?.byDist?.[detailItem.id] || null}
           usageDays={consumption?.days || 28}
           cleanName={cleanName}
@@ -14523,11 +14614,12 @@ function DistItemsView({ currentUser }) {
   const load = useCallback(async () => {
     setLoading(true); setErr("");
     try {
-      const [its, tax, onHand, ckp, cats] = await Promise.all([
-        fetchDistItems({ includeInactive: true }), fetchDistTaxRates(), computeDistOnHand(), fetchCkProducts().catch(() => []), fetchTxnCategories().catch(() => []),
+      const [its, tax, onHand, ckp, cats, vnds] = await Promise.all([
+        fetchDistItems({ includeInactive: true }), fetchDistTaxRates(), computeDistOnHand(), fetchCkProducts().catch(() => []), fetchTxnCategories().catch(() => []), fetchDistContacts({ kind: "vendor" }).catch(() => []),
       ]);
       setCkProducts(ckp || []);
       setCategories((cats || []).filter(c => !c.archived));
+      setItemVendors((vnds || []).filter(v => v.active !== false));
       // Merge derived on-hand onto each item (committed=0 until sell side ships).
       const withStock = its.map(i => {
         const oh = onHand.get(i.id) || 0;
@@ -14852,6 +14944,19 @@ function DistItemsView({ currentUser }) {
               })()}
               {editItem.itemType === "fresh" && (
                 <div className="text-[10px] text-amber-300 mt-1.5">Not stocked: no stock levels, batches, or valuation. A driver sources it same-day; stores order it and Distribution fulfils to order. Stores are charged the item's sell price (or their price-list price).</div>
+              )}
+              {/* DIRECT SUPPLIER: who fulfils store orders for this item. Default
+                  = Distribution. A direct supplier means checkout routes this
+                  item into its own order (store←supplier, never Dist's book). */}
+              {editItem.itemType !== "ck" && (
+                <label className="text-xs text-slate-400 block mt-2">Fulfilled by
+                  <select value={editItem.fulfilledBy || ""} onChange={e => setEditItem({ ...editItem, fulfilledBy: e.target.value || null })}
+                    className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white">
+                    <option value="">Distribution (warehouse fulfils)</option>
+                    {itemVendors.map(v => <option key={v.id} value={v.id}>{v.displayName || v.name} — direct to store</option>)}
+                  </select>
+                  {editItem.fulfilledBy && <span className="text-[10px] text-amber-300">Store orders for this item become a separate order to this supplier, delivered direct — it never enters Distribution's sales, stock, or invoicing.</span>}
+                </label>
               )}
               {(editItem.itemType === "ck" || (!editItem.itemType && editItem.ckProductId)) && (
                 <div className="mt-2 space-y-1">

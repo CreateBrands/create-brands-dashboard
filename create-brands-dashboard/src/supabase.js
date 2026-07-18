@@ -10420,6 +10420,7 @@ const mapDistItem = (i) => ({
   ckProductId: i.ck_product_id || null,
   reorderPoint: i.reorder_point != null ? Number(i.reorder_point) : 0, imageUrl: i.image_url || "",
   itemType: i.item_type || "warehouse", // "warehouse" (stocked) | "ck" | "fresh" (non-stocked)
+  fulfilledBy: i.fulfilled_by || null,  // null = Distribution; else dist_contacts vendor id (direct supplier)
   location: i.location || "", supplier: i.supplier || "",
   tagFrequency: i.tag_frequency || "", tagCategory: i.tag_category || "",
   active: i.active !== false, createdAt: i.created_at,
@@ -10516,6 +10517,7 @@ export async function upsertDistItem(i) {
     income_account_code: i.incomeAccountCode || null, expense_account_code: i.expenseAccountCode || null,
     ck_product_id: i.ckProductId || null,
     item_type: i.itemType || (i.ckProductId ? "ck" : "warehouse"),
+    fulfilled_by: i.fulfilledBy || null,
     location: i.location || null, supplier: i.supplier || null,
     tag_frequency: i.tagFrequency || null, tag_category: i.tagCategory || null,
     reorder_point: i.reorderPoint != null && i.reorderPoint !== "" ? Number(i.reorderPoint) : 0, image_url: i.imageUrl || null,
@@ -14962,6 +14964,76 @@ async function ensureStoreItemForDistItem(distItemId, fallbackName, unitCost) {
   return created.id;
 }
 
+// ── DIRECT SUPPLIERS: per-store overrides + direct orders ────────────────────
+// Items carry a global fulfilled_by (null = Distribution); stores can override
+// per item. Checkout groups the cart by resolved supplier: Dist lines → normal
+// sales order; each direct group → a direct_order + an incoming store delivery
+// (supplier_name set, so receiving auto-writes purchases under that supplier).
+
+export async function fetchStoreSupplierOverrides(storeId) {
+  const { data, error } = await supabase.from("store_item_suppliers")
+    .select("*").eq("store_id", storeId);
+  if (error) throw error;
+  const m = {};
+  (data || []).forEach(r => { m[r.item_id] = r.vendor_id; }); // null = force Distribution
+  return m;
+}
+
+export async function setStoreSupplierOverride(storeId, itemId, vendorId) {
+  if (vendorId === undefined) {
+    await supabase.from("store_item_suppliers").delete().eq("store_id", storeId).eq("item_id", itemId);
+    return true;
+  }
+  const { error } = await supabase.from("store_item_suppliers")
+    .upsert({ store_id: storeId, item_id: itemId, vendor_id: vendorId }, { onConflict: "store_id,item_id" });
+  if (error) throw error;
+  return true;
+}
+
+// groups: { vendorId: { vendorName, items: [{ itemId, name, qty }] } }
+export async function createDirectOrders(storeId, groups, user) {
+  const created = [];
+  for (const [vendorId, g] of Object.entries(groups || {})) {
+    const items = (g && g.items) || [];
+    if (!items.length) continue;
+    const { data: head, error: hErr } = await supabase.from("direct_orders").insert({
+      store_id: storeId, vendor_id: vendorId, vendor_name: g.vendorName || "",
+      status: "placed", created_by: user?.id || null, created_by_name: user?.name || null,
+    }).select().single();
+    if (hErr) throw hErr;
+    const { error: lErr } = await supabase.from("direct_order_lines")
+      .insert(items.map(it => ({ order_id: head.id, item_id: it.itemId, item_name: it.name || "", qty: Number(it.qty) || 0 })));
+    if (lErr) console.error("direct order lines failed:", lErr.message);
+    // Raise the incoming delivery so the store receives it exactly like a Dist
+    // delivery — item links intact, so stock + purchase records work; the
+    // supplier name flows onto the purchase records at confirmation.
+    try {
+      const { data: deliv } = await supabase.from("store_deliveries").insert({
+        store_id: storeId, dist_order_id: null, dispatch_id: `direct:${head.id}`,
+        supplier_name: g.vendorName || "Supplier",
+        status: "incoming", dispatched_at: new Date().toISOString(),
+      }).select().single();
+      if (deliv) {
+        await supabase.from("store_delivery_lines").insert(items.map(it => ({
+          delivery_id: deliv.id, dist_item_id: it.itemId, store_item_id: null,
+          item_name: it.name || "Item", qty_dispatched: Number(it.qty) || 0, unit_cost: null,
+        })));
+      }
+    } catch (e) { console.error("direct delivery failed:", e.message); }
+    created.push({ orderId: head.id, vendorId, vendorName: g.vendorName, items });
+  }
+  return created;
+}
+
+export async function fetchDirectOrders({ storeId, status } = {}) {
+  let q = supabase.from("direct_orders").select("*").order("created_at", { ascending: false }).limit(100);
+  if (storeId) q = q.eq("store_id", storeId);
+  if (status) q = q.eq("status", status);
+  const { data, error } = await q;
+  if (error) throw error;
+  return data || [];
+}
+
 // ── FRESH PURCHASE → STORE DELIVERIES ────────────────────────────────────────
 // When a driver buys produce (Tesco/Costco run) and allocates receipt line
 // items to stores, each store gets a normal incoming delivery: same list, same
@@ -15032,7 +15104,7 @@ export async function confirmStoreDelivery(deliveryId, receivedBy) {
           item_scope: "store", item_id: storeItemId,
           qty: recv,
           total_cost: l.unit_cost != null ? Math.round(Number(l.unit_cost) * recv * 100) / 100 : null,
-          supplier: "Distribution", invoice_ref: `delivery-${deliveryId}`,
+          supplier: head.supplier_name || "Distribution", invoice_ref: `delivery-${deliveryId}`,
           note: l.item_name || null,
         });
       } catch (e) { console.error("auto purchase record failed:", e.message); }
@@ -15061,6 +15133,12 @@ export async function confirmStoreDelivery(deliveryId, receivedBy) {
   await supabase.from("store_deliveries").update({
     status: "confirmed", received_at: new Date().toISOString(), received_by: receivedBy || null,
   }).eq("id", deliveryId);
+
+  // Direct-supplier delivery: mark its order received too.
+  if (typeof head.dispatch_id === "string" && head.dispatch_id.startsWith("direct:")) {
+    const doId = Number(head.dispatch_id.slice(7));
+    if (doId) { try { await supabase.from("direct_orders").update({ status: "received" }).eq("id", doId); } catch { /* best-effort */ } }
+  }
 
   return { confirmed: true, shortfalls };
 }
