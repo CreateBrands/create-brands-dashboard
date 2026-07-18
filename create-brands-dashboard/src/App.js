@@ -13489,6 +13489,10 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   // ── DIRECT SUPPLIERS: per-store supplier resolution + checkout split ──
   const [supplierOverrides, setSupplierOverrides] = useState({});   // itemId -> vendorId|null
   const [portalVendors, setPortalVendors] = useState([]);           // vendor contacts (id, displayName)
+  // Checkout split is OPT-IN per order: by default the WHOLE cart goes through
+  // Distribution; the confirm dialog lets you tick which suppliers to split
+  // out this time. Reset every time the confirm dialog opens.
+  const [splitVendors, setSplitVendors] = useState([]);             // vendorIds opted in for this checkout
   const isManager = ["owner", "hq_staff", "manager"].includes(currentUser?.role);
   const reloadRound = async (sid) => {
     try { setRound(sid ? await fetchOpenOrderRound(sid) : null); } catch { setRound(null); }
@@ -13872,10 +13876,14 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
     try {
       // ── SPLIT BY SUPPLIER: Dist lines → normal sales order; each direct
       //    supplier gets its own order + incoming delivery. One cart, many rails.
-      const distCartLines = cartLines.filter(l => !resolveSupplier(l));
+      // Split is opt-in: an item leaves the Dist order only if its supplier
+      // was ticked at confirm. Default (nothing ticked) = one Dist order.
+      const goesDirect = (l) => { const vid = resolveSupplier(l); return vid && splitVendors.includes(vid) ? vid : null; };
+      const distCartLines = cartLines.filter(l => !goesDirect(l));
       const directGroups = {};
-      cartLines.filter(l => resolveSupplier(l)).forEach(l => {
-        const vid = resolveSupplier(l);
+      cartLines.forEach(l => {
+        const vid = goesDirect(l);
+        if (!vid) return;
         if (!directGroups[vid]) directGroups[vid] = { vendorName: vendorNameOf(vid), items: [] };
         directGroups[vid].items.push({ itemId: l.id, name: l.name, qty: l.qty });
       });
@@ -14286,7 +14294,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
             </div>
             <div className="px-4 py-3 space-y-2.5" style={{ borderTop: "1px solid #E8DCC6" }}>
               <div className="flex justify-between text-sm"><span style={{ color: "#9A8770" }}>Subtotal (excl. VAT)</span><span className="font-bold" style={{ color: "#C9854F" }}>{gbp(cartTotal)}</span></div>
-              <button onClick={() => setConfirmOpen(true)} disabled={!cartLines.length} className="w-full py-2.5 rounded-xl disabled:opacity-40 text-sm font-semibold" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>Review &amp; place order</button>
+              <button onClick={() => { setSplitVendors([]); setConfirmOpen(true); }} disabled={!cartLines.length} className="w-full py-2.5 rounded-xl disabled:opacity-40 text-sm font-semibold" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>Review &amp; place order</button>
             </div>
           </div>
         </div>
@@ -14315,7 +14323,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
               ))}
             </div>
             <div className="flex justify-between text-sm font-bold"><span className="text-white">Subtotal (excl. VAT)</span><span className="text-white">{gbp(cartTotal)}</span></div>
-            <button onClick={() => { setCartOpen(false); setConfirmOpen(true); }} disabled={!cartLines.length} className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold">Review &amp; place order</button>
+            <button onClick={() => { setCartOpen(false); setSplitVendors([]); setConfirmOpen(true); }} disabled={!cartLines.length} className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold">Review &amp; place order</button>
           </div>
         </Modal>
       )}
@@ -14329,18 +14337,32 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
               ))}
             </div>
             <div className="flex justify-between text-sm font-bold"><span className="text-white">Total (excl. VAT)</span><span className="text-white">{gbp(cartTotal)}</span></div>
-            {/* Supplier split preview: one cart, possibly several orders */}
+            {/* SUPPLIER SPLIT — OPT-IN: default = everything via Distribution.
+                Tick a supplier to carve their items out into a direct order
+                for THIS checkout only. */}
             {(() => {
               const direct = {};
               cartLines.forEach(l => { const vid = resolveSupplier(l); if (vid) { direct[vid] = direct[vid] || { n: 0 }; direct[vid].n += 1; } });
-              const distN = cartLines.filter(l => !resolveSupplier(l)).length;
               const vids = Object.keys(direct);
               if (!vids.length) return null;
+              const chosen = vids.filter(v => splitVendors.includes(v));
+              const distN = cartLines.length - chosen.reduce((s2, v) => s2 + direct[v].n, 0);
+              const total = (distN ? 1 : 0) + chosen.length;
               return (
-                <div className="rounded-xl bg-amber-950/15 border border-amber-700/40 px-3 py-2 text-xs text-slate-300">
-                  This will place <b>{(distN ? 1 : 0) + vids.length}</b> order{(distN ? 1 : 0) + vids.length !== 1 ? "s" : ""}:{" "}
-                  {distN > 0 && <>Distribution ({distN} item{distN!==1?"s":""})</>}
-                  {vids.map(v => <span key={v}>{distN > 0 || vids.indexOf(v) > 0 ? " · " : ""}{vendorNameOf(v)} ({direct[v].n} item{direct[v].n!==1?"s":""}, delivered direct)</span>)}
+                <div className="rounded-xl bg-amber-950/15 border border-amber-700/40 px-3 py-2 space-y-1.5">
+                  <div className="text-xs font-bold text-amber-300">Send parts of this order to their suppliers directly?</div>
+                  {vids.map(v => (
+                    <label key={v} className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                      <input type="checkbox" checked={splitVendors.includes(v)}
+                        onChange={e => setSplitVendors(sv => e.target.checked ? [...sv, v] : sv.filter(x => x !== v))}/>
+                      <span><b>{vendorNameOf(v)}</b> — {direct[v].n} item{direct[v].n!==1?"s":""}, delivered direct to the store</span>
+                    </label>
+                  ))}
+                  <div className="text-xs text-slate-400 pt-0.5 border-t border-amber-700/30">
+                    Placing <b>{total}</b> order{total !== 1 ? "s" : ""}: {distN > 0 && <>Distribution ({distN} item{distN!==1?"s":""})</>}
+                    {chosen.map(v => <span key={v}>{distN > 0 || chosen.indexOf(v) > 0 ? " · " : ""}{vendorNameOf(v)} ({direct[v].n})</span>)}
+                    {!chosen.length && <span className="text-slate-500"> — everything through Distribution (default)</span>}
+                  </div>
                 </div>
               );
             })()}
