@@ -4896,7 +4896,7 @@ function DistTypedItemsView({ itemType, currentUser }) {
   const combined = useMemo(() => {
     const m = new Map();
     for (const o of filtered) for (const l of o.lines) {
-      const cur = m.get(l.itemId) || { itemId: l.itemId, name: l.name, category: l.category, packUnit: l.packUnit, qty: 0, doneQty: 0, breakdown: [] };
+      const cur = m.get(l.itemId) || { itemId: l.itemId, name: l.name, category: l.category, packUnit: l.packUnit, packSize: l.packSize, packCount: l.packCount, qty: 0, doneQty: 0, breakdown: [] };
       cur.qty += Number(l.qty) || 0;
       if (l.done) cur.doneQty += Number(l.qty) || 0;
       cur.breakdown.push({ soNumber: o.soNumber, customerName: o.customerName, qty: l.qty, soId: o.soId, done: l.done });
@@ -4905,6 +4905,24 @@ function DistTypedItemsView({ itemType, currentUser }) {
     return Array.from(m.values()).map(c => ({ ...c, done: c.breakdown.every(b => b.done) }))
       .sort((a, b) => (a.done === b.done ? cleanName(a.name).localeCompare(cleanName(b.name)) : a.done ? 1 : -1));
   }, [filtered]);
+
+  // Order quantities are PACK counts — never render them with the measure unit
+  // ("20 g" for 20×400g packs was nonsense). Show packs × pack definition,
+  // with the true total where the pack is a weight/volume.
+  const fmtPackQty = (qty, l) => {
+    const q = Number(qty) || 0;
+    const size = Number(l?.packSize) || 0;
+    const unit = l?.packUnit || "";
+    if (!size || !unit || unit === "ea" || unit === "each" || unit === "unit") {
+      const per = Number(l?.packCount) || 0;
+      return per > 1 ? `${q} × ${per} = ${q * per}` : `${q}`;
+    }
+    const total = q * size;
+    const pretty = (unit === "g" && total >= 1000) ? `${(total / 1000).toFixed(total % 1000 ? 1 : 0)}kg`
+      : (unit === "ml" && total >= 1000) ? `${(total / 1000).toFixed(total % 1000 ? 1 : 0)}L`
+      : `${total}${unit}`;
+    return `${q} × ${size}${unit} (${pretty})`;
+  };
 
   const title = isFresh ? "Fresh produce to fulfil" : "Central Kitchen orders";
   const subtitle = isFresh
@@ -5048,7 +5066,7 @@ function DistTypedItemsView({ itemType, currentUser }) {
                       </span>
                     </button>
                     <div className="text-right flex-shrink-0">
-                      <div className="text-xl font-black leading-none" style={{ color: c.done ? WH.inkFaint : WH.accent }}>{c.qty}{c.packUnit ? <span className="text-xs font-semibold" style={{ color: WH.inkSoft }}> {c.packUnit}</span> : ""}</div>
+                      <div className="text-xl font-black leading-none" style={{ color: c.done ? WH.inkFaint : WH.accent }}>{fmtPackQty(c.qty, c)}</div>
                       <div className="text-[10px]" style={{ color: WH.inkFaint }}>total{isFresh ? " to buy" : " to make"}</div>
                     </div>
                   </div>
@@ -5059,7 +5077,7 @@ function DistTypedItemsView({ itemType, currentUser }) {
                           <div key={i} className="flex items-center gap-2 px-3 py-1.5 text-xs" style={{ background: WH.surface, borderTop: i ? `1px solid ${WH.lineSoft}` : "none" }}>
                             <CheckBox on={b.done} disabled={busy[`${b.soId}:${c.itemId}`]} onClick={() => toggleLine(b.soId, c.itemId, !b.done)}/>
                             <span className="flex-1" style={{ color: WH.inkSoft, textDecoration: b.done ? "line-through" : "none" }}><span className="font-mono font-semibold" style={{ color: WH.accent }}>{b.soNumber}</span> · {b.customerName}</span>
-                            <span className="font-bold" style={{ color: WH.ink }}>{b.qty}{c.packUnit ? ` ${c.packUnit}` : ""}</span>
+                            <span className="font-bold" style={{ color: WH.ink }}>{fmtPackQty(b.qty, c)}</span>
                           </div>
                         ))}
                       </div>
@@ -5094,7 +5112,7 @@ function DistTypedItemsView({ itemType, currentUser }) {
                       <div className="text-sm truncate" style={{ color: WH.ink, textDecoration: l.done ? "line-through" : "none" }}>{cleanName(l.name)}</div>
                       {l.category && <div className="text-[10px]" style={{ color: WH.inkFaint }}>{l.category}</div>}
                     </div>
-                    <div className="text-sm font-bold flex-shrink-0" style={{ color: l.done ? WH.inkFaint : WH.accent }}>{l.qty}{l.packUnit ? ` ${l.packUnit}` : ""}</div>
+                    <div className="text-sm font-bold flex-shrink-0" style={{ color: l.done ? WH.inkFaint : WH.accent }}>{fmtPackQty(l.qty, l)}</div>
                   </div>
                 ))}
               </div>

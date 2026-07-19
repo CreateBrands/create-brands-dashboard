@@ -14220,7 +14220,7 @@ export async function fetchDistOrdersByItemType(itemType, { includeDone = false 
       .filter(l => effType(itemById.get(l.itemId)) === itemType)
       .map(l => {
         const it = itemById.get(l.itemId);
-        return { itemId: l.itemId, name: it?.name || l.itemId, sku: it?.sku || "", category: it?.category || "", qty: l.qty, packUnit: it?.packUnit || "" };
+        return { itemId: l.itemId, name: it?.name || l.itemId, sku: it?.sku || "", category: it?.category || "", qty: l.qty, packUnit: it?.packUnit, packSize: it?.packSize != null ? Number(it.packSize) : null, packCount: it?.packCount != null ? Number(it.packCount) : null || "" };
       });
     if (!matchLines.length) continue; // order has none of this type — skip
     const withDone = matchLines.map(l => ({ ...l, done: checks.has(`${so.id}:${l.itemId}`) }));
