@@ -51897,6 +51897,15 @@ function BreaksAnalysisTab({ enriched = [], breakSplit, opsTeam = [], stores = [
 
   const shifts = rows.length;
   const autoRows = rows.filter(r => r.enforced);
+  // Two very different behaviours behind "auto-applied":
+  //   NONE  — no break punched at all; the full statutory minimum was enforced.
+  //   SHORT — a break WAS punched, but under the minimum; only the gap was topped up.
+  const enforcedNoneRows = autoRows.filter(r => (r.punched || 0) <= 0);
+  const enforcedShortRows = autoRows.filter(r => (r.punched || 0) > 0);
+  const noneMins = enforcedNoneRows.reduce((s2, r) => s2 + r.deducted, 0);
+  const shortTopupMins = enforcedShortRows.reduce((s2, r) => s2 + (r.deducted - (r.punched || 0)), 0);
+  const [drill, setDrill] = useState(null);   // which tile is expanded
+
   const punchedRows = rows.filter(r => r.punched > 0);
   const totalDeducted = rows.reduce((s,r)=>s+r.deducted,0);
   const totalPunched = rows.reduce((s,r)=>s+r.punched,0);
@@ -52023,10 +52032,12 @@ function BreaksAnalysisTab({ enriched = [], breakSplit, opsTeam = [], stores = [
     return bks;
   }, [rows]);
 
-  const Card = ({ label, value, sub, tone }) => {
+  const Card = ({ label, value, sub, tone, drillKey }) => {
+    const active = drillKey && drill === drillKey;
     const toneCls = tone==="amber" ? "bg-[#F6ECD8] border-[#E4C98F]" : tone==="green" ? "bg-[#E7EFDD] border-[#B9D0A3]" : tone==="red" ? "bg-[#F6E3DF] border-[#DDA69B]" : "bg-[#FBF6EC] border-[#E8DCC6]";
     return (
-      <div className={`rounded-2xl border px-4 py-3 ${toneCls}`}>
+      <div onClick={drillKey ? () => setDrill(d => d === drillKey ? null : drillKey) : undefined}
+        className={`rounded-2xl border px-4 py-3 ${toneCls} ` + (drillKey ? "cursor-pointer hover:shadow-md transition-shadow " : "") + (active ? "ring-2 ring-[#844429]" : "")}>
         <div className="text-[10px] uppercase tracking-wide text-[#8A7B68] font-bold">{label}</div>
         <div className="text-2xl font-black text-[#3A2E26] mt-0.5 tabular-nums leading-none">{value}</div>
         {sub && <div className="text-[11px] text-[#8A7B68] mt-1">{sub}</div>}
@@ -52046,14 +52057,15 @@ function BreaksAnalysisTab({ enriched = [], breakSplit, opsTeam = [], stores = [
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
-        <Card label="Breaks punched" value={punchedRows.length} sub={`${fmtM(totalPunched)} total`} tone="green"/>
-        <Card label="Auto-applied" value={autoRows.length} sub={`${autoPct}% of shifts · ${fmtM(totalAuto)}`} tone={autoRows.length?"amber":"neutral"}/>
-        <Card label="Total deducted" value={fmtM(totalDeducted)} sub="from paid hours"/>
+        <Card drillKey="punched" label="Breaks punched" value={punchedRows.length} sub={`${fmtM(totalPunched)} total`} tone="green"/>
+        <Card drillKey="none" label="No break punched" value={enforcedNoneRows.length} sub={`full minimum enforced · ${fmtM(noneMins)}`} tone={enforcedNoneRows.length ? "red" : "green"}/>
+        <Card drillKey="short" label="Under-punched" value={enforcedShortRows.length} sub={`topped up by ${fmtM(shortTopupMins)}`} tone={enforcedShortRows.length ? "amber" : "green"}/>
+        <Card drillKey="deducted" label="Total deducted" value={fmtM(totalDeducted)} sub="from paid hours"/>
         <Card label="Avg / shift" value={`${avgPerShift}m`} sub={`over ${shifts} shifts`}/>
-        <Card label="Shifts with break" value={`${withBreakPct}%`} sub={`${missed.length} without`} tone={missed.length?"neutral":"green"}/>
-        <Card label="Reclaim requests" value={claims.length} sub={`${claimsApproved} approved · ${claimsRejected} rejected${claimsPending ? ` · ${claimsPending} pending` : ""}`} tone={claimsPending ? "amber" : "neutral"}/>
-        <Card label="Manager adjusted" value={adjustedPunchIds.size} sub={`${audits.length} break edit${audits.length!==1?"s":""} logged`} tone={audits.length ? "amber" : "green"}/>
-        <Card label="Paid breaks" value={paidRows.length} sub={`${fmtM(paidMins)} paid, not deducted`} tone={paidRows.length ? "amber" : "neutral"}/>
+        <Card drillKey="without" label="Shifts with break" value={`${withBreakPct}%`} sub={`${missed.length} without`} tone={missed.length?"neutral":"green"}/>
+        <Card drillKey="claims" label="Reclaim requests" value={claims.length} sub={`${claimsApproved} approved · ${claimsRejected} rejected${claimsPending ? ` · ${claimsPending} pending` : ""}`} tone={claimsPending ? "amber" : "neutral"}/>
+        <Card drillKey="adjusted" label="Manager adjusted" value={adjustedPunchIds.size} sub={`${audits.length} break edit${audits.length!==1?"s":""} logged`} tone={audits.length ? "amber" : "green"}/>
+        <Card drillKey="paid" label="Paid breaks" value={paidRows.length} sub={`${fmtM(paidMins)} paid, not deducted`} tone={paidRows.length ? "amber" : "neutral"}/>
       </div>
 
       {/* Insights */}
@@ -52088,7 +52100,62 @@ function BreaksAnalysisTab({ enriched = [], breakSplit, opsTeam = [], stores = [
             </div>
           </AnalysisBlock>
         </div>
-        <AnalysisBlock title="Break lengths — 15-minute intervals">
+        {/* ── DRILL-DOWN: the shifts behind whichever tile was tapped ── */}
+      {drill && (() => {
+        const cfg = {
+          punched:  { title: "Shifts that punched a break", data: punchedRows },
+          none:     { title: "No break punched — full minimum enforced", data: enforcedNoneRows },
+          short:    { title: "Break punched but under the minimum — topped up", data: enforcedShortRows },
+          deducted: { title: "All shifts with break time deducted", data: rows.filter(r => r.deducted > 0) },
+          without:  { title: "Shifts 6h+ without an adequate break", data: missed },
+          paid:     { title: "Breaks marked PAID by a manager (not deducted)", data: paidRows },
+          claims:   { title: "Break reclaim requests", data: claims },
+          adjusted: { title: "Shifts whose break a manager edited", data: rows.filter(r => adjustedPunchIds.has(r.id)) },
+        }[drill];
+        if (!cfg) return null;
+        const list = [...cfg.data].sort((x, y) => (y.date || "").localeCompare(x.date || ""));
+        return (
+          <div className="rounded-2xl border overflow-hidden" style={{ background: "#FDF8EF", borderColor: "#844429" }}>
+            <div className="flex items-center justify-between px-4 py-2.5" style={{ background: "#F6ECD8", borderBottom: "1px solid #E8DCC6" }}>
+              <div className="text-sm font-bold" style={{ color: "#3A2E26" }}>{cfg.title} · {list.length}</div>
+              <button onClick={() => setDrill(null)} className="text-xs font-bold px-2.5 py-1 rounded-lg" style={{ background: "#844429", color: "#FDF2E0" }}>Close</button>
+            </div>
+            {list.length === 0 ? <div className="text-xs py-6 text-center" style={{ color: "#8A7B68" }}>Nothing in this category for the selected period.</div> : (
+              <div className="overflow-x-auto max-h-96 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead><tr style={{ color: "#8A7B68" }}>
+                    <th className="text-left px-3 py-2">Employee</th><th className="text-left px-3 py-2">Store</th><th className="text-left px-3 py-2">Date</th>
+                    <th className="text-right px-3 py-2">Worked</th><th className="text-right px-3 py-2">Punched</th><th className="text-right px-3 py-2">Required</th>
+                    <th className="text-right px-3 py-2">Deducted</th><th className="text-left px-3 py-2">Flags</th>
+                  </tr></thead>
+                  <tbody>
+                    {list.map(r => (
+                      <tr key={r.id} style={{ borderTop: "1px solid #EFE6D4", color: "#3A2E26" }}>
+                        <td className="px-3 py-1.5 font-semibold">{r.name}</td>
+                        <td className="px-3 py-1.5" style={{ color: "#8A7B68" }}>{storeName ? storeName(r.storeId) : r.storeId}</td>
+                        <td className="px-3 py-1.5 tabular-nums">{r.date}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{(r.worked || 0).toFixed(1)}h</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{fmtM(r.punched || 0)}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums">{fmtM(r.required || 0)}</td>
+                        <td className="px-3 py-1.5 text-right tabular-nums font-bold">{r.paid ? "0m (paid)" : fmtM(r.deducted || 0)}</td>
+                        <td className="px-3 py-1.5">
+                          {r.enforced && (r.punched || 0) <= 0 && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold" style={{ background: "#F6E3DF", color: "#B3261E" }}>NO BREAK</span>}
+                          {r.enforced && (r.punched || 0) > 0 && <span className="px-1.5 py-0.5 rounded text-[9px] font-bold" style={{ background: "#F6ECD8", color: "#B45309" }}>TOP-UP</span>}
+                          {r.paid && <span className="ml-1 px-1.5 py-0.5 rounded text-[9px] font-bold" style={{ background: "#E7EFDD", color: "#3F6B3A" }}>PAID</span>}
+                          {adjustedPunchIds.has(r.id) && <span className="ml-1 px-1.5 py-0.5 rounded text-[9px] font-bold" style={{ background: "#EDE7F6", color: "#5E35B1" }}>MGR EDIT</span>}
+                          {r.claimReason && <span className="ml-1 px-1.5 py-0.5 rounded text-[9px] font-bold" style={{ background: "#FFF6E8", color: "#B45309" }}>CLAIM</span>}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      <AnalysisBlock title="Break lengths — 15-minute intervals">
         <div className="text-[11px] mb-2" style={{ color: "#8A7B68" }}>Statutory minimums come in 15-minute steps: over 4h → 15m · 6–10h → 30m · over 10h → 45m. This shows what was actually punched.</div>
         <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
           {intervalBuckets.map(bk => (
