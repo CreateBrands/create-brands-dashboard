@@ -385,7 +385,7 @@ const FEATURE_REGISTRY = [
   { key: "feat.cogs.reconcile",  label: "COGS · Reconcile",         section: "cogs", defaultRoles: ["owner","hq_staff"] },
   { key: "feat.cogs.tillaudit",  label: "COGS · Till Audit",        section: "cogs", defaultRoles: ["owner","hq_staff"] },
   { key: "feat.cogs.modmapper",  label: "COGS · Modifier Mapper",   section: "cogs", defaultRoles: ["owner","hq_staff"] },
-  { key: "feat.cogs.actualcogs", label: "COGS · Stock & Actual COGS",section: "cogs", defaultRoles: ["owner","hq_staff"] },
+  { key: "feat.cogs.actualcogs", label: "COGS · Stock & Actual COGS",section: "cogs", defaultRoles: ["owner","hq_staff","manager"] },
   // Accounts / Finance
   { key: "feat.accounts.pnl",       label: "View P&L",            section: "accounts", defaultRoles: ["owner","hq_staff"] },
   { key: "feat.accounts.bank",      label: "Bank & Cash",         section: "accounts", defaultRoles: ["owner","hq_staff"] },
@@ -17328,8 +17328,15 @@ function OrderInspector({ stores = [] }) {
 }
 
 function ActualCogs({ stores = [], initialSub, hideTabs, currentUser }) {
+  // MANAGER SCOPE: store managers run counts, receive purchases, and maintain
+  // their store's inventory settings — the analytical tabs (variance, item
+  // variance, price changes) stay HQ-side. Their store list is their own.
+  const isMgrScoped = currentUser?.role === "manager";
+  const MGR_TABS = ["counts", "purchases", "settings"];
+  const mgrStoreIds = isMgrScoped && Array.isArray(currentUser?.storeIds) ? currentUser.storeIds : null;
   const activeStores = (stores || []).filter(s => !s.archivedAt && s.id !== "store-system-non-trading" && isShopSite(s));
-  const [storeId, setStoreId] = useState(activeStores[0]?.id || null);
+  const scopedStores = (mgrStoreIds && mgrStoreIds.length) ? activeStores.filter(s => mgrStoreIds.includes(s.id)) : activeStores;
+  const [storeId, setStoreId] = useState(scopedStores[0]?.id || null);
   const [sub, setSub] = useState(initialSub || "counts"); // counts | purchases | variance | settings | pricechanges
   const money = (n) => n==null ? "—" : `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
 
@@ -17338,11 +17345,11 @@ function ActualCogs({ stores = [], initialSub, hideTabs, currentUser }) {
       <div className="flex flex-wrap items-end gap-3">
         <div><label className="block text-[11px] text-slate-500 mb-1">Store</label>
           <select value={storeId||""} onChange={e=>setStoreId(e.target.value)} className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white">
-            {activeStores.map(s=><option key={s.id} value={s.id}>{s.shortName||s.name}</option>)}
+            {scopedStores.map(s=><option key={s.id} value={s.id}>{s.shortName||s.name}</option>)}
           </select></div>
         {!hideTabs && (
         <div className="flex items-center gap-1 bg-slate-900 border border-slate-700 rounded-xl p-1">
-          {[["counts","Stock Counts"],["purchases","Purchases"],["variance","Variance vs Theoretical"],["itemvar","Item Variance"],["settings","Store Inventory Settings"],["pricechanges","Price Changes"]].map(([k,l])=>(
+          {[["counts","Stock Counts"],["purchases","Purchases"],["variance","Variance vs Theoretical"],["itemvar","Item Variance"],["settings","Store Inventory Settings"],["pricechanges","Price Changes"]].filter(([k]) => !isMgrScoped || MGR_TABS.includes(k)).map(([k,l])=>(
             <button key={k} onClick={()=>setSub(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${sub===k?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>{l}</button>
           ))}
         </div>
@@ -59468,6 +59475,10 @@ export default function App() {
         return true; // no config → visible (no regression)
       }
     }
+    // "cogs" has no nav entry of its own — access follows the COGS features:
+    // anyone granted at least one COGS feature (e.g. managers' default
+    // Stock & Actual COGS) can enter the area; the feature matrix stays boss.
+    if (viewKey === "cogs") return FEATURE_REGISTRY.some(f => f.section === "cogs" && canFeature(f.key));
     return false;
   };
   const NAV_GROUPS = NAV_GROUPS_RAW
@@ -59748,6 +59759,7 @@ export default function App() {
               const isHqOrOwner = isOwner || currentUser.role === "hq_staff";
               const gOps = () => true;                  // Ops Setup leaves: no extra gate
               const gCogs = () => canSeeView("cogs");   // COGS leaves
+              const gCogsHq = () => isHqOrOwner;        // COGS analytics (variance etc.) stay HQ-side
               const gOwner = () => isOwner;             // Admin + Access Control
               const gHq = () => isHqOrOwner;            // Payslip
               // Themed grouping of LEAF items across panels. Each item key is
@@ -59810,10 +59822,10 @@ export default function App() {
                   items: [
                     { key: "cogs:actualcogs:counts", label: "Stock Counts", desc: "Weekly stock counts per store.", gate: gCogs },
                     { key: "cogs:actualcogs:purchases", label: "Purchases", desc: "Purchase records feeding actual COGS.", gate: gCogs },
-                    { key: "cogs:actualcogs:variance", label: "Variance vs Theoretical", desc: "Actual vs recipe-based COGS gap.", gate: gCogs },
-                    { key: "cogs:actualcogs:itemvar", label: "Item Variance", desc: "Per-item counted vs expected stock (which items are short).", gate: gCogs },
+                    { key: "cogs:actualcogs:variance", label: "Variance vs Theoretical", desc: "Actual vs recipe-based COGS gap.", gate: gCogsHq },
+                    { key: "cogs:actualcogs:itemvar", label: "Item Variance", desc: "Per-item counted vs expected stock (which items are short).", gate: gCogsHq },
                     { key: "cogs:actualcogs:settings", label: "Store Inventory Settings", desc: "Per-store inventory configuration.", gate: gCogs },
-                    { key: "cogs:actualcogs:pricechanges", label: "Price Changes", desc: "Ingredient price change history.", gate: gCogs },
+                    { key: "cogs:actualcogs:pricechanges", label: "Price Changes", desc: "Ingredient price change history.", gate: gCogsHq },
                   ].filter(i => i.gate()),
                 },
                 {
