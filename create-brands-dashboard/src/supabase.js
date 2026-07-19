@@ -14240,10 +14240,20 @@ export async function setFreshClaim(soId, user) {
   return true;
 }
 
+// Ticking must never fail because of WHO ticked: if the write is rejected
+// (e.g. a constraint on done_by that driver-app ids don't satisfy), retry
+// once without attribution — the tick is the business fact, the name is nice-to-have.
+async function upsertFulfilRows(rows) {
+  let { error } = await supabase.from("dist_fulfil_checks").upsert(rows, { onConflict: "so_id,item_id" });
+  if (error) {
+    ({ error } = await supabase.from("dist_fulfil_checks").upsert(rows.map(r => ({ ...r, done_by: null })), { onConflict: "so_id,item_id" }));
+  }
+  if (error) throw error;
+}
+
 export async function setDistFulfilCheck(soId, itemId, done, userId) {
   if (done) {
-    const { error } = await supabase.from("dist_fulfil_checks").upsert({ so_id: soId, item_id: itemId, done_by: userId || null, done_at: new Date().toISOString() });
-    if (error) throw error;
+    await upsertFulfilRows([{ so_id: soId, item_id: itemId, done_by: userId || null, done_at: new Date().toISOString() }]);
   } else {
     const { error } = await supabase.from("dist_fulfil_checks").delete().eq("so_id", soId).eq("item_id", itemId);
     if (error) throw error;
@@ -14253,9 +14263,7 @@ export async function setDistFulfilCheck(soId, itemId, done, userId) {
 export async function setDistFulfilOrderChecks(soId, itemIds = [], done, userId) {
   if (!itemIds.length) return;
   if (done) {
-    const rows = itemIds.map(itemId => ({ so_id: soId, item_id: itemId, done_by: userId || null, done_at: new Date().toISOString() }));
-    const { error } = await supabase.from("dist_fulfil_checks").upsert(rows);
-    if (error) throw error;
+    await upsertFulfilRows(itemIds.map(itemId => ({ so_id: soId, item_id: itemId, done_by: userId || null, done_at: new Date().toISOString() })));
   } else {
     const { error } = await supabase.from("dist_fulfil_checks").delete().eq("so_id", soId).in("item_id", itemIds);
     if (error) throw error;
@@ -14266,8 +14274,7 @@ export async function setDistFulfilItemChecks(itemId, soIds = [], done, userId) 
   if (!soIds.length) return;
   if (done) {
     const rows = soIds.map(soId => ({ so_id: soId, item_id: itemId, done_by: userId || null, done_at: new Date().toISOString() }));
-    const { error } = await supabase.from("dist_fulfil_checks").upsert(rows);
-    if (error) throw error;
+    await upsertFulfilRows(rows);
   } else {
     const { error } = await supabase.from("dist_fulfil_checks").delete().eq("item_id", itemId).in("so_id", soIds);
     if (error) throw error;
