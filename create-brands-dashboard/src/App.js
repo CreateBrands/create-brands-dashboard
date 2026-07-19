@@ -32236,14 +32236,17 @@ function shiftRoleNamesToday(schedules, member, storeId, dateStr) {
     .map(s => String(s.role));
 }
 
-function isActiveToday(a) {
-  const f = a.freq, d = new Date().getDay();
+// Schedule check for a GIVEN day (defaults to today). Date-browsing views must
+// pass their selected date, or a past Tuesday would show today's schedule.
+function isActiveToday(a, dateStr) {
+  const ref = dateStr ? new Date(dateStr + "T12:00:00") : new Date();
+  const f = a.freq, d = ref.getDay();
   const days = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
   if (f === "daily") return true;
   if (f === "weekdays") return d >= 1 && d <= 5;
   if (f === "weekends") return d === 0 || d === 6;
   if (f === "weekly") return a.weekday === days[d];
-  if (f === "once") return a.date === getTodayStr();
+  if (f === "once") return a.date === (dateStr || getTodayStr());
   if (f === "custom") return (a.customDays || []).includes(days[d]);
   return true;
 }
@@ -32819,9 +32822,9 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
   // active assignments using the authoritative per-assignment sign-off state,
   // so done <= la always, overdue excludes completed, and rate is consistent.
   const rowFor = (store) => {
-    const direct = assignments.filter(a => a.storeId === store.id && isActiveToday(a));
+    const direct = assignments.filter(a => a.storeId === store.id && isActiveToday(a, todayStr));
     const brandStoresInScope = sortedStores.filter(s => s.brandId === store.brandId);
-    const legacyBrand = assignments.filter(a => !a.storeId && a.brandId === store.brandId && isActiveToday(a));
+    const legacyBrand = assignments.filter(a => !a.storeId && a.brandId === store.brandId && isActiveToday(a, todayStr));
     const legacyShare = brandStoresInScope.length > 0 ? legacyBrand.length / brandStoresInScope.length : 0;
 
     const la = direct.length + Math.round(legacyShare);
@@ -32874,7 +32877,7 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
   };
   // Active assignments for a store (direct + this store's slice of legacy brand rows).
   const activeForStore = (store) => assignments.filter(a =>
-    isActiveToday(a) && (a.storeId === store.id || (!a.storeId && a.brandId === store.brandId)));
+    isActiveToday(a, todayStr) && (a.storeId === store.id || (!a.storeId && a.brandId === store.brandId)));
   // Build a drill for a given store + metric ("scheduled"|"overdue"|"done"|"rate"|"all").
   const openDrill = (store, metric) => {
     let list = activeForStore(store);
@@ -33027,14 +33030,38 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
 function OpsDateBar({ value, onChange, right }) {
   const today = getTodayStr();
   const shift = (d) => { const x = new Date(value + "T12:00:00"); x.setDate(x.getDate() + d); const s = x.toISOString().split("T")[0]; if (s <= today) onChange(s); };
+  // Last 14 days as tappable pills (data window is 30 days; older via the calendar).
+  const pills = [];
+  for (let i = 13; i >= 0; i--) {
+    const x = new Date(); x.setDate(x.getDate() - i);
+    pills.push(x.toISOString().split("T")[0]);
+  }
+  const C = { ink: "#3A2E26", faint: "#8A7B68", line: "#E8DCC6", card: "#FDF8EF", accent: "#844429", soft: "#F3EADA" };
+  const lbl = (s, fmt) => new Date(s + "T12:00:00").toLocaleDateString("en-GB", fmt);
   return (
-    <div className="flex items-center gap-2 flex-wrap">
-      <button onClick={() => shift(-1)} className="w-8 h-8 rounded-lg bg-slate-800 text-slate-300 hover:text-white font-bold">‹</button>
-      <input type="date" value={value} max={today} onChange={e => e.target.value && onChange(e.target.value)}
-        className="px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/>
-      <button onClick={() => shift(1)} disabled={value >= today} className="w-8 h-8 rounded-lg bg-slate-800 text-slate-300 hover:text-white font-bold disabled:opacity-30">›</button>
-      {value !== today && <button onClick={() => onChange(today)} className="px-2.5 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-bold">Today</button>}
-      {value !== today && <span className="text-[11px] px-2 py-1 rounded-lg bg-amber-500/15 text-amber-300 font-semibold">Viewing {new Date(value + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })} — read-only history</span>}
+    <div className="rounded-2xl px-3 py-2.5 space-y-2" style={{ background: C.card, border: `1px solid ${C.line}` }}>
+      <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5" style={{ scrollbarWidth: "thin" }}>
+        <button onClick={() => shift(-1)} className="w-8 h-9 rounded-lg font-bold flex-shrink-0" style={{ background: C.soft, color: C.ink }}>‹</button>
+        {pills.map(p => {
+          const sel = p === value;
+          return (
+            <button key={p} onClick={() => onChange(p)} className="px-2.5 py-1 rounded-lg flex-shrink-0 text-center leading-tight"
+              style={{ background: sel ? C.accent : C.soft, color: sel ? "#FDF2E0" : C.ink, border: `1px solid ${sel ? C.accent : C.line}` }}>
+              <div className="text-[9px] font-bold uppercase" style={{ color: sel ? "#E8C9A8" : C.faint }}>{p === today ? "Today" : lbl(p, { weekday: "short" })}</div>
+              <div className="text-xs font-black tabular-nums">{lbl(p, { day: "numeric", month: "short" })}</div>
+            </button>
+          );
+        })}
+        <button onClick={() => shift(1)} disabled={value >= today} className="w-8 h-9 rounded-lg font-bold flex-shrink-0 disabled:opacity-30" style={{ background: C.soft, color: C.ink }}>›</button>
+        <input type="date" value={value} max={today} onChange={e => e.target.value && onChange(e.target.value)}
+          className="px-2 py-1.5 rounded-lg text-xs flex-shrink-0" style={{ background: "#FFFFFF", border: `1px solid ${C.line}`, color: C.ink }} title="Jump to any date (data reaches back 30 days)"/>
+        {value !== today && <button onClick={() => onChange(today)} className="px-3 py-1.5 rounded-lg text-xs font-bold flex-shrink-0" style={{ background: C.accent, color: "#FDF2E0" }}>Back to today</button>}
+      </div>
+      {value !== today && (
+        <div className="text-[11px] font-semibold px-2 py-1 rounded-lg inline-block" style={{ background: "#FFF6E8", color: "#B45309", border: "1px solid #E0A664" }}>
+          Viewing {lbl(value, { weekday: "long", day: "numeric", month: "long" })} — historical, read-only
+        </div>
+      )}
       {right}
     </div>
   );
@@ -33147,7 +33174,7 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
     return true;                          // no one on shift here → don't hide the tasks
   };
 
-  const bAssigns = (assignments || []).filter(a => inScope(a) && isActiveToday(a) && targetedAtMe(a) && onShiftGate(a));
+  const bAssigns = (assignments || []).filter(a => inScope(a) && isActiveToday(a, viewDate) && targetedAtMe(a) && onShiftGate(a));
   const overdue = bAssigns.filter(isOverdue);
 
   const getTaskName = (type, taskId) => {
