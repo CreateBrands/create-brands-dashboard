@@ -13542,7 +13542,7 @@ function StockDetailModal({ storeId, storeName, item, usage, usageDays, cleanNam
                   <span className="font-bold" style={{ color: "#3A2E26" }}>{storeName || storeId}</span>
                   {" used "}
                   <span className="font-bold tabular-nums" style={{ color: "#3A2E26" }}>{headline(usage.qtyBaseUnit).num} {headline(usage.qtyBaseUnit).word}</span>
-                  {` in the last ${usageDays} days, based on till sales.`}
+                  {` in the last ${usageDays} days, based on sales across all channels (till, web, Uber Eats, Deliveroo, Just Eat).`}
                 </div>
               ) : (
                 <div className="rounded-lg px-3 py-2 text-[12px]" style={{ backgroundColor: "#F3EADA", border: "1px solid #E8DCC6", color: "#9A8770" }}>
