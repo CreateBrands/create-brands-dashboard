@@ -183,7 +183,7 @@ import {
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
-  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim,
+  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
 } from "./supabase";
@@ -51886,6 +51886,10 @@ function BreaksAnalysisTab({ enriched = [], breakSplit, opsTeam = [], stores = [
       worked: bs.workedHours || 0,
       deducted: bs.breakMins || 0,
       enforced: !!bs.breakEnforced,
+      paid: !!r.breakPaid,
+      claimReason: r.breakClaimReason || "",
+      claimApproved: r.breakClaimApproved,     // true | false | null (pending)
+      claimDecidedBy: r.breakClaimDecidedBy || "",
       required: bs.requiredBreakMins || 0,
       punched: bs.punchedBreakMins || 0,
     };
@@ -51984,6 +51988,41 @@ function BreaksAnalysisTab({ enriched = [], breakSplit, opsTeam = [], stores = [
     </th>
   );
 
+  // ── Manager adjustments (punch_audit, break fields only) + claims + paid ──
+  const [audits, setAudits] = useState([]);
+  useEffect(() => {
+    const fromIso = from ? new Date(from + "T00:00:00").toISOString() : null;
+    const toIso = to ? new Date(to + "T23:59:59").toISOString() : null;
+    fetchBreakAudits({ fromIso, toIso }).then(setAudits).catch(() => setAudits([]));
+  }, [from, to]);
+  const adjustedPunchIds = useMemo(() => new Set(audits.map(x => x.punchId)), [audits]);
+  const rowById = useMemo(() => { const m = {}; rows.forEach(r => { m[r.id] = r; }); return m; }, [rows]);
+
+  const paidRows = rows.filter(r => r.paid);
+  const paidMins = paidRows.reduce((s2, r) => s2 + r.deducted, 0);
+  const claims = rows.filter(r => r.claimReason || r.claimApproved != null);
+  const claimsApproved = claims.filter(r => r.claimApproved === true).length;
+  const claimsRejected = claims.filter(r => r.claimApproved === false).length;
+  const claimsPending = claims.filter(r => r.claimApproved == null && r.claimReason).length;
+
+  // 15-minute interval distribution of PUNCHED break lengths
+  const intervalBuckets = useMemo(() => {
+    const bks = [
+      { k: "0", label: "No break", n: 0 },
+      { k: "15", label: "1–15m", n: 0 },
+      { k: "30", label: "16–30m", n: 0 },
+      { k: "45", label: "31–45m", n: 0 },
+      { k: "60", label: "46–60m", n: 0 },
+      { k: "60+", label: "Over 60m", n: 0 },
+    ];
+    rows.forEach(r => {
+      const p = r.punched || 0;
+      if (p <= 0) bks[0].n++; else if (p <= 15) bks[1].n++; else if (p <= 30) bks[2].n++;
+      else if (p <= 45) bks[3].n++; else if (p <= 60) bks[4].n++; else bks[5].n++;
+    });
+    return bks;
+  }, [rows]);
+
   const Card = ({ label, value, sub, tone }) => {
     const toneCls = tone==="amber" ? "bg-[#F6ECD8] border-[#E4C98F]" : tone==="green" ? "bg-[#E7EFDD] border-[#B9D0A3]" : tone==="red" ? "bg-[#F6E3DF] border-[#DDA69B]" : "bg-[#FBF6EC] border-[#E8DCC6]";
     return (
@@ -52006,12 +52045,15 @@ function BreaksAnalysisTab({ enriched = [], breakSplit, opsTeam = [], stores = [
       <div className="text-[11px] text-[#8A7B68]">{from === to ? from : `${from} → ${to}`}{periodStoreId ? ` · ${storeName(periodStoreId)}` : " · all stores"} · {shifts} shift{shifts===1?"":"s"} analysed</div>
 
       {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
         <Card label="Breaks punched" value={punchedRows.length} sub={`${fmtM(totalPunched)} total`} tone="green"/>
         <Card label="Auto-applied" value={autoRows.length} sub={`${autoPct}% of shifts · ${fmtM(totalAuto)}`} tone={autoRows.length?"amber":"neutral"}/>
         <Card label="Total deducted" value={fmtM(totalDeducted)} sub="from paid hours"/>
         <Card label="Avg / shift" value={`${avgPerShift}m`} sub={`over ${shifts} shifts`}/>
         <Card label="Shifts with break" value={`${withBreakPct}%`} sub={`${missed.length} without`} tone={missed.length?"neutral":"green"}/>
+        <Card label="Reclaim requests" value={claims.length} sub={`${claimsApproved} approved · ${claimsRejected} rejected${claimsPending ? ` · ${claimsPending} pending` : ""}`} tone={claimsPending ? "amber" : "neutral"}/>
+        <Card label="Manager adjusted" value={adjustedPunchIds.size} sub={`${audits.length} break edit${audits.length!==1?"s":""} logged`} tone={audits.length ? "amber" : "green"}/>
+        <Card label="Paid breaks" value={paidRows.length} sub={`${fmtM(paidMins)} paid, not deducted`} tone={paidRows.length ? "amber" : "neutral"}/>
       </div>
 
       {/* Insights */}
@@ -52046,7 +52088,62 @@ function BreaksAnalysisTab({ enriched = [], breakSplit, opsTeam = [], stores = [
             </div>
           </AnalysisBlock>
         </div>
-        <AnalysisBlock title="Break source">
+        <AnalysisBlock title="Break lengths — 15-minute intervals">
+        <div className="text-[11px] mb-2" style={{ color: "#8A7B68" }}>Statutory minimums come in 15-minute steps: over 4h → 15m · 6–10h → 30m · over 10h → 45m. This shows what was actually punched.</div>
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+          {intervalBuckets.map(bk => (
+            <div key={bk.k} className="rounded-xl p-2.5 text-center" style={{ background: "#FDF8EF", border: "1px solid #E8DCC6" }}>
+              <div className="text-lg font-black tabular-nums" style={{ color: "#3A2E26" }}>{bk.n}</div>
+              <div className="text-[10px] font-bold" style={{ color: "#8A7B68" }}>{bk.label}</div>
+            </div>
+          ))}
+        </div>
+      </AnalysisBlock>
+
+      <AnalysisBlock title={`Manager break adjustments (${audits.length})`}>
+        {audits.length === 0 ? <div className="text-xs py-4 text-center" style={{ color: "#8A7B68" }}>No break fields were edited by managers in this period.</div> : (
+          <div className="space-y-1.5 max-h-72 overflow-y-auto">
+            {audits.map(x => {
+              const r = rowById[x.punchId];
+              const fieldLabel = { break_minutes: "Break minutes", break_paid: "Paid flag", break_start: "Break start", break_end: "Break end" }[x.field] || x.field;
+              return (
+                <div key={x.id} className="flex items-center justify-between gap-2 text-xs rounded-lg px-2.5 py-1.5" style={{ background: "#FFF6E8", border: "1px solid #E0A664" }}>
+                  <div className="min-w-0">
+                    <span className="font-bold" style={{ color: "#3A2E26" }}>{r ? r.name : "(shift outside range)"}</span>
+                    <span style={{ color: "#8A7B68" }}> {r ? `· ${r.date}` : ""} · {fieldLabel}: </span>
+                    <span style={{ color: "#B45309" }}>{x.oldValue ?? "—"} → <b>{x.newValue ?? "—"}</b></span>
+                  </div>
+                  <div className="flex-shrink-0 text-right" style={{ color: "#8A7B68" }}>{x.changedBy}<div className="text-[10px]">{x.changedAt ? new Date(x.changedAt).toLocaleDateString("en-GB") : ""}</div></div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </AnalysisBlock>
+
+      <AnalysisBlock title={`Break reclaim requests (${claims.length})`}>
+        {claims.length === 0 ? <div className="text-xs py-4 text-center" style={{ color: "#8A7B68" }}>No reclaim requests in this period.</div> : (
+          <div className="space-y-1.5 max-h-72 overflow-y-auto">
+            {claims.map(r => (
+              <div key={r.id} className="flex items-center justify-between gap-2 text-xs rounded-lg px-2.5 py-1.5" style={{ background: "#FDF8EF", border: "1px solid #E8DCC6" }}>
+                <div className="min-w-0">
+                  <span className="font-bold" style={{ color: "#3A2E26" }}>{r.name}</span>
+                  <span style={{ color: "#8A7B68" }}> · {r.date} · {fmtM(r.punched || 0)} punched</span>
+                  {r.claimReason && <div className="text-[11px] truncate" style={{ color: "#8A7B68" }}>“{r.claimReason}”</div>}
+                </div>
+                <div className="flex-shrink-0 text-right">
+                  <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold" style={r.claimApproved === true ? { background: "#EAF3E7", color: "#3F6B3A" } : r.claimApproved === false ? { background: "#FBEAEA", color: "#B3261E" } : { background: "#FFF6E8", color: "#B45309" }}>
+                    {r.claimApproved === true ? "APPROVED" : r.claimApproved === false ? "REJECTED" : "PENDING"}
+                  </span>
+                  {r.claimDecidedBy && <div className="text-[10px] mt-0.5" style={{ color: "#8A7B68" }}>{r.claimDecidedBy}</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </AnalysisBlock>
+
+      <AnalysisBlock title="Break source">
           <div className="px-3 pb-3 pt-1 flex flex-col items-center" style={{height:240}}>
             <ResponsiveContainer width="100%" height="80%">
               <PieChart>

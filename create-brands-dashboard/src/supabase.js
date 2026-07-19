@@ -1389,6 +1389,21 @@ export async function logPunchAudit(entries) {
   const { error } = await supabase.from("punch_audit").insert(rows);
   if (error) console.error("punch_audit insert failed:", error.message);
 }
+// All manager BREAK adjustments in a date window — feeds the Breaks analysis.
+export async function fetchBreakAudits({ fromIso, toIso } = {}) {
+  let q = supabase.from("punch_audit").select("*")
+    .in("field", ["break_minutes", "break_paid", "break_start", "break_end"])
+    .order("changed_at", { ascending: false }).limit(500);
+  if (fromIso) q = q.gte("changed_at", fromIso);
+  if (toIso) q = q.lte("changed_at", toIso);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(r => ({
+    id: r.id, punchId: r.punch_id, field: r.field, oldValue: r.old_value,
+    newValue: r.new_value, reason: r.reason, changedBy: r.changed_by, changedAt: r.changed_at,
+  }));
+}
+
 export async function fetchPunchAudit(punchId) {
   const { data, error } = await supabase.from("punch_audit")
     .select("*").eq("punch_id", punchId).order("changed_at", { ascending: false });
