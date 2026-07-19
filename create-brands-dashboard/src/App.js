@@ -8031,7 +8031,7 @@ function DistVendorsView({ currentUser, stores = [] }) {
           {filtered.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">No vendors yet. Add suppliers (and the Central Kitchen) here.</div> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40"><tr><th className="text-left px-4 py-2.5 font-semibold">Name</th><th className="text-left px-4 py-2.5 font-semibold">Company</th><th className="text-left px-4 py-2.5 font-semibold">Email</th><th className="text-left px-4 py-2.5 font-semibold">Phone</th><th className="px-2 py-2.5 w-10"></th></tr></thead>
+                <thead className="dist-th"><tr><th className="text-left px-4 py-2.5 font-semibold">Name</th><th className="text-left px-4 py-2.5 font-semibold">Company</th><th className="text-left px-4 py-2.5 font-semibold">Email</th><th className="text-left px-4 py-2.5 font-semibold">Phone</th><th className="px-2 py-2.5 w-10"></th></tr></thead>
                 <tbody>{filtered.map(v => (
                   <tr key={v.id} onClick={() => setDetail(v)} className="border-t border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
                     <td className="px-4 py-2.5"><span className="text-indigo-300 font-medium hover:underline">{v.displayName}</span>{v.isCentralKitchen && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-amber-500 text-amber-950">CENTRAL KITCHEN</span>}{v.visibleToStores && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-emerald-600 text-white">STORE-VISIBLE</span>}</td>
@@ -8136,7 +8136,7 @@ function DistPOView({ currentUser }) {
           {visiblePos.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">{pos.length === 0 ? "No purchase orders yet." : "No purchase orders match your search/filter."}</div> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40"><tr><th className="text-left px-4 py-2.5 font-semibold">Date</th><th className="text-left px-4 py-2.5 font-semibold">PO#</th><th className="text-left px-4 py-2.5 font-semibold">Vendor</th><th className="text-left px-4 py-2.5 font-semibold">Status</th><th className="text-right px-4 py-2.5 font-semibold">Amount</th><th className="px-2 py-2.5 w-10"></th></tr></thead>
+                <thead className="dist-th"><tr><th className="text-left px-4 py-2.5 font-semibold">Date</th><th className="text-left px-4 py-2.5 font-semibold">PO#</th><th className="text-left px-4 py-2.5 font-semibold">Vendor</th><th className="text-left px-4 py-2.5 font-semibold">Status</th><th className="text-right px-4 py-2.5 font-semibold">Amount</th><th className="px-2 py-2.5 w-10"></th></tr></thead>
                 <tbody>{visiblePos.map(po => { const t = distComputeTotals(po.lines, taxRates, po.vatMode, po.discountPercent, po.discountType); return (
                   <tr key={po.id} onClick={() => setDetailId(po.id)} className="border-t border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
                     <td className="px-4 py-2.5 text-slate-400 whitespace-nowrap">{po.orderDate}</td>
@@ -8248,7 +8248,7 @@ function DistGRNView({ currentUser, pendingConvert, setPendingConvert }) {
           {grns.filter(g => !(g.status === "draft" && !g.posted)).length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">No posted receipts yet. This is the event that raises stock.</div> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40"><tr><th className="text-left px-4 py-2.5 font-semibold">Date</th><th className="text-left px-4 py-2.5 font-semibold">GRN#</th><th className="text-left px-4 py-2.5 font-semibold">Vendor</th><th className="text-right px-4 py-2.5 font-semibold">Lines</th><th className="text-left px-4 py-2.5 font-semibold pl-6">Status</th></tr></thead>
+                <thead className="dist-th"><tr><th className="text-left px-4 py-2.5 font-semibold">Date</th><th className="text-left px-4 py-2.5 font-semibold">GRN#</th><th className="text-left px-4 py-2.5 font-semibold">Vendor</th><th className="text-right px-4 py-2.5 font-semibold">Lines</th><th className="text-left px-4 py-2.5 font-semibold pl-6">Status</th></tr></thead>
                 <tbody>{grns.filter(g => !(g.status === "draft" && !g.posted)).map(g => (
                   <tr key={g.id} onClick={() => setDetailId(g.id)} className="border-t border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
                     <td className="px-4 py-2.5 text-slate-400 whitespace-nowrap">{g.receivedDate}</td>
@@ -8386,7 +8386,7 @@ function DistBillsView({ currentUser, pendingConvert, setPendingConvert }) {
           {visibleBills.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">{bills.length === 0 ? "No bills yet." : "No bills match your search/filter."}</div> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40"><tr><th className="text-left px-4 py-2.5 font-semibold">Date</th><th className="text-left px-4 py-2.5 font-semibold">Bill#</th><th className="text-left px-4 py-2.5 font-semibold">Vendor</th><th className="text-left px-4 py-2.5 font-semibold">Status</th><th className="text-left px-4 py-2.5 font-semibold">Due Date</th><th className="text-right px-4 py-2.5 font-semibold">Amount</th><th className="text-right px-4 py-2.5 font-semibold">Balance Due</th></tr></thead>
+                <thead className="dist-th"><tr><th className="text-left px-4 py-2.5 font-semibold">Date</th><th className="text-left px-4 py-2.5 font-semibold">Bill#</th><th className="text-left px-4 py-2.5 font-semibold">Vendor</th><th className="text-left px-4 py-2.5 font-semibold">Status</th><th className="text-left px-4 py-2.5 font-semibold">Due Date</th><th className="text-right px-4 py-2.5 font-semibold">Amount</th><th className="text-right px-4 py-2.5 font-semibold">Balance Due</th></tr></thead>
                 <tbody>{visibleBills.map(b => {
                   const t = distComputeTotals(b.lines, taxRates, b.vatMode, b.discountPercent, b.discountType);
                   const amount = t.grandTotal;
@@ -8497,7 +8497,7 @@ function DistPaymentsView({ currentUser, pendingConvert, setPendingConvert }) {
           {pays.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">No payments yet.</div> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40"><tr><th className="text-left px-4 py-2.5 font-semibold">Date</th><th className="text-left px-4 py-2.5 font-semibold">Payment#</th><th className="text-left px-4 py-2.5 font-semibold">Vendor</th><th className="text-left px-4 py-2.5 font-semibold">Method</th><th className="text-right px-4 py-2.5 font-semibold">Bills</th><th className="text-right px-4 py-2.5 font-semibold">Amount</th><th className="px-2 py-2.5 w-10"></th></tr></thead>
+                <thead className="dist-th"><tr><th className="text-left px-4 py-2.5 font-semibold">Date</th><th className="text-left px-4 py-2.5 font-semibold">Payment#</th><th className="text-left px-4 py-2.5 font-semibold">Vendor</th><th className="text-left px-4 py-2.5 font-semibold">Method</th><th className="text-right px-4 py-2.5 font-semibold">Bills</th><th className="text-right px-4 py-2.5 font-semibold">Amount</th><th className="px-2 py-2.5 w-10"></th></tr></thead>
                 <tbody>{pays.map(p => (
                   <tr key={p.id} onClick={() => setDetailId(p.id)} className="border-t border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
                     <td className="px-4 py-2.5 text-slate-400 whitespace-nowrap">{p.payDate}</td>
@@ -8754,7 +8754,7 @@ function DistCustomerDetail({ customer, stores = [], onClose, onEdit }) {
             <DistDetailSection title="Invoices" count={data.invoices.length}>
               {data.invoices.length === 0 ? <DistEmptyRow text="No invoices."/> : (
                 <table className="w-full text-xs">
-                  <thead className="text-slate-500"><tr><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Invoice #</th><th className="text-right px-3 py-2">Amount</th><th className="text-right px-3 py-2">Balance Due</th><th className="text-left px-3 py-2 pl-4">Status</th></tr></thead>
+                  <thead className="dist-th"><tr><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Invoice #</th><th className="text-right px-3 py-2">Amount</th><th className="text-right px-3 py-2">Balance Due</th><th className="text-left px-3 py-2 pl-4">Status</th></tr></thead>
                   <tbody>{data.invoices.map(i => (
                     <tr key={i.id} className="border-t border-slate-800/60">
                       <td className="px-3 py-2 text-slate-400">{fmtDate(i.date)}</td>
@@ -8769,7 +8769,7 @@ function DistCustomerDetail({ customer, stores = [], onClose, onEdit }) {
             <DistDetailSection title="Customer Payments" count={data.payments.length}>
               {data.payments.length === 0 ? <DistEmptyRow text="No payments."/> : (
                 <table className="w-full text-xs">
-                  <thead className="text-slate-500"><tr><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Payment #</th><th className="text-left px-3 py-2">Reference</th><th className="text-left px-3 py-2">Mode</th><th className="text-right px-3 py-2">Amount</th><th className="text-right px-3 py-2">Unused</th></tr></thead>
+                  <thead className="dist-th"><tr><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Payment #</th><th className="text-left px-3 py-2">Reference</th><th className="text-left px-3 py-2">Mode</th><th className="text-right px-3 py-2">Amount</th><th className="text-right px-3 py-2">Unused</th></tr></thead>
                   <tbody>{data.payments.map(p => (
                     <tr key={p.id} className="border-t border-slate-800/60">
                       <td className="px-3 py-2 text-slate-400">{fmtDate(p.date)}</td>
@@ -8785,7 +8785,7 @@ function DistCustomerDetail({ customer, stores = [], onClose, onEdit }) {
             <DistDetailSection title="Sales Orders" count={data.salesOrders.length}>
               {data.salesOrders.length === 0 ? <DistEmptyRow text="No sales orders."/> : (
                 <table className="w-full text-xs">
-                  <thead className="text-slate-500"><tr><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">SO #</th><th className="text-right px-3 py-2">Total</th><th className="text-left px-3 py-2 pl-4">Status</th></tr></thead>
+                  <thead className="dist-th"><tr><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">SO #</th><th className="text-right px-3 py-2">Total</th><th className="text-left px-3 py-2 pl-4">Status</th></tr></thead>
                   <tbody>{data.salesOrders.map(s => (
                     <tr key={s.id} className="border-t border-slate-800/60">
                       <td className="px-3 py-2 text-slate-400">{fmtDate(s.date)}</td>
@@ -8888,7 +8888,7 @@ function DistCustomersView({ currentUser, stores = [] }) {
           {filtered.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">No customers yet. Add stores as customers or import the Zoho Contacts CSV.</div> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40">
+                <thead className="dist-th">
                   <tr>
                     <th className="text-left px-4 py-2.5 font-semibold">Name</th>
                     <th className="text-left px-4 py-2.5 font-semibold">Company</th>
@@ -8905,7 +8905,7 @@ function DistCustomersView({ currentUser, stores = [] }) {
                       <tr key={c.id} onClick={() => setDetail(c)} className="border-t border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
                         <td className="px-4 py-2.5">
                           <span className="text-indigo-300 font-medium hover:underline">{c.displayName}</span>
-                          {c.storeId && storeName(c.storeId) && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-indigo-600 text-white">{storeName(c.storeId)}</span>}
+                          {c.storeId && storeName(c.storeId) && <span title={`Linked to store: ${storeName(c.storeId)}`} className="ml-2 inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded bg-emerald-600/90 text-white align-middle">✓ store</span>}
                         </td>
                         <td className="px-4 py-2.5 text-slate-300">{c.companyName || "—"}</td>
                         <td className="px-4 py-2.5 text-slate-400">{c.email || "—"}</td>
@@ -9473,7 +9473,7 @@ function DistSalesOrderView({ currentUser, setActiveView }) {
           {visibleSos.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">{sos.length === 0 ? "No sales orders yet. An order commits stock (reserves it) without shipping." : "No orders match your search/filter."}</div> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40">
+                <thead className="dist-th">
                   <tr>
                     <th className="text-left px-3 py-2.5 font-semibold">Date</th>
                     <th className="text-left px-3 py-2.5 font-semibold">SO #</th>
@@ -10147,7 +10147,7 @@ function DistInvoicesView({ currentUser, pendingConvert, setPendingConvert }) {
             <div className="overflow-x-auto">
               {visibleInvoices.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">No invoices match your search/filter.</div> : (
               <table className="w-full text-sm">
-                <thead className="text-[10px] uppercase tracking-wide text-slate-500 bg-slate-950/40">
+                <thead className="dist-th">
                   <tr>
                     <th className="text-left px-3 py-2.5 font-semibold">Date</th>
                     <th className="text-left px-3 py-2.5 font-semibold">Invoice#</th>
@@ -10277,15 +10277,34 @@ function DistReceiptsView({ currentUser, pendingConvert, setPendingConvert }) {
               totals: [["Total received", gbp(pays.reduce((s, p) => s + (Number(p.amount) || 0), 0)), true]],
             })} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5"><Printer size={13}/> Print list</button>
           </div>
-          {pays.map(p => (
-            <div key={p.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50 group">
-              <div><span className="text-white font-mono text-xs">{p.paymentNumber}</span> <span className="text-slate-400">{cName(p.customerId)}</span><div className="text-[11px] text-slate-500">{p.payDate} · {p.method} · {p.allocations.length} invoice{p.allocations.length!==1?"s":""}</div></div>
-              <div className="flex items-center gap-3">
-                <span className="text-white font-semibold">£{p.amount.toFixed(2)}</span>
-                <button onClick={async () => { if (!window.confirm(`Delete payment ${p.paymentNumber}? This reverses the receipt and reopens the invoice(s) it paid. This cannot be undone.`)) return; try { await deleteDistInvoicePayment(p.id); await load(); } catch (e) { alert(e.message); } }} className="text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity" title="Delete payment"><Trash2 size={14}/></button>
-              </div>
-            </div>
-          ))}
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="dist-th"><tr>
+                <th className="text-left px-4 py-2.5 font-semibold">Date</th>
+                <th className="text-left px-4 py-2.5 font-semibold">Payment #</th>
+                <th className="text-left px-4 py-2.5 font-semibold">Customer</th>
+                <th className="text-left px-4 py-2.5 font-semibold">Method</th>
+                <th className="text-right px-4 py-2.5 font-semibold">Invoices</th>
+                <th className="text-right px-4 py-2.5 font-semibold">Amount</th>
+                <th className="px-2 py-2.5 w-10"></th>
+              </tr></thead>
+              <tbody>
+                {pays.map(p => (
+                  <tr key={p.id} className="group">
+                    <td className="px-4 py-2.5 text-slate-400 whitespace-nowrap">{p.payDate}</td>
+                    <td className="px-4 py-2.5 font-mono text-indigo-300">{p.paymentNumber}</td>
+                    <td className="px-4 py-2.5 text-slate-300">{cName(p.customerId)}</td>
+                    <td className="px-4 py-2.5 text-slate-400 capitalize">{p.method}</td>
+                    <td className="px-4 py-2.5 text-right text-slate-400 tabular-nums">{p.allocations.length}</td>
+                    <td className="px-4 py-2.5 text-right text-white font-semibold whitespace-nowrap">£{p.amount.toFixed(2)}</td>
+                    <td className="px-2 py-2.5 text-center">
+                      <button onClick={async () => { if (!window.confirm(`Delete payment ${p.paymentNumber}? This reverses the receipt and reopens the invoice(s) it paid. This cannot be undone.`)) return; try { await deleteDistInvoicePayment(p.id); await load(); } catch (e) { alert(e.message); } }} className="text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity" title="Delete payment"><Trash2 size={14}/></button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
       {creating && (
@@ -20003,6 +20022,26 @@ function EmpThemeStyle() {
 .emp-theme button.bg-indigo-600 .text-white,
 .emp-theme .bg-indigo-600.text-white,
 .emp-theme .bg-indigo-500.text-white { color: #fff !important; }
+/* ── CANONICAL DIST TABLE (marker: thead.dist-th) ──────────────────────────
+   One table language across Sales & Purchasing lists: dark bold header,
+   zebra rows, roomy cells, square corners. Applied by swapping a thead's
+   classes for "dist-th" — the CSS does the rest, including de-rounding
+   whatever card the table happens to live in. */
+.emp-theme thead.dist-th th {
+  background: #41362A; color: #F3EADA !important;
+  font-size: 11.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+  padding: 13px 16px; white-space: nowrap;
+}
+.emp-theme thead.dist-th th:not(.text-right):not(.text-center) { text-align: left; }
+.emp-theme thead.dist-th th.r, .emp-theme thead.dist-th th[data-r] { text-align: right; }
+.emp-theme table:has(> thead.dist-th) { border-collapse: collapse; }
+.emp-theme table:has(> thead.dist-th) tbody tr { border-top: 1px solid #E6D9C2 !important; }
+.emp-theme table:has(> thead.dist-th) tbody tr:nth-child(even) { background: #F4EBDA; }
+.emp-theme table:has(> thead.dist-th) tbody tr:hover { background: #EFE3CC !important; }
+.emp-theme table:has(> thead.dist-th) tbody td { padding-top: 13px; padding-bottom: 13px; }
+.emp-theme .rounded-2xl:has(thead.dist-th), .emp-theme .rounded-xl:has(thead.dist-th),
+.emp-theme .rounded-lg:has(thead.dist-th) { border-radius: 0 !important; }
+
 .emp-theme .text-slate-100,
 .emp-theme .text-slate-200,
 .emp-theme .text-slate-300 { color: var(--ink) !important; }
