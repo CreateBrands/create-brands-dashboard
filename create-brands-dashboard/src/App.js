@@ -32809,7 +32809,8 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
     [sortedStores, storeInScope]
   );
 
-  const todayStr = getTodayStr();
+  const [viewDate, setViewDate] = useState(getTodayStr());
+  const todayStr = viewDate;   // every downstream computation follows the selected day
 
   // Per-store metrics with the same legacy-split logic from ComplianceView.
   // Legacy rows (no store_id) get distributed evenly across the brand's
@@ -32914,6 +32915,7 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
 
   return (
     <div className="space-y-6">
+      <OpsDateBar value={viewDate} onChange={setViewDate}/>
       <div className="flex items-center gap-2 flex-wrap">
         <MultiStorePicker stores={storeOptions} value={storeSel} onChange={setStoreSel} allowAll={isHqOrAbove(user.role)} className="w-52" />
         <div className="text-xs text-slate-600">{scopedStores.length} store{scopedStores.length === 1 ? "" : "s"}</div>
@@ -33020,7 +33022,30 @@ function OpsNetworkDashboard({ brands, stores, visibleStoreIds, assignments, aud
 }
 
 // ─── Today's Tasks ────────────────────────────────────────────────────────────
+// ── OPS DATE BAR: browse previous days in day-based operations views ─────────
+// Data going back 30 days is already loaded; this picks which day to show.
+function OpsDateBar({ value, onChange, right }) {
+  const today = getTodayStr();
+  const shift = (d) => { const x = new Date(value + "T12:00:00"); x.setDate(x.getDate() + d); const s = x.toISOString().split("T")[0]; if (s <= today) onChange(s); };
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <button onClick={() => shift(-1)} className="w-8 h-8 rounded-lg bg-slate-800 text-slate-300 hover:text-white font-bold">‹</button>
+      <input type="date" value={value} max={today} onChange={e => e.target.value && onChange(e.target.value)}
+        className="px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/>
+      <button onClick={() => shift(1)} disabled={value >= today} className="w-8 h-8 rounded-lg bg-slate-800 text-slate-300 hover:text-white font-bold disabled:opacity-30">›</button>
+      {value !== today && <button onClick={() => onChange(today)} className="px-2.5 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-bold">Today</button>}
+      {value !== today && <span className="text-[11px] px-2 py-1 rounded-lg bg-amber-500/15 text-amber-300 font-semibold">Viewing {new Date(value + "T12:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" })} — read-only history</span>}
+      {right}
+    </div>
+  );
+}
+
 function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists, tempUnits, cleaningTasks, auditTrail, checklistStates, onSignOff, onChecklistItemToggle, onTempLog, currentUser, storeRoles = [], opsTeam = [], punchRecords = [], schedules = [] }) {
+  // Date browsing: past days are read-only — compliance is recorded live, not backfilled.
+  const [viewDate, setViewDate] = useState(getTodayStr());
+  const canWrite = viewDate === getTodayStr();
+  if (!canWrite) { onSignOff = undefined; onChecklistItemToggle = undefined; onTempLog = undefined; }
+
   const { user } = useAuth();
 
   // visibleStores = the stores this user can see (already filtered upstream
@@ -33149,6 +33174,7 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
 
   return (
     <div className="space-y-6">
+      <OpsDateBar value={viewDate} onChange={setViewDate}/>
       <div className="flex flex-wrap items-center gap-2">
         <StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>
       </div>
@@ -33160,14 +33186,14 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
           const cl = a.type === "checklist" ? checklists.find(c => c.id === a.taskId) : null;
           // Stable key — includes storeId when present so per-store checklist
           // state doesn't collide across stores sharing a brand.
-          const stateKey = `asg::${a.id}||${getTodayStr()}`;
+          const stateKey = `asg::${a.id}||${viewDate}`;
           const clState = checklistStates[stateKey] || {};
           // Done if signed off (the reliable per-assignment marker) or, for
           // legacy rows, an audit entry for THIS exact task today. The audit detail
           // is written as "<taskName> completed"; match that exact phrase rather
           // than a loose substring, so "Closing Task" can't mark "Closing Task 2".
           const doneToday = clState.__signedOff === true
-            || auditTrail.some(t => t.brandId === a.brandId && t.date === getTodayStr() && (t.detail === `${taskName} completed` || t.detail === taskName));
+            || auditTrail.some(t => t.brandId === a.brandId && t.date === viewDate && (t.detail === `${taskName} completed` || t.detail === taskName));
           const totalItems = cl?.items?.length || 0;
           // Count only real item toggles — exclude metadata keys (__signedOff etc).
           const doneItems = totalItems ? Object.entries(clState).filter(([k,v]) => !k.startsWith("__") && v === true).length : 0;
@@ -33225,7 +33251,7 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
                           const bId = unit?.brandId || a.brandId || currentUser?.brandIds?.[0] || null;
                           const sId = unit?.storeId || a.storeId || null;
                           if (!sId) { setTempErr("This temperature unit isn't linked to a store. Ask a manager to edit the unit and set its store."); setTempBusy(false); return; }
-                          await onTempLog?.({ id:`tl-${Date.now()}`, brandId: bId, storeId: sId, unitId: a.taskId, value: num, isBreach: breach, notes:"", time: new Date().toTimeString().slice(0,5), date: getTodayStr(), loggedBy: currentUser?.name || "Staff" });
+                          await onTempLog?.({ id:`tl-${Date.now()}`, brandId: bId, storeId: sId, unitId: a.taskId, value: num, isBreach: breach, notes:"", time: new Date().toTimeString().slice(0,5), date: viewDate, loggedBy: currentUser?.name || "Staff" });
                           await onSignOff?.(a, taskName);
                           setExpandedId(null); setTempVal("");
                         } catch (e) { setTempErr(e?.message || "Couldn't save the reading. Please try again."); }
@@ -33257,6 +33283,9 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
 
 // ─── Temperature Log ──────────────────────────────────────────────────────────
 function TemperatureLog({ brands, stores, visibleStoreIds, tempUnits, tempLogs, onLog, assignments = [], onSignOff }) {
+  const [viewDate, setViewDate] = useState(getTodayStr());
+  const canLog = viewDate === getTodayStr();
+
   const { user } = useAuth();
 
   const allVisibleStores = useMemo(
@@ -33289,7 +33318,7 @@ function TemperatureLog({ brands, stores, visibleStoreIds, tempUnits, tempLogs, 
   };
 
   const scopedUnits = (tempUnits || []).filter(inScope);
-  const scopedLogs  = (tempLogs  || []).filter(l => inScope(l) && l.date === getTodayStr());
+  const scopedLogs  = (tempLogs  || []).filter(l => inScope(l) && l.date === viewDate);
   const getLatest = unitId => scopedLogs.filter(l => l.unitId === unitId).sort((a,b) => b.time.localeCompare(a.time))[0];
 
   // For inserts: when "all", default to first store with units; otherwise use selected
@@ -33320,11 +33349,12 @@ function TemperatureLog({ brands, stores, visibleStoreIds, tempUnits, tempLogs, 
 
   return (
     <div className="space-y-6">
+      <OpsDateBar value={viewDate} onChange={setViewDate}/>
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>
         </div>
-        <button onClick={() => { setForm({ unitId: scopedUnits[0]?.id || "", value: "", notes: "", time: nowTimeStr() }); setShowForm(true); }} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/> Log Reading</button>
+        <button disabled={!canLog} title={canLog ? "" : "Return to today to log readings"} onClick={() => { setForm({ unitId: scopedUnits[0]?.id || "", value: "", notes: "", time: nowTimeStr() }); setShowForm(true); }} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/> Log Reading</button>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {scopedUnits.map(unit => {
@@ -33670,6 +33700,8 @@ function DeliveriesHub({ brands, stores, visibleStoreIds, deliveries, onAdd }) {
 }
 
 function DeliveriesView({ brands, stores, visibleStoreIds, deliveries, onAdd }) {
+  const [filterDate, setFilterDate] = useState("");   // "" = all recent (30 days)
+
   const { user } = useAuth();
 
   const allVisibleStores = useMemo(
@@ -33702,6 +33734,7 @@ function DeliveriesView({ brands, stores, visibleStoreIds, deliveries, onAdd }) 
 
   const scopedDeliveries = (deliveries || [])
     .filter(inScope)
+    .filter(d => !filterDate || d.date === filterDate)   // "" = all recent
     .sort((a, b) => b.timestamp?.localeCompare(a.timestamp || "") || 0);
 
   // For new inserts: if a specific store is selected use it; otherwise default
@@ -33725,6 +33758,13 @@ function DeliveriesView({ brands, stores, visibleStoreIds, deliveries, onAdd }) 
 
   return (
     <div className="space-y-5">
+      <div className="flex items-center gap-2">
+        <input type="date" value={filterDate} max={getTodayStr()} onChange={e => setFilterDate(e.target.value)}
+          className="px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/>
+        {filterDate
+          ? <button onClick={() => setFilterDate("")} className="px-2.5 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-bold">Show all recent</button>
+          : <span className="text-[11px] text-slate-500">Showing the last 30 days — pick a date to narrow to one day</span>}
+      </div>
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>
