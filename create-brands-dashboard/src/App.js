@@ -52167,23 +52167,44 @@ function BreaksAnalysisTab({ enriched = [], breakSplit, opsTeam = [], stores = [
         </div>
       </AnalysisBlock>
 
-      <AnalysisBlock title={`Manager break adjustments (${audits.length})`}>
+      <AnalysisBlock title={`Manager break adjustments (${(() => { const g = new Set(); audits.forEach(x => g.add(`${x.punchId}|${x.changedBy}|${(x.changedAt || "").slice(0, 16)}`)); return g.size; })()})`}>
         {audits.length === 0 ? <div className="text-xs py-4 text-center" style={{ color: "#8A7B68" }}>No break fields were edited by managers in this period.</div> : (
-          <div className="space-y-1.5 max-h-72 overflow-y-auto">
-            {audits.map(x => {
-              const r = rowById[x.punchId];
-              const fieldLabel = { break_minutes: "Break minutes", break_paid: "Paid flag", break_start: "Break start", break_end: "Break end" }[x.field] || x.field;
-              return (
-                <div key={x.id} className="flex items-center justify-between gap-2 text-xs rounded-lg px-2.5 py-1.5" style={{ background: "#FFF6E8", border: "1px solid #E0A664" }}>
-                  <div className="min-w-0">
-                    <span className="font-bold" style={{ color: "#3A2E26" }}>{r ? r.name : "(shift outside range)"}</span>
-                    <span style={{ color: "#8A7B68" }}> {r ? `· ${r.date}` : ""} · {fieldLabel}: </span>
-                    <span style={{ color: "#B45309" }}>{x.oldValue ?? "—"} → <b>{x.newValue ?? "—"}</b></span>
+          <div className="space-y-2 max-h-80 overflow-y-auto">
+            {(() => {
+              // One edit ACTION touches several fields (start, end, minutes) — group
+              // them into a single readable card per punch+editor+minute.
+              const groups = {};
+              audits.forEach(x => {
+                const k = `${x.punchId}|${x.changedBy}|${(x.changedAt || "").slice(0, 16)}`;
+                (groups[k] = groups[k] || []).push(x);
+              });
+              const fieldLabel = { break_minutes: "minutes", break_paid: "paid", break_start: "start", break_end: "end" };
+              const order = { break_start: 0, break_end: 1, break_minutes: 2, break_paid: 3 };
+              return Object.values(groups).sort((g1, g2) => (g2[0].changedAt || "").localeCompare(g1[0].changedAt || "")).map(g => {
+                const x0 = g[0];
+                const r = rowById[x0.punchId];
+                const who = x0.employeeName || r?.name || (opsTeam.find(m => m.id === x0.employeeId)?.firstName ? `${opsTeam.find(m => m.id === x0.employeeId).firstName} ${opsTeam.find(m => m.id === x0.employeeId).lastName || ""}`.trim() : "Unknown employee");
+                const shiftDate = x0.shiftDate || r?.date || "";
+                const minsEdit = g.find(x => x.field === "break_minutes");
+                const suspicious = minsEdit && parseInt(minsEdit.newValue) > 300;
+                return (
+                  <div key={x0.id} className="rounded-xl px-3 py-2" style={{ background: suspicious ? "#FBEAEA" : "#FFF6E8", border: `1px solid ${suspicious ? "#DDA69B" : "#E0A664"}` }}>
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <div><span className="font-bold" style={{ color: "#3A2E26" }}>{x0.changedBy}</span><span style={{ color: "#8A7B68" }}> adjusted </span><span className="font-bold" style={{ color: "#3A2E26" }}>{who}</span><span style={{ color: "#8A7B68" }}>'s break{shiftDate ? ` · shift of ${shiftDate}` : ""}</span></div>
+                      <div className="text-[10px] flex-shrink-0" style={{ color: "#8A7B68" }}>{x0.changedAt ? new Date(x0.changedAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : ""}</div>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      {[...g].sort((p, q) => (order[p.field] ?? 9) - (order[q.field] ?? 9)).map(x => (
+                        <span key={x.id} className="px-2 py-0.5 rounded-lg text-[11px] tabular-nums" style={{ background: "#FDF8EF", border: "1px solid #E8DCC6", color: "#3A2E26" }}>
+                          <b>{fieldLabel[x.field] || x.field}</b>: {x.oldValue ?? "—"} → <b style={{ color: "#B45309" }}>{x.newValue ?? "—"}</b>
+                        </span>
+                      ))}
+                      {suspicious && <span className="px-2 py-0.5 rounded-lg text-[10px] font-bold" style={{ background: "#B3261E", color: "#fff" }}>⚠ IMPLAUSIBLE — over 5h break; likely end-before-start typo. Re-edit the shift to fix.</span>}
+                    </div>
                   </div>
-                  <div className="flex-shrink-0 text-right" style={{ color: "#8A7B68" }}>{x.changedBy}<div className="text-[10px]">{x.changedAt ? new Date(x.changedAt).toLocaleDateString("en-GB") : ""}</div></div>
-                </div>
-              );
-            })}
+                );
+              });
+            })()}
           </div>
         )}
       </AnalysisBlock>
@@ -53711,6 +53732,17 @@ function AmendPunchModal({ record, onSave, onDelete, onClose }) {
       newBreakMins = Math.max(0, Math.round((new Date(newBreakEnd) - new Date(newBreakStart)) / 60000));
     } else {
       newBreakMins = breakMins === "" ? (record.breakMinutes ?? 0) : Math.max(0, Math.round(Number(breakMins) || 0));
+    }
+    // GUARD: an end-before-start break silently wrapped overnight and saved
+    // multi-hour "breaks" (a 15:30→14:00 typo became 22.5h). Breaks must run
+    // forwards and fit plausibly inside a shift — block the save, name the fix.
+    if (newBreakStart && newBreakEnd && new Date(newBreakEnd) <= new Date(newBreakStart)) {
+      alert("Break end must be AFTER break start. Check the times \u2014 this looks like an end-before-start typo.");
+      return;
+    }
+    if (newBreakMins > 300) {
+      alert(`That's a ${Math.round(newBreakMins / 60 * 10) / 10}-hour break \u2014 almost certainly a typo. Breaks over 5 hours can't be saved; correct the times or minutes.`);
+      return;
     }
     const hoursWorked = newPunchOut ? computePunchHours({ punchIn: newPunchIn, punchOut: newPunchOut, breakMinutes: newBreakMins, breakStart: newBreakStart, breakEnd: newBreakEnd, breakPaid }).hours : null;
     const grossPay    = hoursWorked && record.hourlyRate ? Math.round(hoursWorked*record.hourlyRate*100)/100 : null;

@@ -1398,10 +1398,24 @@ export async function fetchBreakAudits({ fromIso, toIso } = {}) {
   if (toIso) q = q.lte("changed_at", toIso);
   const { data, error } = await q;
   if (error) throw error;
-  return (data || []).map(r => ({
+  const audits = (data || []).map(r => ({
     id: r.id, punchId: r.punch_id, field: r.field, oldValue: r.old_value,
     newValue: r.new_value, reason: r.reason, changedBy: r.changed_by, changedAt: r.changed_at,
   }));
+  // Attach the shift each edit belongs to — the audit row alone is unreadable
+  // ("break start → 15:30" of WHOSE shift, WHEN?).
+  const ids = [...new Set(audits.map(x => x.punchId).filter(Boolean))];
+  if (ids.length) {
+    const { data: punches } = await supabase.from("punch_records")
+      .select("id, employee_id, employee_name, date, store_id").in("id", ids);
+    const byId = {};
+    (punches || []).forEach(p => { byId[p.id] = p; });
+    audits.forEach(x => {
+      const p = byId[x.punchId];
+      if (p) { x.employeeId = p.employee_id; x.employeeName = p.employee_name || ""; x.shiftDate = p.date; x.storeId = p.store_id; }
+    });
+  }
+  return audits;
 }
 
 export async function fetchPunchAudit(punchId) {
