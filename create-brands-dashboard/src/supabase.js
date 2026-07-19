@@ -14248,6 +14248,95 @@ export async function fetchDistFulfilChecks(soIds = []) {
   return new Set((data || []).map(r => `${r.so_id}:${r.item_id}`));
 }
 // Mark or unmark a single order-line.
+// ── ORDER AMENDMENTS: store proposes changes, Distribution approves ──────────
+// A placed order can be reopened by the store while it hasn't been picked.
+// The proposal (a FULL replacement line set) sits pending; Dist approves
+// (lines swapped) or rejects (original stands). One pending per order.
+
+export async function fetchOrderAmendment(soId) {
+  const { data } = await supabase.from("dist_order_amendments").select("*")
+    .eq("so_id", soId).order("requested_at", { ascending: false }).limit(1).maybeSingle();
+  if (!data) return null;
+  return mapAmendment(data);
+}
+
+export async function fetchAmendmentsForOrders(soIds = []) {
+  if (!soIds.length) return {};
+  const { data } = await supabase.from("dist_order_amendments").select("*")
+    .in("so_id", soIds).order("requested_at", { ascending: false });
+  const m = {};
+  (data || []).forEach(r => { if (!m[r.so_id]) m[r.so_id] = mapAmendment(r); }); // latest wins
+  return m;
+}
+
+const mapAmendment = (r) => ({
+  id: r.id, soId: r.so_id, storeId: r.store_id, status: r.status,
+  lines: Array.isArray(r.proposed_lines) ? r.proposed_lines : [],
+  note: r.note || "", requestedBy: r.requested_by_name || r.requested_by || "",
+  requestedAt: r.requested_at, decidedBy: r.decided_by || "", decidedAt: r.decided_at,
+  decisionNote: r.decision_note || "",
+});
+
+export async function fetchOrderLinesLight(soId) {
+  const { data, error } = await supabase.from("dist_sales_order_lines")
+    .select("item_id, qty, unit_price, tax_rate_id").eq("so_id", soId);
+  if (error) throw error;
+  return (data || []).map(l => ({ itemId: l.item_id, qty: Number(l.qty) || 0, unitPrice: Number(l.unit_price) || 0, taxRateId: l.tax_rate_id || null }));
+}
+
+export async function requestOrderAmendment({ soId, storeId, lines, note, user }) {
+  const existing = await fetchOrderAmendment(soId);
+  if (existing && existing.status === "pending") throw new Error("This order already has changes awaiting approval.");
+  const { data: so } = await supabase.from("dist_sales_orders").select("status").eq("id", soId).single();
+  if (!so || so.status !== "confirmed") throw new Error("This order can no longer be amended — it's already being fulfilled.");
+  const clean = (lines || []).filter(l => l.itemId && Number(l.qty) > 0)
+    .map(l => ({ itemId: l.itemId, qty: Number(l.qty), unitPrice: Number(l.unitPrice) || 0, taxRateId: l.taxRateId || null }));
+  if (!clean.length) throw new Error("An amended order needs at least one item — cancel the order instead if nothing is wanted.");
+  const { error } = await supabase.from("dist_order_amendments").insert({
+    so_id: soId, store_id: storeId || null, status: "pending", proposed_lines: clean,
+    note: note || null, requested_by: user?.id || null, requested_by_name: user?.name || "",
+  });
+  if (error) throw error;
+  return true;
+}
+
+export async function cancelOrderAmendment(amendmentId) {
+  const { error } = await supabase.from("dist_order_amendments")
+    .update({ status: "cancelled" }).eq("id", amendmentId).eq("status", "pending");
+  if (error) throw error;
+  return true;
+}
+
+export async function decideOrderAmendment(amendmentId, approve, user, note) {
+  const { data: am, error: aErr } = await supabase.from("dist_order_amendments")
+    .select("*").eq("id", amendmentId).single();
+  if (aErr || !am) throw new Error("Amendment not found.");
+  if (am.status !== "pending") throw new Error("This amendment was already decided.");
+  if (approve) {
+    // Never rewrite an order the warehouse has started on.
+    const { data: picks } = await supabase.from("dist_picks").select("id").eq("so_id", am.so_id).limit(1);
+    if (picks && picks.length) throw new Error("This order has already been picked — delete the pick first, or reject the amendment.");
+    const { data: so } = await supabase.from("dist_sales_orders").select("status, note").eq("id", am.so_id).single();
+    if (!so || so.status !== "confirmed") throw new Error("Order is no longer in an amendable state.");
+    const proposed = Array.isArray(am.proposed_lines) ? am.proposed_lines : [];
+    const { error: dErr } = await supabase.from("dist_sales_order_lines").delete().eq("so_id", am.so_id);
+    if (dErr) throw dErr;
+    const lr = proposed.map(l => ({
+      id: distId("dsol"), so_id: am.so_id, item_id: l.itemId, qty: Number(l.qty) || 0,
+      unit_price: Number(l.unitPrice) || 0, tax_rate_id: l.taxRateId || null, discount: 0, discount_type: "percent",
+    }));
+    if (lr.length) { const { error: iErr } = await supabase.from("dist_sales_order_lines").insert(lr); if (iErr) throw iErr; }
+    const stamp = `Amended per store request (approved by ${user?.name || user?.id || "Dist"} ${new Date().toISOString().slice(0, 10)})`;
+    await supabase.from("dist_sales_orders").update({ note: so.note ? `${so.note} · ${stamp}` : stamp }).eq("id", am.so_id);
+  }
+  const { error } = await supabase.from("dist_order_amendments").update({
+    status: approve ? "approved" : "rejected", decided_by: user?.name || user?.id || null,
+    decided_at: new Date().toISOString(), decision_note: note || null,
+  }).eq("id", amendmentId);
+  if (error) throw error;
+  return { applied: !!approve };
+}
+
 // ── FRESH ORDER CLAIMS: which driver is shopping which order ─────────────────
 export async function fetchFreshClaims() {
   const { data, error } = await supabase.from("dist_fresh_claims").select("*");

@@ -183,7 +183,7 @@ import {
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
-  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits,
+  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
 } from "./supabase";
@@ -9073,6 +9073,8 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
   const { navigate } = useDistDocLink();
   const [detail, setDetail] = useState(null);
   const [receipt, setReceipt] = useState(null);   // the store's receipt of this order's delivery
+  const [amendment, setAmendment] = useState(null); // store's pending/last change request
+  const [amendBusy, setAmendBusy] = useState(false);
   const [err, setErr] = useState("");
   const [freshPrompt, setFreshPrompt] = useState(null); // { lines:[{itemId,name,qty}], costs:{} } before dispatch
   const [freshScan, setFreshScan] = useState(""); // scan status message
@@ -9081,6 +9083,7 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
     let alive = true;
     fetchDistSalesOrderDetail(so.id).then(d => { if (alive) setDetail(d); }).catch(e => { if (alive) setErr(e.message); });
     fetchOrderStoreReceipt(so.id).then(r => { if (alive) setReceipt(r); }).catch(() => {});
+    fetchOrderAmendment(so.id).then(x => { if (alive) setAmendment(x); }).catch(() => {});
     return () => { alive = false; };
   }, [so.id]);
 
@@ -9260,6 +9263,56 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
               <StatusRow label="Shipment" value={detail ? (detail.status.dispatched ? "Dispatched" : "Pending") : "…"} tone={detail?.status.dispatched ? "text-emerald-300" : "text-amber-300"}/>
               <StatusRow label="Store receipt" value={!receipt ? (detail?.status.dispatched ? "Awaiting store" : "—") : receipt.status === "confirmed" ? (receipt.lines.some(l=>l.short) ? `Received · ${receipt.lines.filter(l=>l.short).length} short` : "Received in full") : "Receiving…"} tone={!receipt ? "text-slate-400" : receipt.status === "confirmed" ? (receipt.lines.some(l=>l.short) ? "text-red-300" : "text-emerald-300") : "text-amber-300"}/>
             </div>
+
+            {/* AMENDMENT — the store reopened this order; approve applies the
+                proposed lines, reject keeps the original. Blocked once picked. */}
+            {amendment && amendment.status === "pending" && (() => {
+              const cur = new Map((so.lines || []).map(l => [l.itemId, Number(l.qty) || 0]));
+              const prop = new Map(amendment.lines.map(l => [l.itemId, Number(l.qty) || 0]));
+              const allIds = [...new Set([...cur.keys(), ...prop.keys()])];
+              const diffs = allIds.map(id => {
+                const c = cur.get(id) || 0, p = prop.get(id) || 0;
+                if (c === p) return null;
+                const it = itemById.get(id);
+                return { id, name: it?.name || id, from: c, to: p };
+              }).filter(Boolean);
+              const decide = async (approve) => {
+                let note2 = null;
+                if (!approve) { note2 = window.prompt("Reason for declining (shown to the store):") || null; }
+                setAmendBusy(true);
+                try {
+                  await decideOrderAmendment(amendment.id, approve, { id: null, name: "Distribution" }, note2);
+                  const [d2, am2] = await Promise.all([fetchDistSalesOrderDetail(so.id), fetchOrderAmendment(so.id)]);
+                  setDetail(d2); setAmendment(am2);
+                  if (approve) window.location.reload();
+                } catch (e2) { alert(e2.message); }
+                setAmendBusy(false);
+              };
+              return (
+                <div className="rounded-xl border border-amber-600/50 bg-amber-950/15 p-3 space-y-2">
+                  <div className="text-xs font-bold text-amber-300">Store requested changes{amendment.requestedBy ? ` — ${amendment.requestedBy}` : ""}{amendment.requestedAt ? ` · ${new Date(amendment.requestedAt).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}` : ""}</div>
+                  {amendment.note && <div className="text-[11px] text-slate-400 italic">“{amendment.note}”</div>}
+                  <div className="space-y-1">
+                    {diffs.length === 0 && <div className="text-[11px] text-slate-500">No line differences (identical to the current order).</div>}
+                    {diffs.map(d => (
+                      <div key={d.id} className="flex items-center justify-between gap-2 text-xs">
+                        <span className="text-slate-300 min-w-0 truncate">{d.name}</span>
+                        <span className="tabular-nums flex-shrink-0">
+                          {d.from === 0 ? <span className="text-emerald-300 font-bold">ADDED × {d.to}</span>
+                            : d.to === 0 ? <span className="text-red-300 font-bold">REMOVED (was {d.from})</span>
+                            : <span><span className="text-slate-500">{d.from}</span> → <b className="text-amber-300">{d.to}</b></span>}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex gap-2 pt-1">
+                    <button onClick={() => decide(false)} disabled={amendBusy} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold disabled:opacity-40">Decline</button>
+                    <button onClick={() => decide(true)} disabled={amendBusy} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold disabled:opacity-40">{amendBusy ? "…" : "Approve & apply changes"}</button>
+                    <div className="text-[10px] text-slate-500 self-center">Approving replaces the order's lines. Blocked once picked.</div>
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* DISCREPANCIES — attached to the order: what the store says arrived
                 vs what was sent, only when something's short. */}
@@ -13690,6 +13743,13 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   const [roundLoaded, setRoundLoaded] = useState(false);  // compiled list pulled into cart
   const [roundBasis, setRoundBasis] = useState("category"); // category | department | frequency
   // ── DIRECT SUPPLIERS: per-store supplier resolution + checkout split ──
+  // ── MY ORDERS: history + amendment requests (Dist approval required) ──
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [amendments, setAmendments] = useState({});     // soId -> latest amendment
+  const [amendOrder, setAmendOrder] = useState(null);   // { so, lines:[{itemId,qty,unitPrice,taxRateId}] } being edited
+  const [amendNote, setAmendNote] = useState("");
+  const [amendBusy, setAmendBusy] = useState(false);
+  const [addSearch, setAddSearch] = useState("");
   const [supplierOverrides, setSupplierOverrides] = useState({});   // itemId -> vendorId|null
   const [portalVendors, setPortalVendors] = useState([]);           // vendor contacts (id, displayName)
   // Checkout split is OPT-IN per order: by default the WHOLE cart goes through
@@ -13819,6 +13879,28 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
 
   // When browse mode flips, reset the active filter to "All".
   useEffect(() => { setCat("All"); }, [browseMode]);
+  useEffect(() => {
+    if (!historyOpen || !orderHistory.length) return;
+    fetchAmendmentsForOrders(orderHistory.map(o => o.id)).then(setAmendments).catch(() => {});
+    /* eslint-disable-next-line */
+  }, [historyOpen]);
+  const itemName = (id) => cleanName(catalogue.find(c => c.id === id)?.name || id);
+  const openAmend = async (so) => {
+    try {
+      const lines = await fetchOrderLinesLight(so.id);
+      setAmendOrder({ so, lines }); setAmendNote(""); setAddSearch("");
+    } catch (e2) { setErr(e2.message); }
+  };
+  const submitAmend = async () => {
+    if (!amendOrder) return;
+    setAmendBusy(true);
+    try {
+      await requestOrderAmendment({ soId: amendOrder.so.id, storeId: activeStoreId, lines: amendOrder.lines, note: amendNote.trim(), user: currentUser });
+      setAmendOrder(null);
+      const m = await fetchAmendmentsForOrders(orderHistory.map(o => o.id)); setAmendments(m);
+    } catch (e2) { alert(e2.message); }
+    setAmendBusy(false);
+  };
 
   // Departments (top-level nav) from owner config. Each department groups a set
   // of category names and/or collection ids. "all" = the whole catalogue.
@@ -14246,6 +14328,15 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
           <button onClick={() => onNavigate ? onNavigate("dist-dashboard") : window.history.back()} className="p-2 rounded-xl" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }} title="Close"><X size={18}/></button>
         </div>
       </div>
+      {/* ── MY ORDERS entry point ── */}
+      {!loading && (
+        <div className="flex-shrink-0 px-4 sm:px-6 py-1.5 flex justify-end" style={{ backgroundColor: "#FBF6EC" }}>
+          <button onClick={() => setHistoryOpen(true)} className="px-3 py-1.5 rounded-xl text-xs font-bold" style={{ backgroundColor: "#F3EADA", color: "#844429", border: "1px solid #E8DCC6" }}>
+            My orders{orderHistory.length ? ` (${orderHistory.length})` : ""}
+          </button>
+        </div>
+      )}
+
       {/* ── TEAM ORDER ROUND — manager panel ── */}
       {isManager && !loading && (
         <div className="flex-shrink-0 px-4 sm:px-6 py-2" style={{ backgroundColor: "#FBF6EC", borderBottom: "1px solid #E8DCC6" }}>
@@ -14642,6 +14733,91 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
           </div>
         </div>
       )}
+      {/* ── MY ORDERS — history, status, and amendment requests ── */}
+      {historyOpen && (
+        <div className="fixed inset-0 z-50 flex flex-col" style={{ backgroundColor: "#FBF6EC" }}>
+          <div className="flex-shrink-0 flex items-center justify-between px-4 sm:px-8 py-3" style={{ backgroundColor: "#FDF8EF", borderBottom: "1px solid #E8DCC6" }}>
+            <button onClick={() => { setHistoryOpen(false); setAmendOrder(null); }} className="text-sm font-semibold" style={{ color: "#844429" }}>← Back to ordering</button>
+            <div className="text-base font-bold" style={{ color: "#3A2E26" }}>My orders</div>
+            <div className="w-24"/>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            <div className="max-w-3xl mx-auto w-full px-4 sm:px-6 py-5 space-y-3">
+              {!amendOrder && orderHistory.map(o => {
+                const am = amendments[o.id];
+                const pending = am && am.status === "pending";
+                const amendable = o.status === "confirmed" && !pending;
+                return (
+                  <div key={o.id} className="rounded-2xl p-4 space-y-2" style={{ backgroundColor: "#FDF8EF", border: `1px solid ${pending ? "#E0A664" : "#E8DCC6"}` }}>
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <div className="text-sm font-bold" style={{ color: "#3A2E26" }}>{o.soNumber} <span className="font-normal" style={{ color: "#9A8770" }}>· {o.orderDate}</span></div>
+                        <div className="text-[11px]" style={{ color: "#9A8770" }}>{gbp(o.total || 0)} excl. VAT</div>
+                      </div>
+                      <span className="px-2 py-1 rounded-lg text-[10px] font-bold flex-shrink-0" style={
+                        pending ? { background: "#FFF6E8", color: "#B45309" } :
+                        o.status === "dispatched" ? { background: "#EAF3E7", color: "#3F6B3A" } :
+                        { background: "#F3EADA", color: "#6B5D4F" }
+                      }>{pending ? "CHANGES AWAITING APPROVAL" : (o.status || "").toUpperCase()}</span>
+                    </div>
+                    {am && am.status === "rejected" && <div className="text-[11px] rounded-lg px-2 py-1" style={{ background: "#FBEAEA", color: "#B3261E" }}>Change request declined{am.decisionNote ? `: ${am.decisionNote}` : ""} — the original order stands.</div>}
+                    {am && am.status === "approved" && <div className="text-[11px] rounded-lg px-2 py-1" style={{ background: "#EAF3E7", color: "#3F6B3A" }}>Changes approved by {am.decidedBy || "Distribution"} — the order below is the updated version.</div>}
+                    {pending && (
+                      <div className="flex items-center justify-between gap-2 text-[11px] rounded-lg px-2 py-1.5" style={{ background: "#FFF6E8", color: "#B45309" }}>
+                        <span>Requested by {am.requestedBy || "store"} — Distribution will approve or decline.</span>
+                        <button onClick={async () => { try { await cancelOrderAmendment(am.id); const m = await fetchAmendmentsForOrders(orderHistory.map(x => x.id)); setAmendments(m); } catch (e2) { alert(e2.message); } }}
+                          className="font-bold underline flex-shrink-0">Withdraw</button>
+                      </div>
+                    )}
+                    <div className="flex gap-2">
+                      {amendable && <button onClick={() => openAmend(o)} className="px-3 py-1.5 rounded-xl text-xs font-bold" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>Reopen &amp; amend</button>}
+                      {!amendable && !pending && o.status !== "confirmed" && <div className="text-[11px] py-1.5" style={{ color: "#9A8770" }}>Being fulfilled — no longer amendable. Ring Distribution for urgent changes.</div>}
+                    </div>
+                  </div>
+                );
+              })}
+              {!amendOrder && !orderHistory.length && <div className="text-sm text-center py-16" style={{ color: "#9A8770" }}>No orders yet.</div>}
+
+              {/* ── AMEND EDITOR: full replacement line set, submitted for approval ── */}
+              {amendOrder && (
+                <div className="space-y-3">
+                  <div className="rounded-xl px-3 py-2.5" style={{ backgroundColor: "#FFF6E8", border: "1px solid #E0A664" }}>
+                    <div className="text-sm font-bold" style={{ color: "#B45309" }}>Amending {amendOrder.so.soNumber}</div>
+                    <div className="text-[11px]" style={{ color: "#8A7B68" }}>Adjust quantities (0 removes), add items below, then submit. Nothing changes until Distribution approves.</div>
+                  </div>
+                  <div className="divide-y rounded-xl border" style={{ borderColor: "#E8DCC6", backgroundColor: "#FFFFFF" }}>
+                    {amendOrder.lines.map((l, idx) => (
+                      <div key={l.itemId} className="px-3 py-2 flex items-center gap-2">
+                        <div className="min-w-0 flex-1 text-sm" style={{ color: l.qty > 0 ? "#3A2E26" : "#B3261E", textDecoration: l.qty > 0 ? "none" : "line-through" }}>{itemName(l.itemId)}</div>
+                        <button onClick={() => setAmendOrder(o => ({ ...o, lines: o.lines.map((x, i2) => i2 === idx ? { ...x, qty: Math.max(0, x.qty - 1) } : x) }))} className="w-8 h-8 rounded-lg font-bold" style={{ background: "#F3EADA", color: "#6B5D4F" }}>−</button>
+                        <div className="w-10 text-center text-sm font-bold tabular-nums" style={{ color: "#3A2E26" }}>{l.qty}</div>
+                        <button onClick={() => setAmendOrder(o => ({ ...o, lines: o.lines.map((x, i2) => i2 === idx ? { ...x, qty: x.qty + 1 } : x) }))} className="w-8 h-8 rounded-lg font-bold text-white" style={{ background: "#844429" }}>+</button>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="rounded-xl p-3 space-y-2" style={{ backgroundColor: "#FDF8EF", border: "1px solid #E8DCC6" }}>
+                    <input value={addSearch} onChange={e => setAddSearch(e.target.value)} placeholder="Add an item — search the catalogue…" className="w-full px-3 py-2 rounded-lg text-sm" style={{ backgroundColor: "#FFFFFF", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
+                    {addSearch.trim().length >= 2 && catalogue
+                      .filter(c => cleanName(c.name).toLowerCase().includes(addSearch.trim().toLowerCase()) && !amendOrder.lines.some(l => l.itemId === c.id))
+                      .slice(0, 6).map(c => (
+                        <button key={c.id} onClick={() => { setAmendOrder(o => ({ ...o, lines: [...o.lines, { itemId: c.id, qty: 1, unitPrice: Number(c.price) || 0, taxRateId: c.taxRateId || null }] })); setAddSearch(""); }}
+                          className="w-full text-left px-3 py-2 rounded-lg text-sm flex justify-between" style={{ backgroundColor: "#FFFFFF", border: "1px solid #E8DCC6", color: "#3A2E26" }}>
+                          <span>{cleanName(c.name)}</span><span style={{ color: "#9A8770" }}>{gbp(Number(c.price) || 0)}</span>
+                        </button>
+                      ))}
+                  </div>
+                  <input value={amendNote} onChange={e => setAmendNote(e.target.value)} placeholder="Reason for the change (helps Distribution approve quickly)" className="w-full px-3 py-2 rounded-lg text-sm" style={{ backgroundColor: "#FFFFFF", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
+                  <div className="flex gap-2">
+                    <button onClick={() => setAmendOrder(null)} className="px-4 py-2.5 rounded-xl text-sm font-semibold" style={{ backgroundColor: "#F3EADA", color: "#6B5D4F" }}>Cancel</button>
+                    <button onClick={submitAmend} disabled={amendBusy} className="flex-1 py-2.5 rounded-xl text-sm font-bold disabled:opacity-40" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>{amendBusy ? "Submitting…" : "Submit changes for approval"}</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {detailItem && (
         <StockDetailModal
           storeId={activeStoreId}
