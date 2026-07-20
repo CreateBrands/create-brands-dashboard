@@ -20318,11 +20318,32 @@ function normaliseReceiptUnits(desc, units) {
 }
 function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
   const [lines, setLines] = useState(null);
+  const [rawLines, setRawLines] = useState(null);   // raw invoice_lines → rendered with the SAME reviewer rows as the invoice inbox
   const [imgFull, setImgFull] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
   const canEdit = editable && claim.status === "submitted";
+  const reloadRaw = async () => {
+    try { const { lines: raw } = await getInvoiceWithLines(claim.invoiceId); setRawLines(raw || []); } catch {}
+  };
+  const syncToDelivery = async () => {
+    setSaveBusy(true); setSaveMsg("");
+    try {
+      const payload = (rawLines || []).map(l => ({
+        desc: l.raw_description || "",
+        qty: normaliseReceiptUnits(l.raw_description, l.pack_qty_base != null ? Number(l.pack_qty_base) : 1),
+        price: l.pack_price_ex_vat != null ? Number(l.pack_price_ex_vat) : null,
+        storeItemId: l.matched_store_item_id || null,
+      }));
+      const res = await applyExpenseLineCorrections({ claimId: claim.id, lines: payload });
+      setSaveMsg(res.deliverySkipped
+        ? "Synced the claim. Note: the store delivery was already received — its lines were NOT changed."
+        : `Synced — ${res.deliveryUpdated} delivery line${res.deliveryUpdated !== 1 ? "s" : ""} updated (quantities, costs, and item links).`);
+      onSaved?.();
+    } catch (e2) { setSaveMsg(e2.message || "Sync failed."); }
+    setSaveBusy(false);
+  };
   const saveCorrections = async () => {
     setSaveBusy(true); setSaveMsg("");
     try {
@@ -20342,6 +20363,7 @@ function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
         try {
           const { lines: raw } = await getInvoiceWithLines(claim.invoiceId);
           if (!alive) return;
+          setRawLines(raw || []);
           setLines((raw || []).map(l => ({
             qty: normaliseReceiptUnits(l.raw_description, l.pack_qty_base != null ? Number(l.pack_qty_base) : 1),
             desc: l.raw_description || "",
@@ -20378,6 +20400,20 @@ function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
                 className="w-full rounded-xl border border-slate-800 cursor-zoom-in"/>
             ) : <div className="text-xs text-slate-600 border border-dashed border-slate-800 rounded-xl p-6 text-center">No receipt image on this claim.</div>}
           </div>
+          {claim.invoiceId && rawLines ? (
+            <div className="space-y-2 self-start">
+              <div className="text-[11px] text-slate-500">Same review as the invoice inbox: match each line to OUR item (matches are remembered for every future receipt), fix pack qty / price, then sync to the store's delivery.</div>
+              {rawLines.map(l => <InvoiceLineRow key={l.id} line={l} domain="shop" onChanged={reloadRaw}/>)}
+              {rawLines.length === 0 && <div className="text-xs text-slate-500 border border-dashed border-slate-800 rounded-xl p-6 text-center">No extracted lines on this receipt.</div>}
+              {canEdit && (
+                <div className="flex items-center gap-2 pt-1">
+                  <button onClick={syncToDelivery} disabled={saveBusy} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold disabled:opacity-50">{saveBusy ? "Syncing…" : "Apply to store delivery"}</button>
+                  <span className="text-[10px] text-slate-500">Writes corrected quantities, costs, and item links onto the unreceived delivery.</span>
+                </div>
+              )}
+              {saveMsg && <div className="text-[11px] text-slate-400">{saveMsg}</div>}
+            </div>
+          ) : (
           <div className="rounded-xl border border-slate-800 overflow-hidden self-start">
             <table className="w-full text-xs">
               <thead className="dist-th"><tr>
@@ -20428,6 +20464,7 @@ function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
               </div>
             )}
           </div>
+          )}
         </div>
       </div>
       {imgFull && claim.receiptUrl && (

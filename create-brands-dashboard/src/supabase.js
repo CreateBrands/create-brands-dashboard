@@ -5403,9 +5403,41 @@ export async function getInvoiceFileUrl(path) {
   return data?.signedUrl || null;
 }
 
+// ── SUPPLIER ITEM ALIASES: names matched once, remembered everywhere ─────────
+export const normItemAlias = (t) => String(t || "").toLowerCase().replace(/\s+/g, " ").trim();
+
+export async function fetchItemAliases() {
+  const { data } = await supabase.from("supplier_item_aliases").select("*");
+  const m = new Map();
+  (data || []).forEach(r => m.set(`${r.alias_norm}|${r.vendor || ""}`, r.store_item_id));
+  return m;
+}
+export const lookupAlias = (aliasMap, name, vendor) => {
+  const n = normItemAlias(name);
+  return aliasMap.get(`${n}|${normItemAlias(vendor)}`) || aliasMap.get(`${n}|`) || null;
+};
+export async function upsertItemAlias({ name, vendor, storeItemId, by }) {
+  if (!name || !storeItemId) return;
+  const { error } = await supabase.from("supplier_item_aliases").upsert({
+    alias_norm: normItemAlias(name), vendor: normItemAlias(vendor), store_item_id: storeItemId, created_by: by || null,
+  }, { onConflict: "alias_norm,vendor" });
+  if (error) console.error("alias save failed:", error.message);
+}
+
 export async function saveInvoiceLine(lineId, fields) {
   const { error } = await supabase.from("invoice_lines").update(fields).eq("id", lineId);
   if (error) throw error;
+  // LEARNING: a human match teaches the alias map — this single hook covers
+  // every reviewer surface (invoice inbox AND expense review use this fn).
+  if (fields && fields.match_method === "human" && fields.matched_store_item_id) {
+    try {
+      const { data: ln } = await supabase.from("invoice_lines").select("raw_description, invoice_id").eq("id", lineId).single();
+      if (ln?.raw_description) {
+        const { data: inv } = await supabase.from("invoices").select("supplier_name").eq("id", ln.invoice_id).single();
+        await upsertItemAlias({ name: ln.raw_description, vendor: inv?.supplier_name || "", storeItemId: fields.matched_store_item_id });
+      }
+    } catch (e) { console.error("alias learn failed:", e.message); }
+  }
 }
 
 export async function setInvoiceLineStatus(lineId, status) {
@@ -9066,6 +9098,7 @@ export async function applyExpenseLineCorrections({ claimId, lines }) {
         if (match) {
           const upd = { qty_dispatched: match.qty };
           if (match.price != null) upd.unit_cost = match.price;
+          if (match.storeItemId) upd.store_item_id = match.storeItemId;  // link = stock moves on receive
           const { error } = await supabase.from("store_delivery_lines").update(upd).eq("id", row.id);
           if (!error) deliveryUpdated++;
         }
@@ -15283,8 +15316,13 @@ export async function createFreshPurchaseDeliveries(perStore, meta = {}) {
                 status: "incoming", dispatched_at: new Date().toISOString() })
       .select().single();
     if (hErr) { console.error("fresh delivery header failed:", hErr.message); continue; }
+    // Alias lookup: names a human has matched before link straight to the
+    // real store item — receiving then moves inventory instead of orphaning.
+    let aliasMap = null;
+    try { aliasMap = await fetchItemAliases(); } catch { aliasMap = new Map(); }
     const rows = items.map(it => ({
-      delivery_id: deliv.id, dist_item_id: null, store_item_id: null,
+      delivery_id: deliv.id, dist_item_id: null,
+      store_item_id: it.storeItemId || lookupAlias(aliasMap, it.desc, meta.vendor) || null,
       item_name: `${it.desc || "Item"}${meta.vendor ? ` (${meta.vendor})` : ""}`,
       qty_dispatched: Number(it.units) || 0,
       unit_cost: it.price != null ? Number(it.price) : null,
