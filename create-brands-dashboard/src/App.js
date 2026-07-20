@@ -183,7 +183,7 @@ import {
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
-  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
+  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
 } from "./supabase";
@@ -20316,9 +20316,25 @@ function normaliseReceiptUnits(desc, units) {
   }
   return q;
 }
-function ExpenseDetailOverlay({ claim, onClose }) {
+function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
   const [lines, setLines] = useState(null);
   const [imgFull, setImgFull] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [saveMsg, setSaveMsg] = useState("");
+  const canEdit = editable && claim.status === "submitted";
+  const saveCorrections = async () => {
+    setSaveBusy(true); setSaveMsg("");
+    try {
+      const res = await applyExpenseLineCorrections({ claimId: claim.id, lines: (lines || []).map(l => ({ desc: l.desc, qty: l.qty, price: l.price })) });
+      setEditing(false);
+      setSaveMsg(res.deliverySkipped
+        ? "Saved. Note: the store delivery was already received, so its quantities were NOT changed."
+        : `Saved — ${res.deliveryUpdated} delivery line${res.deliveryUpdated !== 1 ? "s" : ""} corrected for the store.`);
+      onSaved?.();
+    } catch (e2) { setSaveMsg(e2.message || "Could not save corrections."); }
+    setSaveBusy(false);
+  };
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -20375,9 +20391,17 @@ function ExpenseDetailOverlay({ claim, onClose }) {
                 {lines && lines.length === 0 && <tr><td colSpan={hasPrices ? 4 : 2} className="px-3 py-6 text-center text-slate-500">No line items were captured for this expense.</td></tr>}
                 {(lines || []).map((l, i) => (
                   <tr key={i}>
-                    <td className="px-3 py-2 text-right tabular-nums text-slate-300 font-semibold">{l.qty != null ? l.qty : "—"}</td>
+                    <td className="px-3 py-2 text-right tabular-nums text-slate-300 font-semibold">
+                      {editing
+                        ? <input type="number" inputMode="decimal" value={l.qty ?? ""} onChange={ev => setLines(ls => ls.map((x, j) => j === i ? { ...x, qty: Number(ev.target.value) || 0 } : x))} className="w-14 px-1.5 py-1 rounded bg-slate-950 border border-amber-600/60 text-white text-right tabular-nums"/>
+                        : (l.qty != null ? l.qty : "—")}
+                    </td>
                     <td className="px-3 py-2 text-slate-300">{l.desc}</td>
-                    {hasPrices && <td className="px-3 py-2 text-right tabular-nums text-slate-400">{l.price != null ? `£${l.price.toFixed(2)}` : ""}</td>}
+                    {hasPrices && <td className="px-3 py-2 text-right tabular-nums text-slate-400">
+                      {editing
+                        ? <input type="number" inputMode="decimal" step="0.01" value={l.price ?? ""} onChange={ev => setLines(ls => ls.map((x, j) => j === i ? { ...x, price: ev.target.value === "" ? null : Number(ev.target.value) } : x))} className="w-16 px-1.5 py-1 rounded bg-slate-950 border border-amber-600/60 text-white text-right tabular-nums"/>
+                        : (l.price != null ? `£${l.price.toFixed(2)}` : "")}
+                    </td>}
                     {hasPrices && <td className="px-3 py-2 text-right tabular-nums text-slate-300">{l.price != null ? `£${((l.qty || 0) * l.price).toFixed(2)}` : ""}</td>}
                   </tr>
                 ))}
@@ -20387,6 +20411,20 @@ function ExpenseDetailOverlay({ claim, onClose }) {
               <div className="px-3 py-2 border-t border-slate-800 flex justify-between text-xs">
                 <span className="text-slate-500">Lines total {Math.abs(lineTotal - Number(claim.amount || 0)) > 0.05 ? "· differs from claim amount" : "· matches claim"}</span>
                 <span className="font-bold text-white tabular-nums">£{lineTotal.toFixed(2)}</span>
+              </div>
+            )}
+            {canEdit && (
+              <div className="px-3 py-2 border-t border-slate-800 flex items-center gap-2">
+                {!editing ? (
+                  <button onClick={() => { setEditing(true); setSaveMsg(""); }} className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold">Correct OCR errors</button>
+                ) : (
+                  <>
+                    <button onClick={saveCorrections} disabled={saveBusy} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold disabled:opacity-50">{saveBusy ? "Saving…" : "Save corrections"}</button>
+                    <button onClick={() => setEditing(false)} disabled={saveBusy} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold">Cancel</button>
+                    <span className="text-[10px] text-slate-500">Also fixes the store's unreceived delivery lines.</span>
+                  </>
+                )}
+                {saveMsg && <span className="text-[11px] text-slate-400 ml-auto">{saveMsg}</span>}
               </div>
             )}
           </div>
@@ -20512,8 +20550,27 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
               onChange={e=>{ const f=e.target.files?.[0]; if(f) scanReceipt(f); e.target.value=""; }}/>
           </label>
           {scanLines.length > 0 && (
-            <div className="rounded-xl bg-slate-800/50 border border-slate-700 px-3 py-2 text-[11px] text-slate-400 max-h-28 overflow-auto">
-              {scanLines.map((it,i)=><div key={i} className="flex justify-between gap-2"><span className="truncate">{it.units}× {it.desc}</span><span className="tabular-nums">£{(it.units*it.price).toFixed(2)}</span></div>)}
+            <div className="rounded-xl bg-slate-800/50 border border-slate-700 px-3 py-2 space-y-1.5 max-h-56 overflow-auto">
+              <div className="text-[10px] text-slate-500">Check the scan against your paper receipt — fix any quantity or price the OCR misread before submitting.</div>
+              {scanLines.map((it, i) => (
+                <div key={i} className="flex items-center gap-1.5 text-[11px]">
+                  <input type="number" inputMode="decimal" value={it.units}
+                    onChange={ev => setScanLines(ls => ls.map((x, j) => j === i ? { ...x, units: Number(ev.target.value) || 0 } : x))}
+                    className="w-14 px-1.5 py-1 rounded bg-slate-950 border border-slate-700 text-white text-right tabular-nums"/>
+                  <span className="text-slate-500">×</span>
+                  <span className="flex-1 min-w-0 truncate text-slate-300">{it.desc}</span>
+                  <span className="text-slate-500">£</span>
+                  <input type="number" inputMode="decimal" step="0.01" value={it.price}
+                    onChange={ev => setScanLines(ls => ls.map((x, j) => j === i ? { ...x, price: Number(ev.target.value) || 0 } : x))}
+                    className="w-16 px-1.5 py-1 rounded bg-slate-950 border border-slate-700 text-white text-right tabular-nums"/>
+                  <span className="w-14 text-right tabular-nums text-slate-400">£{(it.units * it.price).toFixed(2)}</span>
+                  <button onClick={() => setScanLines(ls => ls.filter((_, j) => j !== i))} className="text-slate-600 hover:text-red-400 px-1">×</button>
+                </div>
+              ))}
+              <div className="flex justify-between text-[11px] pt-1 border-t border-slate-700">
+                <span className="text-slate-500">Lines total</span>
+                <span className="font-bold text-white tabular-nums">£{scanLines.reduce((s2, it) => s2 + it.units * it.price, 0).toFixed(2)}</span>
+              </div>
             </div>
           )}
           <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Vendor / paid to</label><input value={form.vendor} onChange={e=>setF("vendor",e.target.value)} placeholder="Who was paid" className={ec}/></div>
@@ -43650,7 +43707,7 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
           </div>
         </Modal>
       )}
-      {detailClaim && <ExpenseDetailOverlay claim={detailClaim} onClose={() => setDetailClaim(null)}/>}
+      {detailClaim && <ExpenseDetailOverlay claim={detailClaim} editable onSaved={() => handlers.refresh?.()} onClose={() => setDetailClaim(null)}/>}
       {/* FULL-SCREEN RECEIPT VIEWER: in-app, no new tab (pop-up blockers
               and installed-app webviews made target=_blank unreliable) */}
           {viewReceipt && (

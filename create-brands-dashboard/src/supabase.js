@@ -9032,6 +9032,49 @@ export async function fetchExpenseClaims({ status } = {}) {
 
 // Upload an expense receipt/invoice image. Returns a public URL stored on the
 // claim. Uses the existing public photo bucket pattern.
+// ── EXPENSE LINE CORRECTIONS (pre-approval) ─────────────────────────────────
+// OCR misreads get fixed by a human before approval. Corrections rewrite the
+// claim's itemised reference AND the matching UNRECEIVED store delivery lines
+// (qty + unit cost), so the store receives true numbers. Received deliveries
+// are never touched — stock already moved.
+export async function applyExpenseLineCorrections({ claimId, lines }) {
+  const clean = (lines || []).filter(l => (l.desc || "").trim() && Number(l.qty) > 0)
+    .map(l => ({ desc: l.desc.trim(), qty: Number(l.qty), price: l.price != null ? Number(l.price) : null }));
+  const { data: claim, error: cErr } = await supabase.from("expense_claims").select("*").eq("id", claimId).single();
+  if (cErr || !claim) throw new Error("Expense not found.");
+  if (claim.status !== "submitted") throw new Error("Only submitted (not yet approved) expenses can be corrected.");
+
+  // 1. Rewrite the itemised reference on the claim.
+  const reference = clean.map(l => `${l.qty}× ${l.desc}`).join("; ").slice(0, 500);
+  const { error: uErr } = await supabase.from("expense_claims").update({ reference, updated_at: new Date().toISOString() }).eq("id", claimId);
+  if (uErr) throw uErr;
+
+  // 2. Correct the matching unreceived delivery lines (same store + the ref
+  //    pattern the expense flow stamps on the deliveries it raises).
+  let deliveryUpdated = 0, deliverySkipped = false;
+  if (claim.store_id) {
+    const refPrefix = `${claim.expense_date}-${(claim.vendor || "purchase").slice(0, 20)}`;
+    const { data: dels } = await supabase.from("store_deliveries").select("id, status, ref")
+      .eq("store_id", claim.store_id).ilike("ref", `${refPrefix}%`);
+    for (const d of (dels || [])) {
+      const { data: dl } = await supabase.from("store_delivery_lines").select("id, item_name, received").eq("delivery_id", d.id);
+      const anyReceived = (dl || []).some(x => x.received);
+      if (anyReceived) { deliverySkipped = true; continue; }
+      for (const row of (dl || [])) {
+        const base = (row.item_name || "").replace(/\s*\([^)]*\)\s*$/, "").trim(); // strip "(Vendor)"
+        const match = clean.find(l => l.desc.trim() === base);
+        if (match) {
+          const upd = { qty_dispatched: match.qty };
+          if (match.price != null) upd.unit_cost = match.price;
+          const { error } = await supabase.from("store_delivery_lines").update(upd).eq("id", row.id);
+          if (!error) deliveryUpdated++;
+        }
+      }
+    }
+  }
+  return { reference, deliveryUpdated, deliverySkipped };
+}
+
 export async function uploadExpenseReceipt(file, submittedById) {
   const ext = (file.name && file.name.includes(".")) ? file.name.split(".").pop().toLowerCase() : "jpg";
   const random = Math.random().toString(36).slice(2, 10);
