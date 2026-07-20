@@ -58846,6 +58846,31 @@ export default function App() {
       }
     } catch {}
   }, [activeView]);
+
+  // ── STALE-BUNDLE KILLER ────────────────────────────────────────────────────
+  // A registered service worker pins old JS across deploys (refreshes don't
+  // help). Unregister any SW + purge caches ONCE, then reload so the fresh
+  // bundle loads from the network. After this ships, every future deploy
+  // reaches every device on the next load — no more "nothing changed".
+  useEffect(() => {
+    (async () => {
+      try {
+        if (window.sessionStorage.getItem("cb.swPurged")) return;
+        let purged = false;
+        if (navigator.serviceWorker) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          for (const r of regs) { await r.unregister(); purged = true; }
+        }
+        if (window.caches && caches.keys) {
+          const keys = await caches.keys();
+          for (const k of keys) { await caches.delete(k); if (k) purged = true; }
+        }
+        window.sessionStorage.setItem("cb.swPurged", "1");
+        if (purged) window.location.reload();
+      } catch {}
+    })();
+  }, []);
+  useEffect(() => { try { console.log("CB build: VIEWHASH+SWFIX 2026-07-20"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
