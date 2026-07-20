@@ -11851,7 +11851,7 @@ const mapDistSO = (o) => ({
   shippingCharge: Number(o.shipping_charge) || 0, note: o.note || "", terms: o.terms || "",
   createdBy: o.created_by || null, createdAt: o.created_at, lines: (o.dist_sales_order_lines || []).map(mapDistSOLine),
 });
-const mapDistSOLine = (l) => ({ id: l.id, soId: l.so_id, itemId: l.item_id, qty: Number(l.qty) || 0, unitPrice: Number(l.unit_price) || 0, discount: Number(l.discount) || 0, discountType: l.discount_type || "percent", taxRateId: l.tax_rate_id || null });
+const mapDistSOLine = (l) => ({ id: l.id, soId: l.so_id, itemId: l.item_id, qty: Number(l.qty) || 0, fulfilChannel: l.fulfil_channel || null, unitPrice: Number(l.unit_price) || 0, discount: Number(l.discount) || 0, discountType: l.discount_type || "percent", taxRateId: l.tax_rate_id || null });
 
 export async function fetchDistSalesOrders({ customerId, status } = {}) {
   let q = supabase.from("dist_sales_orders").select("*, dist_sales_order_lines(*)").order("created_at", { ascending: false });
@@ -14305,7 +14305,15 @@ export async function fetchDistOrdersByItemType(itemType, { includeDone = false 
   const out = [];
   for (const so of orders) {
     const matchLines = (so.lines || [])
-      .filter(l => effType(itemById.get(l.itemId)) === itemType)
+      // Channel-aware: the fresh list shows lines whose RESOLVED channel is
+      // fresh (item-type default or explicit override); other typed views show
+      // their native type minus anything detached or diverted to the fresh shop.
+      .filter(l => {
+        const t = effType(itemById.get(l.itemId));
+        const ch = l.fulfilChannel || (t === "fresh" ? "fresh" : "warehouse");
+        if (itemType === "fresh") return ch === "fresh";
+        return t === itemType && ch !== "detached" && ch !== "fresh";
+      })
       .map(l => {
         const it = itemById.get(l.itemId);
         return { itemId: l.itemId, name: it?.name || l.itemId, sku: it?.sku || "", category: it?.category || "", qty: l.qty, packUnit: it?.packUnit, packSize: it?.packSize != null ? Number(it.packSize) : null, packCount: it?.packCount != null ? Number(it.packCount) : null || "" };
@@ -14340,6 +14348,17 @@ export async function fetchDistFulfilChecks(soIds = []) {
 // A placed order can be reopened by the store while it hasn't been picked.
 // The proposal (a FULL replacement line set) sits pending; Dist approves
 // (lines swapped) or rejects (original stands). One pending per order.
+
+// ── FULFILMENT CHANNEL: who fulfils an SO line (explicit, overridable) ──────
+export const resolveFulfilChannel = (line, itemType) =>
+  line?.fulfilChannel || ((itemType || "warehouse") === "fresh" ? "fresh" : "warehouse");
+
+export async function setLineFulfilChannel(lineId, channel) {
+  const val = ["warehouse", "fresh", "detached"].includes(channel) ? channel : null;
+  const { error } = await supabase.from("dist_sales_order_lines")
+    .update({ fulfil_channel: val }).eq("id", lineId);
+  if (error) throw error;
+}
 
 export async function fetchOrderAmendment(soId) {
   const { data } = await supabase.from("dist_order_amendments").select("*")
@@ -15137,12 +15156,31 @@ export async function createStoreDeliveryFromDispatch(soId, dispatchId, dispatch
     if (!storeId) { console.warn("store delivery: no store for SO", soId); return null; }
 
     // Map dist_item_id → store item (id + name) for the lines we're delivering.
-    const distIds = [...new Set((dispatchLines || []).map(l => l.itemId).filter(Boolean))];
+    const allIds = [...new Set((dispatchLines || []).map(l => l.itemId).filter(Boolean))];
     const distById = new Map();
-    if (distIds.length) {
-      const { data: di } = await supabase.from("dist_items").select("id, name").in("id", distIds);
-      (di || []).forEach(d => distById.set(d.id, d.name));
+    const typeById = new Map();
+    if (allIds.length) {
+      const { data: di } = await supabase.from("dist_items").select("id, name, item_type").in("id", allIds);
+      (di || []).forEach(d => { distById.set(d.id, d.name); typeById.set(d.id, d.item_type || "warehouse"); });
     }
+    // FRESH lines never ride the warehouse delivery: the driver already bought
+    // and delivered them (expense -> fresh-purchase delivery). Copying them here
+    // would have the store receive the same strawberries TWICE - double stock,
+    // double purchases. The SO keeps its fresh lines for the order record; the
+    // store's physical receipt of them lives on the fresh delivery.
+    // Per-line channel from the SO wins over item type: an item overridden to
+    // 'warehouse' rides the van even if fresh-typed; 'fresh'/'detached' never do.
+    const { data: soLines } = await supabase.from("dist_sales_order_lines")
+      .select("item_id, fulfil_channel").eq("so_id", soId);
+    const chanByItem = new Map((soLines || []).map(x => [x.item_id, x.fulfil_channel]));
+    const rideVan = (itemId) => {
+      const ch = chanByItem.get(itemId);
+      if (ch) return ch === "warehouse";
+      return typeById.get(itemId) !== "fresh";
+    };
+    const deliverable = (dispatchLines || []).filter(l => rideVan(l.itemId));
+    if (!deliverable.length) return null; // everything on this dispatch was fresh - nothing for the van
+    const distIds = [...new Set(deliverable.map(l => l.itemId).filter(Boolean))];
     const { data: storeItems } = await supabase.from("cogs_store_items")
       .select("id, name, dist_item_id").in("dist_item_id", distIds.length ? distIds : ["__none__"]);
     const storeByDist = new Map((storeItems || []).map(s => [s.dist_item_id, s]));
@@ -15155,7 +15193,7 @@ export async function createStoreDeliveryFromDispatch(soId, dispatchId, dispatch
     if (hErr) { console.error("store delivery header failed:", hErr.message); return null; }
 
     // Lines
-    const lineRows = (dispatchLines || []).map(l => {
+    const lineRows = deliverable.map(l => {
       const si = storeByDist.get(l.itemId);
       return {
         delivery_id: deliv.id,

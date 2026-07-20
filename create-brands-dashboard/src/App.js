@@ -183,7 +183,7 @@ import {
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
-  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
+  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, setLineFulfilChannel, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
 } from "./supabase";
@@ -9473,7 +9473,30 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
                         <div className="w-9 h-9 rounded-lg bg-gradient-to-b from-white to-slate-100 flex items-center justify-center overflow-hidden flex-shrink-0 border border-slate-800">
                           {it?.imageUrl ? <img src={it.imageUrl} alt="" className="w-full h-full object-contain p-0.5"/> : <Package size={14} className="text-slate-300"/>}
                         </div>
-                        <div><div className="text-white">{cleanName(it?.name) || l.itemId}</div>{it && (it.packCount || it.packSize) && <div className="text-[10px] text-slate-500">{it.packCount && it.packCount !== 1 ? `${it.packCount}× ` : ""}{it.packSize || ""}{it.packUnit || ""}</div>}</div>
+                        <div>
+                          <div className="text-white">{cleanName(it?.name) || l.itemId}</div>
+                          {it && (it.packCount || it.packSize) && <div className="text-[10px] text-slate-500">{it.packCount && it.packCount !== 1 ? `${it.packCount}× ` : ""}{it.packSize || ""}{it.packUnit || ""}</div>}
+                          {/* FULFILMENT CHANNEL — who fulfils this line. Defaults by item
+                              type; overridable while CONFIRMED so the same order can be
+                              satisfied any way the operation evolves. */}
+                          {so.status === "confirmed" ? (
+                            <select
+                              value={l.fulfilChannel || ""}
+                              onChange={async (ev) => { try { await setLineFulfilChannel(l.id, ev.target.value || null); const d2 = await fetchDistSalesOrderDetail(so.id); setDetail(d2); } catch (e2) { alert(e2.message); } }}
+                              className="mt-0.5 text-[10px] bg-slate-950 border border-slate-800 rounded px-1 py-0.5 text-slate-400"
+                              title="Who fulfils this line"
+                            >
+                              <option value="">{(it?.itemType === "fresh") ? "Auto · fresh shop" : "Auto · warehouse van"}</option>
+                              <option value="warehouse">Warehouse van</option>
+                              <option value="fresh">Fresh shop (driver)</option>
+                              <option value="detached">Detached — fulfilled outside</option>
+                            </select>
+                          ) : (l.fulfilChannel && (
+                            <span className={`inline-block mt-0.5 text-[9px] px-1.5 py-0.5 rounded font-bold ${l.fulfilChannel === "detached" ? "bg-slate-800 text-slate-400" : l.fulfilChannel === "fresh" ? "bg-emerald-900/50 text-emerald-300" : "bg-indigo-900/50 text-indigo-300"}`}>
+                              {l.fulfilChannel === "detached" ? "DETACHED" : l.fulfilChannel === "fresh" ? "FRESH SHOP" : "VAN"}
+                            </span>
+                          ))}
+                        </div>
                       </div>
                     </td>
                     <td className="px-3 py-2 text-right text-slate-300">{qty}</td>
