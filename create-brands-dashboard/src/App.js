@@ -183,7 +183,7 @@ import {
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
-  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, setLineFulfilChannel, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
+  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
 } from "./supabase";
@@ -9177,6 +9177,50 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
   const [detail, setDetail] = useState(null);
   const [receipt, setReceipt] = useState(null);   // the store's receipt of this order's delivery
   const [amendment, setAmendment] = useState(null); // store's pending/last change request
+  // ── DETACH: fresh / direct-supplier lines are invoiced through their own
+  //    channel — one click strips the chosen groups off this SO entirely. ──
+  const [detachOpen, setDetachOpen] = useState(false);
+  const [detachSel, setDetachSel] = useState({});   // groupKey -> checked
+  const [detachBusy, setDetachBusy] = useState(false);
+  const [vendorNames, setVendorNames] = useState({});
+  useEffect(() => {
+    if (!detachOpen) return;
+    fetchDistContacts({ kind: "vendor" }).then(vs => {
+      const m = {}; (vs || []).forEach(v => { m[v.id] = v.displayName || v.name || v.company || v.id; });
+      setVendorNames(m);
+    }).catch(() => {});
+    /* eslint-disable-next-line */
+  }, [detachOpen]);
+  const detachGroups = useMemo(() => {
+    const groups = [];
+    const fresh = (so.lines || []).filter(l => itemById.get(l.itemId)?.itemType === "fresh");
+    if (fresh.length) groups.push({ key: "fresh", label: "Fresh stock (driver-shopped)", lines: fresh });
+    const byVendor = new Map();
+    (so.lines || []).forEach(l => {
+      const it = itemById.get(l.itemId);
+      if (it?.itemType !== "fresh" && it?.fulfilledBy) {
+        if (!byVendor.has(it.fulfilledBy)) byVendor.set(it.fulfilledBy, []);
+        byVendor.get(it.fulfilledBy).push(l);
+      }
+    });
+    byVendor.forEach((lines, vid) => groups.push({ key: `vendor:${vid}`, label: `Direct supplier — ${vid}`, vendorId: vid, lines }));
+    return groups;
+    /* eslint-disable-next-line */
+  }, [so.lines, items]);
+  const doDetach = async () => {
+    const chosen = detachGroups.filter(g => detachSel[g.key]);
+    if (!chosen.length) { setDetachOpen(false); return; }
+    setDetachBusy(true);
+    try {
+      const lineIds = chosen.flatMap(g => g.lines.map(l => l.id));
+      const label = chosen.map(g => g.label).join(" + ");
+      await detachSoLines({ soId: so.id, lineIds, label, user: currentUserLike() });
+      setDetachOpen(false);
+      const d2 = await fetchDistSalesOrderDetail(so.id); setDetail(d2);
+    } catch (e2) { alert(e2.message); }
+    setDetachBusy(false);
+  };
+  const currentUserLike = () => ({ name: "Distribution" });
   const [amendBusy, setAmendBusy] = useState(false);
   const [err, setErr] = useState("");
   const [freshPrompt, setFreshPrompt] = useState(null); // { lines:[{itemId,name,qty}], costs:{} } before dispatch
@@ -9222,6 +9266,9 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
             totals: [["Subtotal", gbp(totals.subTotal)], ["VAT", gbp(totals.taxTotal)], ...(Number(so.shippingCharge) ? [["Shipping", gbp(so.shippingCharge)]] : []), ["Total", gbp(grand), true]],
             note: "Generated from the Create Brands dashboard.",
           })} className="ml-auto px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5"><Printer size={13}/> Print</button>
+          {so.status === "confirmed" && detachGroups.length > 0 && (
+            <button onClick={() => { setDetachSel({}); setDetachOpen(true); }} className="px-3 py-1.5 rounded-lg bg-amber-700 hover:bg-amber-600 text-white text-xs font-semibold">Detach…</button>
+          )}
           <button onClick={onEdit} className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center gap-1.5"><Edit size={13}/> Edit</button>
           {onDelete && <button onClick={onDelete} className="px-3 py-1.5 rounded-lg bg-red-950/60 hover:bg-red-900/60 border border-red-900/60 text-red-300 text-xs font-semibold flex items-center gap-1.5"><Trash2 size={13}/> Delete</button>}
         </div>
@@ -9417,6 +9464,35 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
               );
             })()}
 
+            {/* DETACH MODAL — strip separately-invoiced groups off this order */}
+            {detachOpen && (
+              <div className="fixed inset-0 z-[70] bg-black/70 flex items-center justify-center p-4" onClick={() => !detachBusy && setDetachOpen(false)}>
+                <div className="w-full max-w-md bg-slate-900 border border-slate-700 rounded-2xl p-5 space-y-3" onClick={ev => ev.stopPropagation()}>
+                  <div>
+                    <div className="text-base font-bold text-white">Detach separately-invoiced items</div>
+                    <div className="text-xs text-slate-500 mt-1">These groups are bought and invoiced through their own channel (driver receipts or the supplier's own invoice). Detaching removes their lines from this order so Distribution's paperwork carries only what Distribution supplies. This cannot be undone — re-add lines via Edit if needed.</div>
+                  </div>
+                  {detachGroups.map(g => {
+                    const val = g.lines.reduce((s2, l) => s2 + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0);
+                    const label = g.vendorId ? `Direct supplier — ${vendorNames[g.vendorId] || g.vendorId}` : g.label;
+                    return (
+                      <label key={g.key} className="flex items-center gap-3 rounded-xl border border-slate-700 bg-slate-800/40 px-3 py-2.5 cursor-pointer">
+                        <input type="checkbox" checked={!!detachSel[g.key]} onChange={ev => setDetachSel(x => ({ ...x, [g.key]: ev.target.checked }))} className="w-4 h-4"/>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-sm font-semibold text-slate-200">{label}</div>
+                          <div className="text-[11px] text-slate-500">{g.lines.length} line{g.lines.length !== 1 ? "s" : ""} · {gbp(val)} on this order</div>
+                        </div>
+                      </label>
+                    );
+                  })}
+                  <div className="flex gap-2 pt-1">
+                    <button onClick={() => setDetachOpen(false)} disabled={detachBusy} className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+                    <button onClick={doDetach} disabled={detachBusy || !detachGroups.some(g => detachSel[g.key])} className="flex-1 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-sm font-bold disabled:opacity-40">{detachBusy ? "Detaching…" : "Detach checked groups"}</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* DISCREPANCIES — attached to the order: what the store says arrived
                 vs what was sent, only when something's short. */}
             {receipt && receipt.status === "confirmed" && receipt.lines.some(l => l.short) && (
@@ -9476,26 +9552,6 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
                         <div>
                           <div className="text-white">{cleanName(it?.name) || l.itemId}</div>
                           {it && (it.packCount || it.packSize) && <div className="text-[10px] text-slate-500">{it.packCount && it.packCount !== 1 ? `${it.packCount}× ` : ""}{it.packSize || ""}{it.packUnit || ""}</div>}
-                          {/* FULFILMENT CHANNEL — who fulfils this line. Defaults by item
-                              type; overridable while CONFIRMED so the same order can be
-                              satisfied any way the operation evolves. */}
-                          {so.status === "confirmed" ? (
-                            <select
-                              value={l.fulfilChannel || ""}
-                              onChange={async (ev) => { try { await setLineFulfilChannel(l.id, ev.target.value || null); const d2 = await fetchDistSalesOrderDetail(so.id); setDetail(d2); } catch (e2) { alert(e2.message); } }}
-                              className="mt-0.5 text-[10px] bg-slate-950 border border-slate-800 rounded px-1 py-0.5 text-slate-400"
-                              title="Who fulfils this line"
-                            >
-                              <option value="">{(it?.itemType === "fresh") ? "Auto · fresh shop" : "Auto · warehouse van"}</option>
-                              <option value="warehouse">Warehouse van</option>
-                              <option value="fresh">Fresh shop (driver)</option>
-                              <option value="detached">Detached — fulfilled outside</option>
-                            </select>
-                          ) : (l.fulfilChannel && (
-                            <span className={`inline-block mt-0.5 text-[9px] px-1.5 py-0.5 rounded font-bold ${l.fulfilChannel === "detached" ? "bg-slate-800 text-slate-400" : l.fulfilChannel === "fresh" ? "bg-emerald-900/50 text-emerald-300" : "bg-indigo-900/50 text-indigo-300"}`}>
-                              {l.fulfilChannel === "detached" ? "DETACHED" : l.fulfilChannel === "fresh" ? "FRESH SHOP" : "VAN"}
-                            </span>
-                          ))}
                         </div>
                       </div>
                     </td>

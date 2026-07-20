@@ -14349,6 +14349,26 @@ export async function fetchDistFulfilChecks(soIds = []) {
 // The proposal (a FULL replacement line set) sits pending; Dist approves
 // (lines swapped) or rejects (original stands). One pending per order.
 
+// ── DETACH SO LINES: fresh / direct-supplier lines invoiced separately ──────
+// Removes the checked groups' lines from the order outright — they're bought
+// and invoiced through their own channel (driver expense or direct supplier),
+// so keeping them on the Dist SO double-represents them. Guarded: only
+// CONFIRMED orders, never after picking, never emptying the order.
+export async function detachSoLines({ soId, lineIds, label, user }) {
+  if (!lineIds || !lineIds.length) throw new Error("Nothing selected to detach.");
+  const { data: so } = await supabase.from("dist_sales_orders").select("status, note").eq("id", soId).single();
+  if (!so || so.status !== "confirmed") throw new Error("Only confirmed, unfulfilled orders can be detached from.");
+  const { data: picks } = await supabase.from("dist_picks").select("id").eq("so_id", soId).limit(1);
+  if (picks && picks.length) throw new Error("This order has already been picked — delete the pick first.");
+  const { data: allLines } = await supabase.from("dist_sales_order_lines").select("id").eq("so_id", soId);
+  if ((allLines || []).length <= lineIds.length) throw new Error("That would remove every line — cancel the order instead.");
+  const { error } = await supabase.from("dist_sales_order_lines").delete().in("id", lineIds).eq("so_id", soId);
+  if (error) throw error;
+  const stamp = `Detached (invoiced separately): ${label} — ${lineIds.length} line${lineIds.length !== 1 ? "s" : ""} removed by ${user?.name || "Dist"} ${new Date().toISOString().slice(0, 10)}`;
+  await supabase.from("dist_sales_orders").update({ note: so.note ? `${so.note} · ${stamp}` : stamp }).eq("id", soId);
+  return true;
+}
+
 // ── FULFILMENT CHANNEL: who fulfils an SO line (explicit, overridable) ──────
 export const resolveFulfilChannel = (line, itemType) =>
   line?.fulfilChannel || ((itemType || "warehouse") === "fresh" ? "fresh" : "warehouse");
