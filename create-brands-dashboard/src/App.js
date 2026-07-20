@@ -20319,6 +20319,8 @@ function normaliseReceiptUnits(desc, units) {
 function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
   const [lines, setLines] = useState(null);
   const [rawLines, setRawLines] = useState(null);   // raw invoice_lines → rendered with the SAME reviewer rows as the invoice inbox
+  const [invHead, setInvHead] = useState(null);     // invoice header: extractor totals (ex-VAT, VAT)
+  const [imgZoom, setImgZoom] = useState(1);        // receipt zoom (0.5×–4×)
   const [imgFull, setImgFull] = useState(false);
   const [editing, setEditing] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
@@ -20361,8 +20363,9 @@ function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
     (async () => {
       if (claim.invoiceId) {
         try {
-          const { lines: raw } = await getInvoiceWithLines(claim.invoiceId);
+          const { invoice, lines: raw } = await getInvoiceWithLines(claim.invoiceId);
           if (!alive) return;
+          setInvHead(invoice || null);
           setRawLines(raw || []);
           setLines((raw || []).map(l => ({
             qty: normaliseReceiptUnits(l.raw_description, l.pack_qty_base != null ? Number(l.pack_qty_base) : 1),
@@ -20393,11 +20396,23 @@ function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
         <div className="ml-auto text-base font-black text-white flex-shrink-0">£{Number(claim.amount || 0).toFixed(2)}</div>
       </div>
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-4xl mx-auto w-full p-4 grid md:grid-cols-[300px_1fr] gap-4">
-          <div>
+        <div className="max-w-6xl mx-auto w-full p-4 grid md:grid-cols-[minmax(340px,44%)_1fr] gap-4 items-start">
+          {/* Receipt: full-height sticky column with zoom — the paper is the
+              evidence; it should be readable WHILE matching, not a thumbnail. */}
+          <div className="md:sticky md:top-3">
             {claim.receiptUrl ? (
-              <img src={claim.receiptUrl} alt="receipt" onClick={() => setImgFull(true)}
-                className="w-full rounded-xl border border-slate-800 cursor-zoom-in"/>
+              <div className="rounded-xl border border-slate-800 overflow-hidden bg-slate-900">
+                <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-slate-800">
+                  <button onClick={() => setImgZoom(z => Math.max(0.5, Math.round((z - 0.25) * 4) / 4))} className="w-7 h-7 rounded-lg bg-slate-800 text-slate-300 font-bold">−</button>
+                  <span className="text-[11px] text-slate-500 tabular-nums w-10 text-center">{Math.round(imgZoom * 100)}%</span>
+                  <button onClick={() => setImgZoom(z => Math.min(4, Math.round((z + 0.25) * 4) / 4))} className="w-7 h-7 rounded-lg bg-slate-800 text-slate-300 font-bold">+</button>
+                  <button onClick={() => setImgZoom(1)} className="px-2 h-7 rounded-lg bg-slate-800 text-slate-400 text-[11px]">Fit</button>
+                  <button onClick={() => setImgFull(true)} className="ml-auto px-2 h-7 rounded-lg bg-slate-800 text-slate-400 text-[11px]">⤢ Fullscreen</button>
+                </div>
+                <div className="overflow-auto" style={{ maxHeight: "calc(100vh - 160px)" }}>
+                  <img src={claim.receiptUrl} alt="receipt" style={{ width: `${imgZoom * 100}%`, maxWidth: "none" }}/>
+                </div>
+              </div>
             ) : <div className="text-xs text-slate-600 border border-dashed border-slate-800 rounded-xl p-6 text-center">No receipt image on this claim.</div>}
           </div>
           {claim.invoiceId && rawLines ? (
@@ -20405,6 +20420,30 @@ function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
               <div className="text-[11px] text-slate-500">Same review as the invoice inbox: match each line to OUR item (matches are remembered for every future receipt), fix pack qty / price, then sync to the store's delivery.</div>
               {rawLines.map(l => <InvoiceLineRow key={l.id} line={l} domain="shop" onChanged={reloadRaw}/>)}
               {rawLines.length === 0 && <div className="text-xs text-slate-500 border border-dashed border-slate-800 rounded-xl p-6 text-center">No extracted lines on this receipt.</div>}
+              {/* TOTALS — what the extractor read vs what the lines add to vs
+                  what was claimed. Savings/discounts appear as the difference
+                  between line totals and the till total. */}
+              {(() => {
+                const linesTotal = (rawLines || []).reduce((s2, l) => s2 + (Number(l.line_total) || 0), 0);
+                const exVat = invHead && invHead.total_ex_vat != null ? Number(invHead.total_ex_vat) : null;
+                const vat = invHead && invHead.total_vat != null ? Number(invHead.total_vat) : null;
+                const receiptTotal = exVat != null ? exVat + (vat || 0) : null;
+                const claimAmt = Number(claim.amount || 0);
+                const anchor = receiptTotal != null ? receiptTotal : claimAmt;
+                const savings = linesTotal > 0 && anchor > 0 ? linesTotal - anchor : null;
+                const matches = Math.abs((anchor || 0) - claimAmt) <= 0.05;
+                return (
+                  <div className="rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs space-y-1">
+                    <div className="flex justify-between"><span className="text-slate-500">Lines total (Σ items)</span><span className="tabular-nums text-slate-300 font-semibold">£{linesTotal.toFixed(2)}</span></div>
+                    {savings != null && Math.abs(savings) > 0.01 && (
+                      <div className="flex justify-between"><span className="text-slate-500">{savings > 0 ? "Savings / discounts on receipt" : "Unitemised extras"}</span><span className={`tabular-nums font-semibold ${savings > 0 ? "text-emerald-400" : "text-amber-400"}`}>{savings > 0 ? "−" : "+"}£{Math.abs(savings).toFixed(2)}</span></div>
+                    )}
+                    {vat != null && vat !== 0 && <div className="flex justify-between"><span className="text-slate-500">VAT (per receipt)</span><span className="tabular-nums text-slate-300">£{vat.toFixed(2)}</span></div>}
+                    <div className="flex justify-between border-t border-slate-800 pt-1"><span className="text-slate-400 font-semibold">Receipt total{exVat != null ? "" : " (from claim)"}</span><span className="tabular-nums text-white font-bold">£{(anchor || 0).toFixed(2)}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Claimed by {claim.submittedBy || "driver"}</span><span className={`tabular-nums font-bold ${matches ? "text-emerald-400" : "text-red-400"}`}>£{claimAmt.toFixed(2)} {matches ? "✓" : "≠"}</span></div>
+                  </div>
+                );
+              })()}
               {canEdit && (
                 <div className="flex items-center gap-2 pt-1">
                   <button onClick={syncToDelivery} disabled={saveBusy} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold disabled:opacity-50">{saveBusy ? "Syncing…" : "Apply to store delivery"}</button>
@@ -20470,7 +20509,7 @@ function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
       {imgFull && claim.receiptUrl && (
         <div className="fixed inset-0 z-[80] bg-black/95 flex flex-col" onClick={() => setImgFull(false)}>
           <button className="text-white text-2xl self-end px-4 py-2">×</button>
-          <div className="flex-1 overflow-auto flex items-start justify-center p-3"><img src={claim.receiptUrl} alt="receipt" className="max-w-full rounded-lg"/></div>
+          <div className="flex-1 overflow-auto p-3" onClick={ev => ev.stopPropagation()}><img src={claim.receiptUrl} alt="receipt" style={{ width: `${Math.max(imgZoom, 1) * 100}%`, maxWidth: "none" }} className="rounded-lg mx-auto"/></div>
         </div>
       )}
     </div>
