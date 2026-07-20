@@ -9095,8 +9095,11 @@ export async function applyExpenseLineCorrections({ claimId, lines }) {
   let deliveryUpdated = 0, deliverySkipped = false;
   if (claim.store_id) {
     const refPrefix = `${claim.expense_date}-${(claim.vendor || "purchase").slice(0, 20)}`;
-    const { data: dels } = await supabase.from("store_deliveries").select("id, status, ref")
-      .eq("store_id", claim.store_id).ilike("ref", `${refPrefix}%`);
+    // Deliveries carry the reference inside dispatch_id ("fresh:<ref>") — there
+    // is no ref column. (The original lookup silently matched nothing.)
+    const { data: dels, error: dErr2 } = await supabase.from("store_deliveries").select("id, status, dispatch_id")
+      .eq("store_id", claim.store_id).ilike("dispatch_id", `fresh:${refPrefix}%`);
+    if (dErr2) throw dErr2;
     for (const d of (dels || [])) {
       const { data: dl } = await supabase.from("store_delivery_lines").select("id, item_name, received").eq("delivery_id", d.id);
       const anyReceived = (dl || []).some(x => x.received);
