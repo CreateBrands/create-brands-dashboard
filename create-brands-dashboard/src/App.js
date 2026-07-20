@@ -20913,10 +20913,16 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     { key: "__more",       label: "More",      icon: MoreHorizontal },
   ];
 
+  // CK crew: anyone whose assigned sites include the Central Kitchen gets the
+  // full CK workspace in their More menu — without this, a CK manager on a
+  // phone has no route into the kitchen at all (desktop-only sidebar).
+  const isCkUser = (stores || []).some(st => st.siteType === "central_kitchen" && (currentUser?.storeIds || []).includes(st.id));
+
   // EMP_BOTTOMNAV_V1: everything else lives in the More sheet.
   // Drivers get a focused menu: Fresh Produce (their shopping list) added,
   // store-floor items (recipes, review QR / impact) removed as irrelevant.
   const MORE_NAV = [
+    ...(isCkUser ? [{ key: "central-kitchen", label: "Central Kitchen", icon: ChefHat }] : []),
     ...(isDriverRole ? [{ key: "fresh-produce", label: "Fresh Produce", icon: ShoppingCart }] : []),
     { key: "ops-temps",      label: "Temperature Log", icon: Thermometer },
     { key: "ops-deliveries", label: "Deliveries",      icon: Truck },
@@ -20950,6 +20956,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     "emp-schedule":   "My Schedule",
     "emp-training":   "Training",
     "emp-contracts":  "Contracts",
+    "central-kitchen": "Central Kitchen",
     "fresh-produce":  "Fresh Produce",
     "review-qr":      "Review QR",
     "recipes":        "Recipes",
@@ -21199,6 +21206,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
           )}
           {activeView === "recipes" && <StoreRecipesView />}
           {activeView === "fresh-produce" && <DistTypedItemsView itemType="fresh" currentUser={currentUser}/>}
+          {activeView === "central-kitchen" && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
 
           {/* DRIVER MILEAGE GATE — clocking is blocked until the reading is in */}
           {mileageGate && (
