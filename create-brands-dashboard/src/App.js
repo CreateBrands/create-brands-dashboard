@@ -9172,7 +9172,7 @@ function catRows(lines, catOf, colSpan, render) {
   return out;
 }
 
-function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, onDelete, onNavigate }) {
+function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, onDelete, onNavigate, onChanged }) {
   const { navigate } = useDistDocLink();
   const [detail, setDetail] = useState(null);
   const [receipt, setReceipt] = useState(null);   // the store's receipt of this order's delivery
@@ -9182,6 +9182,9 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
   const [detachOpen, setDetachOpen] = useState(false);
   const [detachSel, setDetachSel] = useState({});   // groupKey -> checked
   const [detachBusy, setDetachBusy] = useState(false);
+  const [detachedLines, setDetachedLines] = useState(null); // instant local redraw after detach
+  const [detachMsg, setDetachMsg] = useState("");
+  if (detachedLines) so = { ...so, lines: detachedLines }; // param override: every derived figure recomputes
   const [vendorNames, setVendorNames] = useState({});
   useEffect(() => {
     if (!detachOpen) return;
@@ -9219,8 +9222,12 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
       const lineIds = chosen.flatMap(g => g.lines.map(l => l.id));
       const label = chosen.map(g => g.label).join(" + ");
       await detachSoLines({ soId: so.id, lineIds, label, user: currentUserLike() });
+      const removed = new Set(lineIds);
+      setDetachedLines((so.lines || []).filter(l => !removed.has(l.id)));
       setDetachOpen(false);
-      const d2 = await fetchDistSalesOrderDetail(so.id); setDetail(d2);
+      setDetachMsg(`✓ Detached — ${label}: ${lineIds.length} line${lineIds.length !== 1 ? "s" : ""} removed. This order now shows only what Distribution supplies.`);
+      setTimeout(() => setDetachMsg(""), 8000);
+      onChanged?.();
     } catch (e2) { alert(e2.message); }
     setDetachBusy(false);
   };
@@ -9270,6 +9277,9 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
             totals: [["Subtotal", gbp(totals.subTotal)], ["VAT", gbp(totals.taxTotal)], ...(Number(so.shippingCharge) ? [["Shipping", gbp(so.shippingCharge)]] : []), ["Total", gbp(grand), true]],
             note: "Generated from the Create Brands dashboard.",
           })} className="ml-auto px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5"><Printer size={13}/> Print</button>
+          {detachMsg && (
+            <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[80] px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-bold shadow-xl">{detachMsg}</div>
+          )}
           {so.status === "confirmed" && detachGroups.length > 0 && (
             <button onClick={() => { setDetachSel({}); setDetachOpen(true); }} className="px-3 py-1.5 rounded-lg bg-amber-700 hover:bg-amber-600 text-white text-xs font-semibold">Detach…</button>
           )}
@@ -9697,7 +9707,7 @@ function DistSalesOrderView({ currentUser, setActiveView }) {
           )}
         </div>
       )}
-      {detail && <DistSalesOrderDetail so={detail} customer={customers.find(c => c.id === detail.customerId)} items={items} taxRates={taxRates} onClose={() => setDetail(null)} onEdit={() => { editSO(detail); setDetail(null); }} onDelete={() => removeSO(detail)} onNavigate={setActiveView}/>}
+      {detail && <DistSalesOrderDetail so={detail} customer={customers.find(c => c.id === detail.customerId)} items={items} taxRates={taxRates} onClose={() => setDetail(null)} onEdit={() => { editSO(detail); setDetail(null); }} onDelete={() => removeSO(detail)} onNavigate={setActiveView} onChanged={load}/>}
       {creating && (
         <Modal onClose={() => setCreating(null)} title={creating.id ? `Edit ${creating.soNumber || "sales order"}` : "New sales order"} maxW="max-w-4xl" fullScreen>
           <div className="space-y-4">
@@ -58818,7 +58828,11 @@ export default function App() {
   // flipdishOrders and flipdishSales used to be App-level state. They're now
   // lazy-loaded inside ChainPerformanceView itself — see fetchFlipdishSalesCached.
   const [toast,           setToast]          = useState(null);
-  const [activeView,      setActiveView]     = useState("dashboard");
+  // Refresh should land back on the SAME screen, not the dashboard.
+  const [activeView,      setActiveView]     = useState(() => {
+    try { return window.localStorage.getItem("cb.lastView") || "dashboard"; } catch { return "dashboard"; }
+  });
+  useEffect(() => { try { window.localStorage.setItem("cb.lastView", activeView); } catch {} }, [activeView]);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
