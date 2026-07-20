@@ -58828,11 +58828,24 @@ export default function App() {
   // flipdishOrders and flipdishSales used to be App-level state. They're now
   // lazy-loaded inside ChainPerformanceView itself — see fetchFlipdishSalesCached.
   const [toast,           setToast]          = useState(null);
-  // Refresh should land back on the SAME screen, not the dashboard.
+  // Refresh lands back on the SAME screen. The view lives in the URL hash
+  // (#v/<view>) — visible, deterministic across refresh — with localStorage
+  // as fallback. The #employee/<id> hash (profiles) is a separate namespace.
   const [activeView,      setActiveView]     = useState(() => {
-    try { return window.localStorage.getItem("cb.lastView") || "dashboard"; } catch { return "dashboard"; }
+    try {
+      const m = window.location.hash.match(/^#v\/([\w-]+)$/);
+      if (m) return m[1];
+      return window.localStorage.getItem("cb.lastView") || "dashboard";
+    } catch { return "dashboard"; }
   });
-  useEffect(() => { try { window.localStorage.setItem("cb.lastView", activeView); } catch {} }, [activeView]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("cb.lastView", activeView);
+      if (activeView !== "employee-profile" && !window.location.hash.startsWith("#employee/")) {
+        window.history.replaceState(null, "", `#v/${activeView}`);
+      }
+    } catch {}
+  }, [activeView]);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
