@@ -183,7 +183,7 @@ import {
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
-  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
+  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
 } from "./supabase";
@@ -5184,6 +5184,35 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   // ── Incoming from Distribution (Dist→CK bridge) ──
   const [incomingDel, setIncomingDel] = useState([]);
   const [distDemand, setDistDemand] = useState([]);   // store demand via Dist (hub model)
+  // ── ORDER CLAIMS on the demand card: cooks pick up orders (like drivers on
+  //    fresh); the shortfall maths then scopes to the picked orders. ──
+  const [ckDemandOrders, setCkDemandOrders] = useState([]);  // open SOs with their CK lines
+  const [ckClaims, setCkClaims] = useState({});               // soId -> {makerId, makerName}
+  const [ckClaimFilter, setCkClaimFilter] = useState("all"); // "mine" | "unclaimed" | "all"
+  const [ckClaimBusy, setCkClaimBusy] = useState({});
+  const ckMyId = currentUser?.opsTeamMemberId || currentUser?.id || null;
+  const ckMyName = currentUser?.name || "Me";
+  useEffect(() => {
+    let alive = true;
+    Promise.all([
+      fetchDistOrdersByItemType("ck").catch(() => []),
+      fetchCkClaims().catch(() => ({})),
+    ]).then(([ords, cls]) => {
+      if (!alive) return;
+      setCkDemandOrders(ords); setCkClaims(cls);
+      if (ckMyId && Object.values(cls).some(c => c.makerId === ckMyId)) setCkClaimFilter(f => f === "all" ? "mine" : f);
+    });
+    return () => { alive = false; };
+    /* eslint-disable-next-line */
+  }, [siteId]);
+  const toggleCkClaim = async (soId, take) => {
+    const k = `ck:${soId}`; setCkClaimBusy(x => ({ ...x, [k]: true }));
+    const prev = ckClaims[soId];
+    setCkClaims(c => { const n = { ...c }; if (take) n[soId] = { makerId: ckMyId, makerName: ckMyName }; else delete n[soId]; return n; });
+    try { await setCkClaim(soId, take ? { id: ckMyId, name: ckMyName } : null); }
+    catch (e2) { setErr(e2.message); setCkClaims(c => { const n = { ...c }; if (prev) n[soId] = prev; else delete n[soId]; return n; }); }
+    setCkClaimBusy(x => ({ ...x, [k]: false }));
+  };
   const [ckRecvDel, setCkRecvDel] = useState(null);        // { head, lines } being received
   const [ckRecvQty, setCkRecvQty] = useState({});          // lineId -> qty (kitchen units)
   const [ckRecvBusy, setCkRecvBusy] = useState(false);
@@ -6007,26 +6036,91 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                 orders dispatch from stored stock. This card is the EXCEPTION
                 check only — it shouts when open store orders exceed what's on
                 the shelf, so the kitchen can make the shortfall on the go. */}
-            {distDemand.length > 0 && (() => {
-              const shorts = distDemand.filter(d => d.netToMake > 0);
-              const activeRows = distDemand.filter(d => d.pendingQty > 0);
+            {/* Store orders vs warehouse stock — hub model, MAKE-TO-STOCK: CK
+                bulk-produces to par; orders dispatch from stored stock. This
+                card is the EXCEPTION check — it shouts when open store orders
+                exceed the shelf. Cooks PICK UP orders (like drivers on fresh):
+                the shortfall maths follows the picked scope. */}
+            {(distDemand.length > 0 || ckDemandOrders.length > 0) && (() => {
+              const onHandBy = new Map(distDemand.map(d => [d.distItemId, d.onHand]));
+              const linkedBy = new Map(distDemand.map(d => [d.distItemId, !!d.ckProductId]));
+              const scoped = ckClaimFilter === "all" ? ckDemandOrders
+                : ckClaimFilter === "mine" ? ckDemandOrders.filter(o => ckClaims[o.soId]?.makerId === ckMyId)
+                : ckDemandOrders.filter(o => !ckClaims[o.soId]);
+              const agg = new Map();
+              scoped.forEach(o => o.lines.forEach(l => {
+                const cur = agg.get(l.itemId) || { itemId: l.itemId, name: l.name, ordered: 0 };
+                cur.ordered += Number(l.qty) || 0; agg.set(l.itemId, cur);
+              }));
+              const rows = [...agg.values()].map(r => {
+                const oh = onHandBy.get(r.itemId) || 0;
+                return { ...r, onHand: oh, short: Math.max(0, r.ordered - oh), linked: linkedBy.get(r.itemId) !== false };
+              }).sort((x, y) => y.short - x.short || y.ordered - x.ordered);
+              const shorts = rows.filter(r => r.short > 0);
               return (
-                <div className={`rounded-2xl border p-4 ${shorts.length ? "border-amber-700/50 bg-amber-950/10" : "border-slate-800 bg-slate-900/30"}`}>
-                  <div className={`text-sm font-bold mb-0.5 ${shorts.length ? "text-amber-300" : "text-slate-200"}`}>🏪 Store orders vs warehouse stock</div>
-                  <div className="text-[11px] text-slate-500 mb-2">Orders dispatch from stock made in bulk. Anything short here needs a make-on-the-go run before dispatch — routine production is driven by par, not by orders.</div>
-                  <div className="space-y-1.5">
-                    {(shorts.length ? shorts : activeRows).slice(0, 10).map(d => (
-                      <div key={d.distItemId} className="flex items-center justify-between gap-2 text-xs">
-                        <span className="text-slate-300 min-w-0 truncate">{d.name}{!d.ckProductId && <span className="ml-1.5 text-[9px] px-1 py-0.5 rounded bg-amber-600/80 text-white align-middle">not linked to a CK product</span>}</span>
-                        <span className="flex items-center gap-3 flex-shrink-0 tabular-nums">
-                          <span className="text-slate-500">ordered <b className="text-slate-300">{d.pendingQty}</b></span>
-                          <span className="text-slate-500">on hand <b className="text-slate-300">{d.onHand}</b></span>
-                          <b className={d.netToMake > 0 ? "text-amber-400" : "text-emerald-400"}>{d.netToMake > 0 ? `short ${d.netToMake} — make to dispatch` : "covered from stock"}</b>
-                        </span>
+                <div className={`rounded-2xl border ${shorts.length ? "border-amber-700/50 bg-amber-950/10" : "border-slate-800 bg-slate-900/30"}`}>
+                  <div className="px-4 pt-3.5 pb-2.5 border-b border-slate-800/60">
+                    <div className={`text-sm font-bold ${shorts.length ? "text-amber-300" : "text-slate-200"}`}>🏪 Store orders vs warehouse stock</div>
+                    <div className="text-[11px] text-slate-500 mt-0.5">Orders ship from stock made in bulk. Amber = make before dispatch. Pick up orders to focus your list.</div>
+                  </div>
+
+                  {/* Order pick-up chips */}
+                  {ckDemandOrders.length > 0 && (
+                    <div className="px-4 py-2.5 border-b border-slate-800/60 space-y-2">
+                      <div className="flex flex-wrap gap-1.5">
+                        {ckDemandOrders.map(o => {
+                          const cl = ckClaims[o.soId];
+                          const mine = cl && cl.makerId === ckMyId;
+                          const other = cl && !mine;
+                          const k = `ck:${o.soId}`;
+                          return (
+                            <div key={o.soId} className={`rounded-lg px-2.5 py-1.5 flex items-center gap-2 border ${mine ? "border-emerald-600/60 bg-emerald-950/20" : other ? "border-slate-700 bg-slate-900/40" : "border-amber-700/50 bg-amber-950/15"}`}>
+                              <div>
+                                <div className="text-[11px] font-bold text-slate-200">{o.soNumber} · {o.customerName}</div>
+                                <div className="text-[9px] text-slate-500">{o.lines.length} item{o.lines.length !== 1 ? "s" : ""}</div>
+                              </div>
+                              {mine ? (
+                                <button disabled={ckClaimBusy[k]} onClick={() => toggleCkClaim(o.soId, false)} className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-600 text-white">Mine ✓</button>
+                              ) : other ? (
+                                <button disabled={ckClaimBusy[k]} onClick={() => { if (window.confirm(`${cl.makerName || "Someone"} picked this up. Take it over?`)) toggleCkClaim(o.soId, true); }} className="text-[10px] font-semibold px-2 py-0.5 rounded bg-slate-800 text-slate-400">{cl.makerName || "Claimed"}</button>
+                              ) : (
+                                <button disabled={ckClaimBusy[k] || !ckMyId} onClick={() => toggleCkClaim(o.soId, true)} className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-600 text-white">Pick up</button>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                      <div className="flex gap-1.5">
+                        {[["mine", `Mine (${ckDemandOrders.filter(o => ckClaims[o.soId]?.makerId === ckMyId).length})`],
+                          ["unclaimed", `Unclaimed (${ckDemandOrders.filter(o => !ckClaims[o.soId]).length})`],
+                          ["all", `All (${ckDemandOrders.length})`]].map(([k, l]) => (
+                          <button key={k} onClick={() => setCkClaimFilter(k)} className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border ${ckClaimFilter === k ? "bg-indigo-600 border-indigo-600 text-white" : "bg-slate-900 border-slate-700 text-slate-400"}`}>{l}</button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Demand rows — aligned columns */}
+                  <div className="px-4 py-2">
+                    {rows.length > 0 && (
+                      <div className="grid grid-cols-[1fr_58px_62px_150px] gap-2 text-[9px] uppercase tracking-wider text-slate-600 font-bold pb-1.5 border-b border-slate-800/50">
+                        <div>Item</div><div className="text-right">Ordered</div><div className="text-right">On hand</div><div className="text-right">Status</div>
+                      </div>
+                    )}
+                    {rows.slice(0, 14).map(r => (
+                      <div key={r.itemId} className="grid grid-cols-[1fr_58px_62px_150px] gap-2 items-center text-xs py-1.5 border-b border-slate-800/40 last:border-0">
+                        <div className="text-slate-300 min-w-0 truncate">{r.name}{!r.linked && <span className="ml-1.5 text-[8px] px-1 py-0.5 rounded bg-amber-600/80 text-white align-middle">NOT LINKED</span>}</div>
+                        <div className="text-right tabular-nums text-slate-300 font-semibold">{r.ordered}</div>
+                        <div className="text-right tabular-nums text-slate-400">{r.onHand}</div>
+                        <div className="text-right">
+                          {r.short > 0
+                            ? <span className="inline-block px-2 py-0.5 rounded bg-amber-600/90 text-white text-[10px] font-bold">MAKE {r.short}</span>
+                            : <span className="inline-block px-2 py-0.5 rounded bg-emerald-900/50 text-emerald-300 text-[10px] font-bold">COVERED</span>}
+                        </div>
                       </div>
                     ))}
-                    {!shorts.length && !activeRows.length && (
-                      <div className="text-xs text-slate-500">No open store orders for kitchen items right now — stock levels are ahead of demand.</div>
+                    {rows.length === 0 && (
+                      <div className="text-xs text-slate-500 py-3">{ckClaimFilter !== "all" ? "No orders in this scope — pick some up or switch to All." : "No open store orders for kitchen items — stock is ahead of demand."}</div>
                     )}
                   </div>
                 </div>
@@ -6085,24 +6179,33 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
             )}
 
             {recentRuns.length > 0 && (
-              <div className="rounded-2xl border border-slate-800 bg-slate-900/30 p-4">
-                <div className="text-sm font-bold text-slate-200 mb-2">Recent production — yield</div>
-                <div className="space-y-1.5">
+              <div className="rounded-2xl border border-slate-800 bg-slate-900/30">
+                <div className="px-4 pt-3.5 pb-2.5 border-b border-slate-800/60">
+                  <div className="text-sm font-bold text-slate-200">Recent production — yield</div>
+                  <div className="text-[11px] text-slate-500 mt-0.5">Yield = produced ÷ planned. Below 90% means significant loss on that batch.</div>
+                </div>
+                <div className="px-4 py-2">
+                  <div className="grid grid-cols-[1fr_92px_120px_64px] gap-2 text-[9px] uppercase tracking-wider text-slate-600 font-bold pb-1.5 border-b border-slate-800/50">
+                    <div>Product</div><div className="text-right">Date</div><div className="text-right">Produced / planned</div><div className="text-right">Yield</div>
+                  </div>
                   {recentRuns.map(r => {
                     const yieldPct = (r.plannedQty && r.plannedQty > 0) ? (r.producedQty / r.plannedQty) * 100 : null;
-                    const yColor = yieldPct == null ? "text-slate-500" : yieldPct >= 98 ? "text-emerald-400" : yieldPct >= 90 ? "text-amber-400" : "text-red-400";
+                    const pill = yieldPct == null ? "bg-slate-800 text-slate-500"
+                      : yieldPct >= 98 ? "bg-emerald-900/50 text-emerald-300"
+                      : yieldPct >= 90 ? "bg-amber-900/50 text-amber-300"
+                      : "bg-red-900/50 text-red-300";
                     return (
-                      <div key={r.id} className="flex justify-between items-center text-xs">
-                        <span className="text-slate-300">{r.productName} <span className="text-slate-600">· {r.runDate}</span></span>
-                        <span className="flex items-center gap-2">
-                          <span className="text-slate-400">{r.producedQty}{r.plannedQty ? ` / ${r.plannedQty}` : ""} {r.outputUnit}</span>
-                          {yieldPct != null && <span className={`font-bold ${yColor}`}>{yieldPct.toFixed(0)}%</span>}
-                        </span>
+                      <div key={r.id} className="grid grid-cols-[1fr_92px_120px_64px] gap-2 items-center text-xs py-1.5 border-b border-slate-800/40 last:border-0">
+                        <div className="text-slate-300 min-w-0 truncate">{r.productName}</div>
+                        <div className="text-right tabular-nums text-slate-500">{(r.runDate || "").slice(5)}</div>
+                        <div className="text-right tabular-nums text-slate-400">{r.producedQty}{r.plannedQty ? ` / ${r.plannedQty}` : ""} <span className="text-slate-600">{r.outputUnit}</span></div>
+                        <div className="text-right">{yieldPct != null
+                          ? <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold tabular-nums ${pill}`}>{yieldPct.toFixed(0)}%</span>
+                          : <span className="text-slate-600 text-[10px]">—</span>}</div>
                       </div>
                     );
                   })}
                 </div>
-                <div className="text-[11px] text-slate-600 mt-2">Yield = produced ÷ planned. Below 90% (red) means significant loss on that batch.</div>
               </div>
             )}
 

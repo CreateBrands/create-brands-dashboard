@@ -14337,6 +14337,29 @@ export async function decideOrderAmendment(amendmentId, approve, user, note) {
   return { applied: !!approve };
 }
 
+// ── CK ORDER CLAIMS: which cook is producing for which order ─────────────────
+// Mirrors fresh claims on its own table (one order can carry BOTH a fresh
+// claim and a CK claim — different people, different lines).
+export async function fetchCkClaims() {
+  const { data, error } = await supabase.from("dist_ck_claims").select("*");
+  if (error) throw error;
+  const m = {};
+  (data || []).forEach(r => { m[r.so_id] = { makerId: r.maker_id, makerName: r.maker_name || "" }; });
+  return m;
+}
+export async function setCkClaim(soId, user) {
+  if (!user) {
+    const { error } = await supabase.from("dist_ck_claims").delete().eq("so_id", soId);
+    if (error) throw error;
+    return true;
+  }
+  const { error } = await supabase.from("dist_ck_claims").upsert({
+    so_id: soId, maker_id: user.id, maker_name: user.name || "", claimed_at: new Date().toISOString(),
+  }, { onConflict: "so_id" });
+  if (error) throw error;
+  return true;
+}
+
 // ── FRESH ORDER CLAIMS: which driver is shopping which order ─────────────────
 export async function fetchFreshClaims() {
   const { data, error } = await supabase.from("dist_fresh_claims").select("*");
