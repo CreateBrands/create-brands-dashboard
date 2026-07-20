@@ -5428,7 +5428,7 @@ export async function fetchAliasFor(name, vendor) {
 export async function upsertItemAlias({ name, vendor, storeItemId, by }) {
   if (!name || !storeItemId) return;
   const { error } = await supabase.from("supplier_item_aliases").upsert({
-    alias_norm: normItemAlias(name), vendor: normItemAlias(vendor), store_item_id: storeItemId, created_by: by || null,
+    alias_norm: normItemAlias(name), vendor: normItemAlias(vendor), store_item_id: String(storeItemId), created_by: by || null,
   }, { onConflict: "alias_norm,vendor" });
   if (error) console.error("alias save failed:", error.message);
 }
@@ -9110,7 +9110,7 @@ export async function applyExpenseLineCorrections({ claimId, lines }) {
         if (match) {
           const upd = { qty_dispatched: match.qty };
           if (match.price != null) upd.unit_cost = match.price;
-          if (match.storeItemId) upd.store_item_id = match.storeItemId;  // link = stock moves on receive
+          if (match.storeItemId != null) upd.store_item_id = String(match.storeItemId);  // link = stock moves on receive (ids are bigint on invoice_lines, text here)
           const { error } = await supabase.from("store_delivery_lines").update(upd).eq("id", row.id);
           if (!error) deliveryUpdated++;
         }
