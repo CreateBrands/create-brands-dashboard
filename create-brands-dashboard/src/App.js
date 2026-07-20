@@ -43492,10 +43492,10 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
 
   const Row = ({ c }) => (
     <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
-      <div className="flex items-start justify-between gap-3">
+      <div onClick={() => setDetailClaim(c)} className="flex items-start justify-between gap-3 cursor-pointer" title="Open expense detail">
         <div className="min-w-0">
           <div className="text-sm font-semibold text-white flex items-center gap-2 flex-wrap">{c.description} <StatusBadge s={c.status}/></div>
-          <div onClick={() => setDetailClaim(c)} className="text-[11px] text-slate-500 flex gap-2 flex-wrap mt-0.5 cursor-pointer">
+          <div className="text-[11px] text-slate-500 flex gap-2 flex-wrap mt-0.5">
             <span>{c.expenseDate}</span>
             {c.vendor && <span>· {c.vendor}</span>}
             {c.expenseTypeId && <span>· {expName(c.expenseTypeId)}</span>}
