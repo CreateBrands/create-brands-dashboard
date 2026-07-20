@@ -76,7 +76,7 @@ import {
   fetchEmployeeCertifications, addEmployeeCertification,
   updateEmployeeCertification, archiveEmployeeCertification,
   // Slice 7 stage 3: RTW / compliance documents
-  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, updateCkGoodsIn, computeCkStock, fetchCkOrders, saveCkOrder, submitCkOrder, cancelCkOrder, deleteCkOrder, fulfilCkOrder, computeCkOrderDemand, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, upsertCkIngredientsByName, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchScheduleJobs, saveScheduleJobs, detectAllergensInText, diffAllergens, scanLabelText, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock, fetchIncomingCkDeliveries, fetchCkDeliveryDetail, saveCkDeliveryReceipt, confirmCkDelivery, ckLineEquivalent, computeCkDemandViaDist, fetchCountAssignments, saveCountAssignments, setCountAssignmentStatus, fetchOpenOrderRound, createOrderRound, saveOrderRoundAssignments, setOrderRoundLine, setOrderRoundPartStatus, closeOrderRound, createFreshPurchaseDeliveries, fetchStoreSupplierOverrides, setStoreSupplierOverride, createDirectOrders, fetchDirectOrders, lastVehicleOdometer, addVehicleMileage, fetchVehicleMileageLogs, fetchFleetVehicles, upsertFleetVehicle, startFuelFill, cancelFuelFill, completeFuelFill, fetchFuelTransactions, fetchMyPendingFill, reviewFuelTransaction,
+  fetchEmployeeDocuments, uploadEmployeeDocument, addEmployeeDocument, fetchPayslips, addPayslip, archivePayslip, fetchPayslipInbox, countUnmatchedPayslips, assignPayslip, ignorePayslipInbox, addPayslipInboxItem, fetchCkIngredients, upsertCkIngredient, archiveCkIngredient, fetchCkGoodsIn, addCkGoodsIn, deleteCkGoodsIn, updateCkGoodsIn, computeCkStock, fetchCkOrders, saveCkOrder, submitCkOrder, cancelCkOrder, deleteCkOrder, fulfilCkOrder, computeCkOrderDemand, fetchCkCategories, upsertCkCategory, archiveCkCategory, fetchCkSuppliers, upsertCkSupplier, archiveCkSupplier, bulkAddCkIngredients, upsertCkIngredientsByName, deriveCkProductAllergens, fetchCkProducts, fetchCkProductComponents, upsertCkProduct, archiveCkProduct, setCkProductComponents, fetchCkPreps, fetchCkPrepComponents, upsertCkPrep, archiveCkPrep, setCkPrepComponents, fetchProductionPlans, fetchPlanLines, upsertProductionPlan, archiveProductionPlan, savePlanLines, computePlanEconomics, suggestPlanFromHistory, fetchPlanActuals, fetchScheduleJobs, saveScheduleJobs, detectAllergensInText, diffAllergens, scanLabelText, fetchProductionRuns, fetchRunConsumption, planRunConsumption, createProductionRun, deleteProductionRun, fetchDispatches, fetchDispatchLines, fetchDispatchedByRun, createDispatch, cancelDispatch, receiveDispatch, fetchDistributionStock, fetchIncomingCkDeliveries, fetchCkDeliveryDetail, saveCkDeliveryReceipt, confirmCkDelivery, ckLineEquivalent, computeCkDemandViaDist, fetchCountAssignments, saveCountAssignments, setCountAssignmentStatus, fetchOpenOrderRound, createOrderRound, saveOrderRoundAssignments, setOrderRoundLine, setOrderRoundPartStatus, closeOrderRound, createFreshPurchaseDeliveries, fetchStoreSupplierOverrides, setStoreSupplierOverride, createDirectOrders, fetchDirectOrders, lastVehicleOdometer, addVehicleMileage, fetchVehicleMileageLogs, currentPunchVehicle, fetchFleetVehicles, upsertFleetVehicle, startFuelFill, cancelFuelFill, completeFuelFill, fetchFuelTransactions, fetchMyPendingFill, reviewFuelTransaction,
   archiveEmployeeDocument, fetchArchivedDocuments,
   managerApproveDocument, hrApproveDocument, rejectDocument, resetDocumentReview,
   signContractDocument,
@@ -20868,12 +20868,50 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     try {
       const vans = await fetchFleetVehicles();
       if (!vans.length) { setMileageGate(null); return doPhoneClockCore(action, null); } // no fleet configured → don't block clocking
-      // Prefill the van from today's shift_start (clock-out should be the same van).
+      // Prefill the van the shift is actually ON — after a mid-shift swap,
+      // clock-out must ask about the CURRENT van, not the morning's.
       let vanId = vans.length === 1 ? vans[0].id : "";
+      if (action === "out" && myOpenPunch) {
+        try { const cur = await currentPunchVehicle(myOpenPunch.id); if (cur && vans.some(v => v.id === cur.vehicleId)) vanId = cur.vehicleId; } catch {}
+      }
       setMileageGate({ action, vans, vanId, odo: "", lastOdo: null, busy: false, err: "" });
       if (vanId) { const lo = await lastVehicleOdometer(vanId); setMileageGate(g => g ? { ...g, lastOdo: lo } : g); }
     } catch (e) { setClockMsg({ type: "error", msg: e.message || String(e) }); }
   };
+  // ── MID-SHIFT VEHICLE CHANGE: close the old van's mileage, open the new ──
+  const [swapGate, setSwapGate] = useState(null); // { step, vans, fromVanId, fromLast, fromOdo, toVanId, toLast, toOdo, busy, err }
+  const openSwapGate = async () => {
+    try {
+      if (!myOpenPunch) return;
+      const [vans, cur] = await Promise.all([fetchFleetVehicles(), currentPunchVehicle(myOpenPunch.id)]);
+      if (!vans.length) { setClockMsg({ type: "error", msg: "No fleet vehicles configured." }); return; }
+      if (!cur) { setClockMsg({ type: "error", msg: "No vehicle recorded for this shift — you clocked in without a van, so there's nothing to swap." }); return; }
+      const fromLast = await lastVehicleOdometer(cur.vehicleId);
+      setSwapGate({ step: 1, vans, fromVanId: cur.vehicleId, fromLast, fromOdo: "", toVanId: "", toLast: null, toOdo: "", busy: false, err: "" });
+    } catch (e) { setClockMsg({ type: "error", msg: e.message || String(e) }); }
+  };
+  const pickSwapTarget = async (toVanId) => {
+    setSwapGate(g => g ? { ...g, toVanId, toLast: null } : g);
+    if (toVanId) { const lo = await lastVehicleOdometer(toVanId); setSwapGate(g => g ? { ...g, toLast: lo } : g); }
+  };
+  const submitSwap = async () => {
+    setSwapGate(g => g ? { ...g, busy: true, err: "" } : g);
+    try {
+      const g = swapGate;
+      const fromOdo = Number(g.fromOdo), toOdo = Number(g.toOdo);
+      if (!Number.isFinite(fromOdo) || fromOdo <= 0) throw new Error("Enter the closing mileage for the van you're handing back.");
+      if (g.fromLast != null && fromOdo < g.fromLast) throw new Error(`Closing mileage can't be below that van's last reading (${g.fromLast.toLocaleString()} mi).`);
+      if (!g.toVanId) throw new Error("Pick the van you're taking over.");
+      if (!Number.isFinite(toOdo) || toOdo <= 0) throw new Error("Enter the starting mileage on the new van.");
+      if (g.toLast != null && toOdo < g.toLast) throw new Error(`Starting mileage can't be below the new van's last reading (${g.toLast.toLocaleString()} mi).`);
+      const me = { memberId: currentUser.opsTeamMemberId || currentUser.id, memberName: `${myOpsMember.firstName} ${myOpsMember.lastName}`.trim() };
+      await addVehicleMileage({ vehicleId: g.fromVanId, kind: "vehicle_swap_out", odometer: fromOdo, punchId: myOpenPunch.id, ...me });
+      await addVehicleMileage({ vehicleId: g.toVanId, kind: "vehicle_swap_in", odometer: toOdo, punchId: myOpenPunch.id, ...me });
+      setSwapGate(null);
+      setClockMsg({ type: "ok", msg: "Vehicle changed — mileage recorded on both vans. Clock-out will ask about the new van." });
+    } catch (e) { setSwapGate(g => g ? { ...g, busy: false, err: e.message || String(e) } : g); }
+  };
+
   const pickGateVan = async (vanId) => {
     setMileageGate(g => g ? { ...g, vanId, lastOdo: null } : g);
     if (vanId) { const lo = await lastVehicleOdometer(vanId); setMileageGate(g => g ? { ...g, lastOdo: lo } : g); }
@@ -21186,6 +21224,11 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
                 {clockBusy ? "Checking location…" : myOpenPunch ? "⏹ Clock out" : "▶ Clock in"}
               </button>
               {myOpenPunch && <div className="text-[11px] text-slate-500 text-center mt-1.5">Clocked in since {new Date(myOpenPunch.punchIn).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}{myClockStore ? ` · ${myClockStore.shortName || myClockStore.name}` : ""}</div>}
+              {myOpenPunch && isDriverRole && (
+                <button onClick={openSwapGate} className="w-full mt-2 flex items-center justify-center gap-2 px-3 py-2.5 rounded-2xl text-xs font-bold bg-slate-800 text-slate-200 hover:bg-slate-700 border border-slate-700">
+                  🔁 Change vehicle (mid-shift)
+                </button>
+              )}
               {clockMsg && <div className={`mt-2 text-xs font-semibold rounded-lg px-3 py-2 text-center ${clockMsg.type === "error" ? "bg-red-600 text-white" : "bg-emerald-600 text-white"}`}>{clockMsg.msg}</div>}
             </div>
           )}
@@ -21312,6 +21355,45 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
           {activeView === "central-kitchen" && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
 
           {/* DRIVER MILEAGE GATE — clocking is blocked until the reading is in */}
+          {swapGate && (
+            <div className="fixed inset-0 z-[60] bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+              <div className="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-5 space-y-4">
+                <div>
+                  <div className="text-base font-bold text-white">Change vehicle</div>
+                  <div className="text-xs text-slate-500 mt-0.5">Close the mileage on the van you're handing back, then open the new one. Both readings go on your shift.</div>
+                </div>
+                {swapGate.err && <div className="text-xs text-red-400 bg-red-950/30 rounded-xl px-3 py-2">{swapGate.err}</div>}
+
+                <div className="space-y-1.5">
+                  <div className="text-[10px] uppercase tracking-wide font-bold text-slate-500">1 · Handing back</div>
+                  <div className="px-3 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-sm text-slate-200">
+                    {(() => { const v = swapGate.vans.find(x => x.id === swapGate.fromVanId); return v ? `${v.reg}${v.label ? ` · ${v.label}` : ""}` : swapGate.fromVanId; })()}
+                  </div>
+                  <input type="number" inputMode="numeric" value={swapGate.fromOdo} onChange={e => setSwapGate(g => ({ ...g, fromOdo: e.target.value }))}
+                    placeholder="Closing odometer (miles)" className="w-full px-3 py-3 rounded-xl bg-slate-950 border border-slate-700 text-white text-center text-lg font-bold"/>
+                  {swapGate.fromLast != null && <div className="text-[11px] text-slate-500">Last recorded: {swapGate.fromLast.toLocaleString()} mi — reading must not be lower.</div>}
+                </div>
+
+                <div className="space-y-1.5">
+                  <div className="text-[10px] uppercase tracking-wide font-bold text-slate-500">2 · Taking over</div>
+                  <select value={swapGate.toVanId} onChange={e => pickSwapTarget(e.target.value)}
+                    className="w-full px-3 py-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white text-sm">
+                    <option value="">Select the new van…</option>
+                    {swapGate.vans.filter(v => v.id !== swapGate.fromVanId).map(v => <option key={v.id} value={v.id}>{v.reg}{v.label ? ` · ${v.label}` : ""}</option>)}
+                  </select>
+                  <input type="number" inputMode="numeric" value={swapGate.toOdo} onChange={e => setSwapGate(g => ({ ...g, toOdo: e.target.value }))}
+                    placeholder="Starting odometer (miles)" className="w-full px-3 py-3 rounded-xl bg-slate-950 border border-slate-700 text-white text-center text-lg font-bold"/>
+                  {swapGate.toVanId && swapGate.toLast != null && <div className="text-[11px] text-slate-500">Last recorded on this van: {swapGate.toLast.toLocaleString()} mi.</div>}
+                </div>
+
+                <div className="flex gap-2">
+                  <button onClick={() => setSwapGate(null)} disabled={swapGate.busy} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+                  <button onClick={submitSwap} disabled={swapGate.busy} className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-bold disabled:opacity-50">{swapGate.busy ? "Recording…" : "Confirm change"}</button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {mileageGate && (
             <div className="fixed inset-0 z-[60] bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
               <div className="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-5 space-y-4">

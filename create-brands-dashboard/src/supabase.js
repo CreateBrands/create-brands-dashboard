@@ -15940,6 +15940,15 @@ export async function addVehicleMileage({ vehicleId, memberId, memberName, kind,
   return data;
 }
 
+// The vehicle a shift is CURRENTLY on: latest start-type log for the punch
+// (shift_start, or vehicle_swap_in after a mid-shift change).
+export async function currentPunchVehicle(punchId) {
+  const { data } = await supabase.from("vehicle_mileage_logs").select("vehicle_id, kind, odometer, logged_at")
+    .eq("punch_id", punchId).in("kind", ["shift_start", "vehicle_swap_in"])
+    .order("logged_at", { ascending: false }).limit(1);
+  return data && data[0] ? { vehicleId: data[0].vehicle_id, odometer: data[0].odometer } : null;
+}
+
 export async function fetchVehicleMileageLogs({ days = 14 } = {}) {
   const since = new Date(Date.now() - days * 86400000).toISOString();
   const { data, error } = await supabase.from("vehicle_mileage_logs")
