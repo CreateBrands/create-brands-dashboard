@@ -20311,6 +20311,7 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
   // itemised, the receipt is attached, and the chosen store gets an incoming
   // delivery listing exactly what's arriving.
   const [receiptUrl, setReceiptUrl] = useState(null);
+  const [viewReceipt, setViewReceipt] = useState(null);  // receipt being viewed full-screen
   const [scanLines, setScanLines] = useState([]);   // [{desc, units, price}]
   const [scanBusy, setScanBusy] = useState(false);
   const scanReceipt = async (file) => {
@@ -20449,10 +20450,33 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
                   <div className="text-[11px] text-slate-500 mt-0.5">{c.expenseDate}{c.vendor?` · ${c.vendor}`:""}{c.expenseTypeId?` · ${typeName(c.expenseTypeId)}`:""}</div>
                   {c.status==="rejected" && c.rejectedReason && <div className="text-[11px] text-red-400/80 mt-1">Reason: {c.rejectedReason}</div>}
                 </div>
-                <div className="text-sm font-bold text-white flex-shrink-0">{money(c.amount)}</div>
+                <div className="flex-shrink-0 text-right">
+                  <div className="text-sm font-bold text-white">{money(c.amount)}</div>
+                  {c.receiptUrl && (
+                    <button onClick={() => setViewReceipt(c.receiptUrl)} className="inline-block mt-1.5">
+                      <img src={c.receiptUrl} alt="receipt" className="h-12 w-12 object-cover rounded-md border border-slate-700"/>
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           ))}
+          {/* FULL-SCREEN RECEIPT VIEWER: in-app, no new tab (pop-up blockers
+              and installed-app webviews made target=_blank unreliable) */}
+          {viewReceipt && (
+            <div className="fixed inset-0 z-[70] bg-black/90 flex flex-col" onClick={() => setViewReceipt(null)}>
+              <div className="flex items-center justify-between px-4 py-3 flex-shrink-0">
+                <div className="text-sm font-bold text-white">Receipt</div>
+                <button onClick={() => setViewReceipt(null)} className="text-white text-2xl leading-none px-2">×</button>
+              </div>
+              <div className="flex-1 overflow-auto flex items-start justify-center p-3" onClick={e => e.stopPropagation()}>
+                <img src={viewReceipt} alt="receipt" className="max-w-full rounded-lg"/>
+              </div>
+              <a href={viewReceipt} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
+                className="flex-shrink-0 text-center text-xs text-indigo-300 underline pb-4">Open original in browser</a>
+            </div>
+          )}
+
         </div>
       )}
     </div>
@@ -43268,6 +43292,7 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
   const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
   const ec = "px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white w-full";
   const [tab, setTab] = useState("submitted"); // submitted | approved | reconciled | rejected | new
+  const [viewReceipt, setViewReceipt] = useState(null);  // receipt being viewed full-screen
   const [form, setForm] = useState(null);
   const [recon, setRecon] = useState(null); // claim being reconciled
   const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
@@ -43392,9 +43417,9 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
         <div className="text-right flex-shrink-0">
           <div className="text-sm font-bold text-white">{money(c.amount)}</div>
           {c.receiptUrl && (
-            <a href={c.receiptUrl} target="_blank" rel="noopener noreferrer" className="inline-block mt-1.5">
+            <button onClick={() => setViewReceipt(c.receiptUrl)} className="inline-block mt-1.5">
               <img src={c.receiptUrl} alt="receipt" className="h-12 w-12 object-cover rounded-md border border-slate-700 ml-auto"/>
-            </a>
+            </button>
           )}
         </div>
       </div>
@@ -43533,6 +43558,22 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
           </div>
         </Modal>
       )}
+      {/* FULL-SCREEN RECEIPT VIEWER: in-app, no new tab (pop-up blockers
+              and installed-app webviews made target=_blank unreliable) */}
+          {viewReceipt && (
+            <div className="fixed inset-0 z-[70] bg-black/90 flex flex-col" onClick={() => setViewReceipt(null)}>
+              <div className="flex items-center justify-between px-4 py-3 flex-shrink-0">
+                <div className="text-sm font-bold text-white">Receipt</div>
+                <button onClick={() => setViewReceipt(null)} className="text-white text-2xl leading-none px-2">×</button>
+              </div>
+              <div className="flex-1 overflow-auto flex items-start justify-center p-3" onClick={e => e.stopPropagation()}>
+                <img src={viewReceipt} alt="receipt" className="max-w-full rounded-lg"/>
+              </div>
+              <a href={viewReceipt} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
+                className="flex-shrink-0 text-center text-xs text-indigo-300 underline pb-4">Open original in browser</a>
+            </div>
+          )}
+
     </div>
   );
 }
