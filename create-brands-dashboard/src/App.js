@@ -9192,12 +9192,16 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
     /* eslint-disable-next-line */
   }, [detachOpen]);
   const detachGroups = useMemo(() => {
+    // Build the lookup from the items PROP — the component's own itemById is
+    // declared later, and referencing it here crashed the whole detail
+    // (temporal dead zone: "cannot access before initialization").
+    const byId = new Map((items || []).map(it => [it.id, it]));
     const groups = [];
-    const fresh = (so.lines || []).filter(l => itemById.get(l.itemId)?.itemType === "fresh");
+    const fresh = (so.lines || []).filter(l => byId.get(l.itemId)?.itemType === "fresh");
     if (fresh.length) groups.push({ key: "fresh", label: "Fresh stock (driver-shopped)", lines: fresh });
     const byVendor = new Map();
     (so.lines || []).forEach(l => {
-      const it = itemById.get(l.itemId);
+      const it = byId.get(l.itemId);
       if (it?.itemType !== "fresh" && it?.fulfilledBy) {
         if (!byVendor.has(it.fulfilledBy)) byVendor.set(it.fulfilledBy, []);
         byVendor.get(it.fulfilledBy).push(l);
