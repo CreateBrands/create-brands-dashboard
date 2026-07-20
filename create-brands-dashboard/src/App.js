@@ -20322,13 +20322,35 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
       try { await extractInvoice(inv.id); } catch { /* best-effort */ }
       const { invoice, lines: rawLines } = await getInvoiceWithLines(inv.id);
       if (invoice?.supplier_name && !form.vendor) setF("vendor", invoice.supplier_name);
+      // pack_qty_base is the extractor's BASE-UNIT quantity — for weighed goods
+      // that's grams/kg, NOT a pack count ("Brioche 400g" came back as 4400).
+      // Normalise: a NNNg pack weight in the name is pack size, never quantity.
+      const normaliseUnits = (desc, units) => {
+        let q = Number(units) || 1;
+        const m = /(\d+(?:\.\d+)?)\s?g\b/i.exec(desc || "");
+        if (m && !/loose|per\s?kg|\/kg/i.test(desc || "")) {
+          const g = Number(m[1]);
+          if (g > 0) {
+            if (q >= g && q % g === 0) q = q / g;                              // grams recorded as count
+            else if (q < 50 && q !== Math.round(q)) q = Math.round(q * 1000 / g); // kilograms recorded as count
+          }
+        }
+        return q;
+      };
       const items = (rawLines || []).map((l, i) => ({
         desc: l.raw_description || `Item ${i+1}`,
-        units: l.pack_qty_base != null ? Number(l.pack_qty_base) : 1,
+        units: normaliseUnits(l.raw_description, l.pack_qty_base != null ? Number(l.pack_qty_base) : 1),
         price: l.pack_price_ex_vat != null ? Number(l.pack_price_ex_vat) : 0,
       }));
       setScanLines(items);
       const total = items.reduce((s2, it) => s2 + it.units * it.price, 0);
+      // Reconciliation guard: line maths should land near the receipt's own
+      // total — if it doesn't, the quantities are suspect and the driver is
+      // told to eyeball them BEFORE a delivery gets raised on bad numbers.
+      const invTotal = Number(invoice?.total_inc_vat ?? invoice?.total ?? invoice?.grand_total ?? 0);
+      if (invTotal > 0 && total > 0 && Math.abs(total - invTotal) / invTotal > 0.05) {
+        setErr(`Check the quantities: the scanned lines add to £${total.toFixed(2)} but the receipt total looks like £${invTotal.toFixed(2)}. Adjust any line that's wrong before submitting.`);
+      }
       if (total > 0 && !form.amount) setF("amount", String(Math.round(total * 100) / 100));
       if (items.length && !form.description) setF("description", `${items.length} item purchase`);
     } catch (e) { setErr(e?.message || "Could not scan the receipt — you can still submit without it."); }
