@@ -183,7 +183,7 @@ import {
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
-  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
+  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
 } from "./supabase";
@@ -20396,7 +20396,7 @@ function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
         <div className="ml-auto text-base font-black text-white flex-shrink-0">£{Number(claim.amount || 0).toFixed(2)}</div>
       </div>
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-6xl mx-auto w-full p-4 grid md:grid-cols-[minmax(340px,44%)_1fr] gap-4 items-start">
+        <div className="w-[95%] mx-auto p-4 grid md:grid-cols-[minmax(340px,42%)_1fr] gap-4 items-start">
           {/* Receipt: full-height sticky column with zoom — the paper is the
               evidence; it should be readable WHILE matching, not a thumbnail. */}
           <div className="md:sticky md:top-3">
@@ -22087,6 +22087,45 @@ function InvoiceLineRow({ line, domain, onChanged }) {
     try { setOptions(await searchStoreInventory(q)); } catch { setOptions([]); }
   };
 
+  // ── SUGGESTIONS: remembered alias first, then token-scored catalogue hits ──
+  const [suggests, setSuggests] = useState([]);
+  useEffect(() => {
+    if (line.matched_store_item_id) { setSuggests([]); return; }
+    let live = true;
+    (async () => {
+      const found = [];
+      try {
+        const aliasId = await fetchAliasFor(line.raw_description, "");
+        if (aliasId) found.push({ id: aliasId, name: null, star: true });
+      } catch {}
+      try {
+        const stop = new Set(["pack", "packs", "loose", "finest", "twin", "ready", "strong", "each", "with", "style", "fresh", "large", "small"]);
+        const tokens = String(line.raw_description || "")
+          .replace(/\d+(?:\.\d+)?\s?(?:g|kg|ml|l|pcs?|pack)\b/gi, " ")
+          .split(/[^a-zA-Z]+/).filter(w => w.length >= 4 && !stop.has(w.toLowerCase()));
+        const seen = new Map();
+        for (const t of tokens.slice(0, 3)) {
+          const opts = await searchStoreInventory(t, 8);
+          opts.forEach(o => { if (!seen.has(o.id)) seen.set(o.id, o); });
+        }
+        const lc = tokens.map(t => t.toLowerCase());
+        const scored = [...seen.values()].map(o => ({
+          ...o, score: lc.reduce((s2, t) => s2 + (o.name.toLowerCase().includes(t) ? 1 : 0), 0),
+        })).filter(o => o.score > 0).sort((x, y) => y.score - x.score).slice(0, 3);
+        // resolve the alias suggestion's name from the scored/catalogue pool if possible
+        const merged = [];
+        for (const f of found) {
+          const known = scored.find(sc => sc.id === f.id);
+          merged.push({ id: f.id, name: known ? known.name : "previous match", star: true });
+        }
+        scored.forEach(sc => { if (!merged.some(m => m.id === sc.id)) merged.push(sc); });
+        if (live) setSuggests(merged.slice(0, 3));
+      } catch { if (live) setSuggests(found); }
+    })();
+    return () => { live = false; };
+    /* eslint-disable-next-line */
+  }, [line.id, line.matched_store_item_id]);
+
   const pick = async (opt) => {
     setBusy(true);
     try {
@@ -22133,6 +22172,12 @@ function InvoiceLineRow({ line, domain, onChanged }) {
         ) : (
           <span className="px-2 py-0.5 rounded-md bg-rose-600/20 border border-rose-700/40 text-rose-300">unmatched</span>
         )}
+        {!line.matched_store_item_id && suggests.length > 0 && suggests.map(sg => (
+          <button key={sg.id} onClick={() => pick(sg)} disabled={busy}
+            className="px-2 py-0.5 rounded-md bg-emerald-600/15 border border-emerald-700/40 text-emerald-300 hover:bg-emerald-600/30 disabled:opacity-40">
+            {sg.star ? "★ " : ""}{sg.name}?
+          </button>
+        ))}
         <input
           value={search}
           onChange={(e) => doSearch(e.target.value)}
@@ -22159,7 +22204,7 @@ function InvoiceLineRow({ line, domain, onChanged }) {
           className="px-2 py-1 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 w-24 focus:outline-none focus:border-indigo-500" />
         <button onClick={saveNumbers} disabled={busy}
           className="px-2.5 py-1 rounded-lg bg-slate-800/60 border border-slate-700/50 text-[10px] text-slate-300 hover:border-indigo-500 disabled:opacity-40">save</button>
-        <span className="text-slate-600">line total £{line.line_total ?? "—"} {line.pack_unit_raw ? `· printed: ${line.pack_unit_raw}` : ""}</span>
+        <span className="text-slate-600">line total £{line.line_total ?? "—"} {line.pack_unit_raw ? `· printed: ${line.pack_unit_raw}` : ""} · ≈ {normaliseReceiptUnits(line.raw_description, line.pack_qty_base != null ? Number(line.pack_qty_base) : 1)} pack{normaliseReceiptUnits(line.raw_description, line.pack_qty_base != null ? Number(line.pack_qty_base) : 1) !== 1 ? "s" : ""}</span>
         <div className="ml-auto flex gap-1.5">
           <button onClick={() => mark("confirmed")} disabled={busy || !ok}
             className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-[10px] font-semibold text-white">confirm</button>

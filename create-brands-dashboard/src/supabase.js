@@ -5416,6 +5416,15 @@ export const lookupAlias = (aliasMap, name, vendor) => {
   const n = normItemAlias(name);
   return aliasMap.get(`${n}|${normItemAlias(vendor)}`) || aliasMap.get(`${n}|`) || null;
 };
+export async function fetchAliasFor(name, vendor) {
+  const n = normItemAlias(name);
+  const { data } = await supabase.from("supplier_item_aliases").select("store_item_id, vendor")
+    .eq("alias_norm", n).limit(3);
+  if (!data || !data.length) return null;
+  const v = normItemAlias(vendor);
+  const hit = data.find(r => (r.vendor || "") === v) || data.find(r => !r.vendor) || data[0];
+  return hit?.store_item_id || null;
+}
 export async function upsertItemAlias({ name, vendor, storeItemId, by }) {
   if (!name || !storeItemId) return;
   const { error } = await supabase.from("supplier_item_aliases").upsert({
