@@ -34404,6 +34404,20 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
         <div className="rounded-2xl p-4" style={{ background: C.cream, border:`1px solid ${C.line}` }}>
           <div className="text-xs font-bold uppercase tracking-wide mb-1" style={{ color: C.inkFaint }}>Receiving delivery</div>
           <div className="text-sm" style={{ color: C.inkSoft }}>Enter the actual quantity received for each item. Short items are reported to Distribution.</div>
+          {(() => {
+            const totalVal = lines.reduce((s2, l) => s2 + (Number(recv[l.id]) || 0) * (Number(l.unit_cost) || 0), 0);
+            const dispVal = lines.reduce((s2, l) => s2 + (Number(l.qty_dispatched) || 0) * (Number(l.unit_cost) || 0), 0);
+            const linked = lines.filter(l => l.store_item_id).length;
+            return (
+              <div className="flex flex-wrap gap-2 mt-2.5 text-[11px]">
+                <span className="px-2 py-1 rounded-lg font-bold" style={{ background: "#EFE3CC", color: C.ink }}>{lines.length} lines · £{dispVal.toFixed(2)} dispatched</span>
+                <span className="px-2 py-1 rounded-lg font-bold" style={{ background: totalVal < dispVal - 0.005 ? "#FBEAD5" : "#E7F0E4", color: totalVal < dispVal - 0.005 ? "#9A5B00" : "#3F6B3A" }}>Receiving £{totalVal.toFixed(2)}</span>
+                <span className="px-2 py-1 rounded-lg font-bold" style={{ background: linked === lines.length ? "#E7F0E4" : "#FBEAD5", color: linked === lines.length ? "#3F6B3A" : "#9A5B00" }}>
+                  {linked}/{lines.length} linked to stock{linked < lines.length ? " — unlinked lines book the purchase but won't move inventory. Match items in the expense/invoice review (matches are remembered)." : ""}
+                </span>
+              </div>
+            );
+          })()}
         </div>
         {msg && <div className="rounded-xl px-3 py-2 text-sm font-semibold" style={{ background: msg.tone==="ok"?C.greenBg:C.redBg, color: msg.tone==="ok"?C.green:C.red }}>{msg.text}</div>}
         <div className="space-y-2">
@@ -34415,7 +34429,12 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
                 <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <div className="text-sm font-bold truncate" style={{ color: C.ink }}>{l.item_name}</div>
-                    <div className="text-[11px]" style={{ color: C.inkFaint }}>Dispatched: {disp}{unlinked && <span style={{ color: C.red }}> · not linked to store item</span>}</div>
+                    <div className="text-[11px]" style={{ color: C.inkFaint }}>
+                      Dispatched: {disp}
+                      {l.unit_cost != null && <span> · £{Number(l.unit_cost).toFixed(2)} ea · <b style={{ color: short ? "#9A5B00" : C.inkSoft }}>£{(got * (Number(l.unit_cost) || 0)).toFixed(2)}</b></span>}
+                      {short && <span style={{ color: "#9A5B00" }}> · SHORT {disp - got}</span>}
+                      {unlinked && <span style={{ color: C.inkFaint }}> · ⚠ not linked</span>}
+                    </div>
                   </div>
                   <div className="flex items-center gap-1.5">
                     <button onClick={() => setRecv(r => ({ ...r, [l.id]: Math.max(0, got - 1) }))} className="w-7 h-7 rounded-lg text-lg font-bold" style={{ background:"#F3EADA", color: C.ink }}>−</button>
