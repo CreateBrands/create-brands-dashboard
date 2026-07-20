@@ -51017,12 +51017,6 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules, stores 
   const viewLabel = viewDate === todayStr ? "Today" : "Tomorrow";
 
   // Only published schedules for this brand on this date (for colleagues view)
-  const daySchedules = schedules.filter(s =>
-    s.brandId === myBrandId && s.date === viewDate &&
-    !!s.published &&
-    s.status !== "cancelled"
-  );
-
   // My own shifts — match by opsTeamMemberId OR currentUser.id, ACROSS all
   // stores/brands (an employee can be scheduled at a store outside their home
   // brand), and an employee can have several shifts the same day.
@@ -51030,6 +51024,20 @@ function EmployeeScheduleView({ currentUser, brands, opsTeam, schedules, stores 
     s.date === viewDate && !!s.published && s.status !== "cancelled" &&
     myIds.has(s.employeeId)
   ).sort((a,b) => (a.startTime||"").localeCompare(b.startTime||""));
+
+  // Colleague visibility is STORE-scoped, not brand-scoped: you see the rota
+  // for your own store(s), plus any store you're actually scheduled at today.
+  // Brand-wide leaked every store's schedule to every staff member.
+  const myStoreScope = new Set([
+    ...((currentUser.storeIds || []).filter(Boolean)),
+    ...myShifts.map(s => s.storeId).filter(Boolean),
+  ]);
+  const daySchedules = schedules.filter(s =>
+    s.date === viewDate &&
+    !!s.published &&
+    s.status !== "cancelled" &&
+    myStoreScope.has(s.storeId)
+  );
 
   // Colleague shifts — everyone else at same location, same day
   // Grouped: same dept first, then others
