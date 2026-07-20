@@ -20306,13 +20306,22 @@ function EmpThemeStyle() {
 // back to parsing the itemised reference text ("8× Tiger Bloomer; …").
 function normaliseReceiptUnits(desc, units) {
   let q = Number(units) || 1;
-  const m = /(\d+(?:\.\d+)?)\s?g\b/i.exec(desc || "");
-  if (m && !/loose|per\s?kg|\/kg/i.test(desc || "")) {
+  const d = desc || "";
+  const m = /(\d+(?:\.\d+)?)\s?g\b/i.exec(d);
+  if (m && !/loose|per\s?kg|\/kg/i.test(d)) {
     const g = Number(m[1]);
     if (g > 0) {
       if (q >= g && q % g === 0) q = q / g;
       else if (q < 50 && q !== Math.round(q)) q = Math.round(q * 1000 / g);
     }
+    return q;
+  }
+  // "4 Pack" / "Pack of 10" / "20pcs" names: base units are item-count ×
+  // pack-size — the purchase quantity is packs, so divide back out.
+  const p = /(\d+)\s*(?:pack|pk|pcs?)\b/i.exec(d) || /pack of\s*(\d+)/i.exec(d);
+  if (p) {
+    const n = Number(p[1]);
+    if (n > 1 && q >= n && q % n === 0) q = q / n;
   }
   return q;
 }
@@ -20334,7 +20343,7 @@ function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
     try {
       const payload = (rawLines || []).map(l => ({
         desc: l.raw_description || "",
-        qty: normaliseReceiptUnits(l.raw_description, l.pack_qty_base != null ? Number(l.pack_qty_base) : 1),
+        qty: l.order_qty != null ? Number(l.order_qty) : normaliseReceiptUnits(l.raw_description, l.pack_qty_base != null ? Number(l.pack_qty_base) : 1),
         price: l.pack_price_ex_vat != null ? Number(l.pack_price_ex_vat) : null,
         storeItemId: l.matched_store_item_id || null,
       }));
@@ -20368,7 +20377,7 @@ function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
           setInvHead(invoice || null);
           setRawLines(raw || []);
           setLines((raw || []).map(l => ({
-            qty: normaliseReceiptUnits(l.raw_description, l.pack_qty_base != null ? Number(l.pack_qty_base) : 1),
+            qty: l.order_qty != null ? Number(l.order_qty) : normaliseReceiptUnits(l.raw_description, l.pack_qty_base != null ? Number(l.pack_qty_base) : 1),
             desc: l.raw_description || "",
             price: l.pack_price_ex_vat != null ? Number(l.pack_price_ex_vat) : null,
           })));
@@ -20546,7 +20555,7 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
       // that's grams/kg, NOT a pack count. normaliseReceiptUnits fixes it.
       const items = (rawLines || []).map((l, i) => ({
         desc: l.raw_description || `Item ${i+1}`,
-        units: normaliseReceiptUnits(l.raw_description, l.pack_qty_base != null ? Number(l.pack_qty_base) : 1),
+        units: l.order_qty != null ? Number(l.order_qty) : normaliseReceiptUnits(l.raw_description, l.pack_qty_base != null ? Number(l.pack_qty_base) : 1),
         price: l.pack_price_ex_vat != null ? Number(l.pack_price_ex_vat) : 0,
       }));
       setScanLines(items);
@@ -22058,6 +22067,7 @@ function ItemRankTable({ title, subtitle, rows, fmtMoney, accent = "text-emerald
 // ===== INVOICES_VIEW_V1: upload → extract → side-by-side review → approve =====
 function InvoiceLineRow({ line, domain, onChanged }) {
   const [editQty, setEditQty] = useState(line.pack_qty_base ?? "");
+  const [editCount, setEditCount] = useState(line.order_qty != null ? String(line.order_qty) : String(normaliseReceiptUnits(line.raw_description, line.pack_qty_base != null ? Number(line.pack_qty_base) : 1)));
   const [editPrice, setEditPrice] = useState(line.pack_price_ex_vat ?? "");
   const [search, setSearch] = useState("");
   const [options, setOptions] = useState([]);
@@ -22111,7 +22121,7 @@ function InvoiceLineRow({ line, domain, onChanged }) {
         const lc = tokens.map(t => t.toLowerCase());
         const scored = [...seen.values()].map(o => ({
           ...o, score: lc.reduce((s2, t) => s2 + (o.name.toLowerCase().includes(t) ? 1 : 0), 0),
-        })).filter(o => o.score > 0).sort((x, y) => y.score - x.score).slice(0, 3);
+        })).filter(o => o.score >= Math.min(2, lc.length)).sort((x, y) => y.score - x.score).slice(0, 3);
         // resolve the alias suggestion's name from the scored/catalogue pool if possible
         const merged = [];
         for (const f of found) {
@@ -22141,6 +22151,7 @@ function InvoiceLineRow({ line, domain, onChanged }) {
       await saveInvoiceLine(line.id, {
         pack_qty_base: editQty === "" ? null : Number(editQty),
         pack_price_ex_vat: editPrice === "" ? null : Number(editPrice),
+        order_qty: editCount === "" ? null : Number(editCount),
       });
       onChanged();
     } finally { setBusy(false); }
@@ -22196,6 +22207,9 @@ function InvoiceLineRow({ line, domain, onChanged }) {
         </div>
       )}
       <div className="flex flex-wrap items-center gap-2 text-xs">
+        <label className="text-slate-500 font-semibold">Qty (packs)</label>
+        <input value={editCount} onChange={(e) => setEditCount(e.target.value)}
+          className="px-2 py-1 bg-slate-950 border border-indigo-700/50 rounded-lg text-xs text-white font-semibold w-16 focus:outline-none focus:border-indigo-500" />
         <label className="text-slate-500">Pack qty (base units)</label>
         <input value={editQty} onChange={(e) => setEditQty(e.target.value)}
           className="px-2 py-1 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 w-24 focus:outline-none focus:border-indigo-500" />
@@ -22204,7 +22218,7 @@ function InvoiceLineRow({ line, domain, onChanged }) {
           className="px-2 py-1 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 w-24 focus:outline-none focus:border-indigo-500" />
         <button onClick={saveNumbers} disabled={busy}
           className="px-2.5 py-1 rounded-lg bg-slate-800/60 border border-slate-700/50 text-[10px] text-slate-300 hover:border-indigo-500 disabled:opacity-40">save</button>
-        <span className="text-slate-600">line total £{line.line_total ?? "—"} {line.pack_unit_raw ? `· printed: ${line.pack_unit_raw}` : ""} · ≈ {normaliseReceiptUnits(line.raw_description, line.pack_qty_base != null ? Number(line.pack_qty_base) : 1)} pack{normaliseReceiptUnits(line.raw_description, line.pack_qty_base != null ? Number(line.pack_qty_base) : 1) !== 1 ? "s" : ""}</span>
+        <span className="text-slate-600">line total £{line.line_total ?? "—"} {line.pack_unit_raw ? `· printed: ${line.pack_unit_raw}` : ""}</span>
         <div className="ml-auto flex gap-1.5">
           <button onClick={() => mark("confirmed")} disabled={busy || !ok}
             className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-[10px] font-semibold text-white">confirm</button>
