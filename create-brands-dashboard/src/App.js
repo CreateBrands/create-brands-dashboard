@@ -20300,6 +20300,108 @@ function EmpThemeStyle() {
 }
 
 
+// ── EXPENSE DETAIL: the invoice-extractor view for an expense claim ──────────
+// Receipt image + extracted line items side by side, like opening an invoice.
+// Lines come from the linked invoice when the claim has one; older claims fall
+// back to parsing the itemised reference text ("8× Tiger Bloomer; …").
+function normaliseReceiptUnits(desc, units) {
+  let q = Number(units) || 1;
+  const m = /(\d+(?:\.\d+)?)\s?g\b/i.exec(desc || "");
+  if (m && !/loose|per\s?kg|\/kg/i.test(desc || "")) {
+    const g = Number(m[1]);
+    if (g > 0) {
+      if (q >= g && q % g === 0) q = q / g;
+      else if (q < 50 && q !== Math.round(q)) q = Math.round(q * 1000 / g);
+    }
+  }
+  return q;
+}
+function ExpenseDetailOverlay({ claim, onClose }) {
+  const [lines, setLines] = useState(null);
+  const [imgFull, setImgFull] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (claim.invoiceId) {
+        try {
+          const { lines: raw } = await getInvoiceWithLines(claim.invoiceId);
+          if (!alive) return;
+          setLines((raw || []).map(l => ({
+            qty: normaliseReceiptUnits(l.raw_description, l.pack_qty_base != null ? Number(l.pack_qty_base) : 1),
+            desc: l.raw_description || "",
+            price: l.pack_price_ex_vat != null ? Number(l.pack_price_ex_vat) : null,
+          })));
+          return;
+        } catch { /* fall through to reference text */ }
+      }
+      const rows = (claim.reference || "").split(";").map(t => t.trim()).filter(Boolean).map(t => {
+        const m = /^([\d.]+)×\s*(.+)$/.exec(t);
+        return m ? { qty: Number(m[1]), desc: m[2], price: null } : { qty: null, desc: t, price: null };
+      });
+      if (alive) setLines(rows);
+    })();
+    return () => { alive = false; };
+  }, [claim]);
+  const hasPrices = (lines || []).some(l => l.price != null);
+  const lineTotal = hasPrices ? (lines || []).reduce((s2, l) => s2 + (l.qty || 0) * (l.price || 0), 0) : null;
+  return (
+    <div className="fixed inset-0 z-[70] bg-slate-950 flex flex-col">
+      <div className="flex items-center gap-3 px-4 sm:px-6 py-3 border-b border-slate-800 flex-shrink-0 bg-slate-900">
+        <button onClick={onClose} className="text-sm font-semibold text-indigo-300">← Back</button>
+        <div className="min-w-0">
+          <div className="text-sm font-bold text-white truncate">{claim.description}</div>
+          <div className="text-[11px] text-slate-500">{claim.expenseDate}{claim.vendor ? ` · ${claim.vendor}` : ""} · {claim.submittedBy || ""}</div>
+        </div>
+        <div className="ml-auto text-base font-black text-white flex-shrink-0">£{Number(claim.amount || 0).toFixed(2)}</div>
+      </div>
+      <div className="flex-1 overflow-y-auto">
+        <div className="max-w-4xl mx-auto w-full p-4 grid md:grid-cols-[300px_1fr] gap-4">
+          <div>
+            {claim.receiptUrl ? (
+              <img src={claim.receiptUrl} alt="receipt" onClick={() => setImgFull(true)}
+                className="w-full rounded-xl border border-slate-800 cursor-zoom-in"/>
+            ) : <div className="text-xs text-slate-600 border border-dashed border-slate-800 rounded-xl p-6 text-center">No receipt image on this claim.</div>}
+          </div>
+          <div className="rounded-xl border border-slate-800 overflow-hidden self-start">
+            <table className="w-full text-xs">
+              <thead className="dist-th"><tr>
+                <th className="text-right px-3 py-2 w-14">Qty</th>
+                <th className="text-left px-3 py-2">Item</th>
+                {hasPrices && <th className="text-right px-3 py-2 w-20">Price</th>}
+                {hasPrices && <th className="text-right px-3 py-2 w-20">Total</th>}
+              </tr></thead>
+              <tbody>
+                {lines === null && <tr><td colSpan={hasPrices ? 4 : 2} className="px-3 py-6 text-center text-slate-500">Loading line items…</td></tr>}
+                {lines && lines.length === 0 && <tr><td colSpan={hasPrices ? 4 : 2} className="px-3 py-6 text-center text-slate-500">No line items were captured for this expense.</td></tr>}
+                {(lines || []).map((l, i) => (
+                  <tr key={i}>
+                    <td className="px-3 py-2 text-right tabular-nums text-slate-300 font-semibold">{l.qty != null ? l.qty : "—"}</td>
+                    <td className="px-3 py-2 text-slate-300">{l.desc}</td>
+                    {hasPrices && <td className="px-3 py-2 text-right tabular-nums text-slate-400">{l.price != null ? `£${l.price.toFixed(2)}` : ""}</td>}
+                    {hasPrices && <td className="px-3 py-2 text-right tabular-nums text-slate-300">{l.price != null ? `£${((l.qty || 0) * l.price).toFixed(2)}` : ""}</td>}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {lineTotal != null && (
+              <div className="px-3 py-2 border-t border-slate-800 flex justify-between text-xs">
+                <span className="text-slate-500">Lines total {Math.abs(lineTotal - Number(claim.amount || 0)) > 0.05 ? "· differs from claim amount" : "· matches claim"}</span>
+                <span className="font-bold text-white tabular-nums">£{lineTotal.toFixed(2)}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+      {imgFull && claim.receiptUrl && (
+        <div className="fixed inset-0 z-[80] bg-black/95 flex flex-col" onClick={() => setImgFull(false)}>
+          <button className="text-white text-2xl self-end px-4 py-2">×</button>
+          <div className="flex-1 overflow-auto flex items-start justify-center p-3"><img src={claim.receiptUrl} alt="receipt" className="max-w-full rounded-lg"/></div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [], myClaims = [], onSubmit, onSubmitMany, accountOptions = [], currentUser }) {
   const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
   const ec = "w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none";
@@ -20312,6 +20414,8 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
   // delivery listing exactly what's arriving.
   const [receiptUrl, setReceiptUrl] = useState(null);
   const [viewReceipt, setViewReceipt] = useState(null);  // receipt being viewed full-screen
+  const [scanInvoiceId, setScanInvoiceId] = useState(null); // extracted-invoice link for the claim
+  const [detailClaim, setDetailClaim] = useState(null);      // claim open in the extractor-style detail
   const [scanLines, setScanLines] = useState([]);   // [{desc, units, price}]
   const [scanBusy, setScanBusy] = useState(false);
   const scanReceipt = async (file) => {
@@ -20320,27 +20424,15 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
       const rUrl = await uploadExpenseReceipt(file, currentUser?.opsTeamMemberId || currentUser?.id || null);
       setReceiptUrl(rUrl);
       const inv = await uploadInvoiceFile(file, "expense", currentUser?.id);
+      setScanInvoiceId(inv.id);
       try { await extractInvoice(inv.id); } catch { /* best-effort */ }
       const { invoice, lines: rawLines } = await getInvoiceWithLines(inv.id);
       if (invoice?.supplier_name && !form.vendor) setF("vendor", invoice.supplier_name);
       // pack_qty_base is the extractor's BASE-UNIT quantity — for weighed goods
-      // that's grams/kg, NOT a pack count ("Brioche 400g" came back as 4400).
-      // Normalise: a NNNg pack weight in the name is pack size, never quantity.
-      const normaliseUnits = (desc, units) => {
-        let q = Number(units) || 1;
-        const m = /(\d+(?:\.\d+)?)\s?g\b/i.exec(desc || "");
-        if (m && !/loose|per\s?kg|\/kg/i.test(desc || "")) {
-          const g = Number(m[1]);
-          if (g > 0) {
-            if (q >= g && q % g === 0) q = q / g;                              // grams recorded as count
-            else if (q < 50 && q !== Math.round(q)) q = Math.round(q * 1000 / g); // kilograms recorded as count
-          }
-        }
-        return q;
-      };
+      // that's grams/kg, NOT a pack count. normaliseReceiptUnits fixes it.
       const items = (rawLines || []).map((l, i) => ({
         desc: l.raw_description || `Item ${i+1}`,
-        units: normaliseUnits(l.raw_description, l.pack_qty_base != null ? Number(l.pack_qty_base) : 1),
+        units: normaliseReceiptUnits(l.raw_description, l.pack_qty_base != null ? Number(l.pack_qty_base) : 1),
         price: l.pack_price_ex_vat != null ? Number(l.pack_price_ex_vat) : 0,
       }));
       setScanLines(items);
@@ -20365,7 +20457,7 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
     setBusy(true);
     try {
       const itemised = scanLines.length ? scanLines.map(it=>`${it.units}× ${it.desc}`).join("; ").slice(0,500) : "";
-      await onSubmit?.({ ...form, amount: Number(form.amount), receiptUrl,
+      await onSubmit?.({ ...form, amount: Number(form.amount), receiptUrl, invoiceId: scanInvoiceId,
         reference: form.reference || itemised });
       // If the purchase is for a store and we have line items, raise the
       // incoming delivery so the store can receive it item by item.
@@ -20376,7 +20468,7 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
         ); } catch (e2) { console.error("delivery create failed:", e2.message); }
       }
       setForm({ vendor:"", expenseTypeId:"", categoryId:"", storeId:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), reference:"", description:"" });
-      setReceiptUrl(null); setScanLines([]);
+      setReceiptUrl(null); setScanLines([]); setScanInvoiceId(null);
       setOk(`Expense submitted${form.storeId && scanLines.length ? " — delivery raised for the store" : ""}.`); setMode("mine");
       setTimeout(()=>setOk(""), 4000);
     } catch (e) { setErr(e?.message || "Could not submit."); }
@@ -20443,7 +20535,7 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
       ) : (
         <div className="space-y-2">
           {myClaims.length===0 ? <div className="text-center py-10 text-sm text-slate-500">You haven't submitted any expenses yet.</div> : myClaims.map(c=>(
-            <div key={c.id} className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+            <div key={c.id} onClick={() => setDetailClaim(c)} className="bg-slate-900 border border-slate-800 rounded-xl p-3 cursor-pointer hover:border-slate-600">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
                   <div className="text-sm font-semibold text-white flex items-center gap-2 flex-wrap">{c.description} <StatusBadge s={c.status}/></div>
@@ -20453,14 +20545,13 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
                 <div className="flex-shrink-0 text-right">
                   <div className="text-sm font-bold text-white">{money(c.amount)}</div>
                   {c.receiptUrl && (
-                    <button onClick={() => setViewReceipt(c.receiptUrl)} className="inline-block mt-1.5">
-                      <img src={c.receiptUrl} alt="receipt" className="h-12 w-12 object-cover rounded-md border border-slate-700"/>
-                    </button>
+                    <img src={c.receiptUrl} alt="receipt" className="h-12 w-12 object-cover rounded-md border border-slate-700 mt-1.5 ml-auto"/>
                   )}
                 </div>
               </div>
             </div>
           ))}
+          {detailClaim && <ExpenseDetailOverlay claim={detailClaim} onClose={() => setDetailClaim(null)}/>}
           {/* FULL-SCREEN RECEIPT VIEWER: in-app, no new tab (pop-up blockers
               and installed-app webviews made target=_blank unreliable) */}
           {viewReceipt && (
@@ -43293,6 +43384,7 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
   const ec = "px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white w-full";
   const [tab, setTab] = useState("submitted"); // submitted | approved | reconciled | rejected | new
   const [viewReceipt, setViewReceipt] = useState(null);  // receipt being viewed full-screen
+  const [detailClaim, setDetailClaim] = useState(null);
   const [form, setForm] = useState(null);
   const [recon, setRecon] = useState(null); // claim being reconciled
   const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
@@ -43403,7 +43495,7 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-sm font-semibold text-white flex items-center gap-2 flex-wrap">{c.description} <StatusBadge s={c.status}/></div>
-          <div className="text-[11px] text-slate-500 flex gap-2 flex-wrap mt-0.5">
+          <div onClick={() => setDetailClaim(c)} className="text-[11px] text-slate-500 flex gap-2 flex-wrap mt-0.5 cursor-pointer">
             <span>{c.expenseDate}</span>
             {c.vendor && <span>· {c.vendor}</span>}
             {c.expenseTypeId && <span>· {expName(c.expenseTypeId)}</span>}
@@ -43417,7 +43509,7 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
         <div className="text-right flex-shrink-0">
           <div className="text-sm font-bold text-white">{money(c.amount)}</div>
           {c.receiptUrl && (
-            <button onClick={() => setViewReceipt(c.receiptUrl)} className="inline-block mt-1.5">
+            <button onClick={() => setDetailClaim(c)} title="Open expense detail" className="inline-block mt-1.5">
               <img src={c.receiptUrl} alt="receipt" className="h-12 w-12 object-cover rounded-md border border-slate-700 ml-auto"/>
             </button>
           )}
@@ -43558,6 +43650,7 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
           </div>
         </Modal>
       )}
+      {detailClaim && <ExpenseDetailOverlay claim={detailClaim} onClose={() => setDetailClaim(null)}/>}
       {/* FULL-SCREEN RECEIPT VIEWER: in-app, no new tab (pop-up blockers
               and installed-app webviews made target=_blank unreliable) */}
           {viewReceipt && (
