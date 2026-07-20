@@ -58841,7 +58841,10 @@ export default function App() {
   useEffect(() => {
     try {
       window.localStorage.setItem("cb.lastView", activeView);
-      if (activeView !== "employee-profile" && !window.location.hash.startsWith("#employee/")) {
+      // ALWAYS claim the hash for non-profile views — a stale #employee/<id>
+      // left behind after sidebar-navigating away from a profile would hijack
+      // every refresh back to that employee. Profiles keep their own hash.
+      if (activeView !== "employee-profile") {
         window.history.replaceState(null, "", `#v/${activeView}`);
       }
     } catch {}
