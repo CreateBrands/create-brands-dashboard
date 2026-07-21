@@ -14349,6 +14349,33 @@ export async function fetchDistFulfilChecks(soIds = []) {
 // The proposal (a FULL replacement line set) sits pending; Dist approves
 // (lines swapped) or rejects (original stands). One pending per order.
 
+// ── CK LABEL QUEUE: jobs the mC-Print3 pulls via CloudPRNT ──────────────────
+export async function enqueueCkLabelJob(run, copies, user) {
+  const { error } = await supabase.from("ck_label_jobs").insert({
+    status: "queued",
+    payload: {
+      productName: run.productName, batchNo: run.finishedBatchNo,
+      useBy: run.useByDate || null, madeDate: run.runDate,
+      qty: run.producedQty, unit: run.outputUnit || "",
+      allergens: run.allergens || [], copies: Math.max(1, Number(copies) || 1),
+      brand: "Create Brands",
+    },
+    created_by: user?.name || user?.id || null,
+  });
+  if (error) throw error;
+  return true;
+}
+
+// Receipt-style document (SO / invoice) on the warehouse Star printer.
+export async function enqueueDistDocPrint(payload, user) {
+  const { error } = await supabase.from("ck_label_jobs").insert({
+    status: "queued", kind: "doc", payload,
+    created_by: user?.name || user?.id || null,
+  });
+  if (error) throw error;
+  return true;
+}
+
 // ── DETACH SO LINES: fresh / direct-supplier lines invoiced separately ──────
 // Removes the checked groups' lines from the order outright — they're bought
 // and invoiced through their own channel (driver expense or direct supplier),

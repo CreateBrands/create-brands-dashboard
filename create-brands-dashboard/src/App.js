@@ -183,7 +183,7 @@ import {
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
-  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
+  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
 } from "./supabase";
@@ -5124,6 +5124,43 @@ function DistTypedItemsView({ itemType, currentUser }) {
   );
 }
 
+// ── LABEL PRINTING: batch + use-by + allergens on a thermal label ────────────
+// Sized for the Star TSP700II (80mm roll, 72mm printable) — prints via the
+// futurePRNT driver; on black-marked label stock the printer cuts per label.
+// Set COPIES in the printer dialog to match tubs/trays. Allergens bold per
+// Natasha's Law practice.
+function printCkRunLabel(run, brandName) {
+  const esc = (t) => String(t == null ? "" : t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const allergens = (run.allergens || []).filter(Boolean);
+  const w = window.open("", "_blank", "width=420,height=460");
+  if (!w) { alert("Pop-up blocked — allow pop-ups to print labels."); return; }
+  w.document.write(`<!doctype html><html><head><title>${esc(run.finishedBatchNo)}</title><style>
+    /* Star TSP700II: 80mm roll, 72mm printable. Height auto — the printer
+       cuts after the content (or at the black mark on marked label stock). */
+    @page { size: 72mm 60mm; margin: 0; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: Arial, Helvetica, sans-serif; width: 72mm; }
+    .lbl { width: 72mm; padding: 3mm 4mm 4mm; overflow: hidden; page-break-after: always; display: flex; flex-direction: column; }
+    .name { font-size: 14pt; font-weight: 800; line-height: 1.05; }
+    .meta { font-size: 9pt; margin-top: 1mm; }
+    .useby { font-size: 13pt; font-weight: 800; margin-top: 1.5mm; }
+    .batch { font-size: 10pt; font-family: monospace; margin-top: 1mm; letter-spacing: 0.2mm; }
+    .allg { font-size: 9pt; font-weight: 700; margin-top: 2mm; border-top: 0.4mm solid #000; padding-top: 1mm; }
+    .allg b { text-transform: uppercase; }
+    .brand { font-size: 7pt; color: #333; margin-top: 1mm; }
+  </style></head><body>
+    <div class="lbl">
+      <div class="name">${esc(run.productName)}</div>
+      <div class="meta">Made: ${esc(run.runDate)} · ${esc(run.producedQty)} ${esc(run.outputUnit || "")}</div>
+      <div class="useby">USE BY: ${esc(run.useByDate || "— set use-by! —")}</div>
+      <div class="batch">BATCH ${esc(run.finishedBatchNo)}</div>
+      <div class="allg">${allergens.length ? `CONTAINS: <b>${esc(allergens.join(", "))}</b>` : "Allergens: none declared"}</div>
+      <div class="brand">${esc(brandName || "Create Brands")} · Central Kitchen</div>
+    </div>
+  <script>window.onload = function(){ window.print(); };<\/script></body></html>`);
+  w.document.close();
+}
+
 function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   const { canFeature: ckCanFeature } = useAccess();
   // The central kitchen site.
@@ -6924,6 +6961,16 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                     <span className="flex items-center gap-2">
                       {r.plannedQty && r.plannedQty > 0 && <span className={`text-[10px] font-bold ${yieldColor((r.producedQty/r.plannedQty)*100)}`}>{((r.producedQty/r.plannedQty)*100).toFixed(0)}% yield</span>}
                       <span className="text-[10px] text-slate-500">{r.runDate}</span>
+                      <button onClick={async () => {
+                        const c = window.prompt("How many labels?", "1");
+                        if (c === null) return;
+                        const n = Math.max(1, Number(c) || 1);
+                        try { await enqueueCkLabelJob(r, n, currentUser); alert(`${n} label${n !== 1 ? "s" : ""} sent to the kitchen printer.`); }
+                        catch (e2) { alert("Could not queue the label: " + e2.message); }
+                      }} title="Print on the kitchen label printer (CloudPRNT)"
+                        className="px-2 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold flex items-center gap-1"><Printer size={11}/> Label</button>
+                      <button onClick={() => printCkRunLabel(r)} title="Print via this computer's printer dialog"
+                        className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-400 text-[10px] font-bold">PC</button>
                     </span>
                   </div>
                   <div className="text-[11px] text-slate-500 flex flex-wrap gap-2 mt-1">
@@ -9280,6 +9327,22 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
           {detachMsg && (
             <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[80] px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-bold shadow-xl">{detachMsg}</div>
           )}
+          <button onClick={async () => {
+            try {
+              await enqueueDistDocPrint({
+                title: "SALES ORDER", subtitle: so.soNumber,
+                meta: [`Customer: ${customer?.displayName || ""}`, `Date: ${so.orderDate || ""}`, `Status: ${(so.status || "").toUpperCase()}`],
+                lines: (so.lines || []).map(l => {
+                  const it = itemById.get(l.itemId); const qty = Number(l.qty) || 0; const rate = Number(l.unitPrice) || 0;
+                  const disc = Number(l.discount) || 0; const gross = qty * rate;
+                  return { name: cleanName(it?.name) || l.itemId, qty, unitPrice: rate, amount: l.discountType === "percent" ? gross * (1 - disc / 100) : gross - disc };
+                }),
+                totals: [{ label: "Subtotal", value: totals.subTotal }, { label: "VAT", value: totals.taxTotal }, ...(Number(so.shippingCharge) ? [{ label: "Shipping", value: so.shippingCharge }] : []), { label: "TOTAL", value: grand, strong: true }],
+                note: so.note || "", footer: "Create Brands Distribution",
+              }, null);
+              alert("Sent to the warehouse printer.");
+            } catch (e2) { alert("Could not queue the print: " + e2.message); }
+          }} title="Print on the warehouse Star printer" className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5"><Printer size={13}/> Star</button>
           {so.status === "confirmed" && detachGroups.length > 0 && (
             <button onClick={() => { setDetachSel({}); setDetachOpen(true); }} className="px-3 py-1.5 rounded-lg bg-amber-700 hover:bg-amber-600 text-white text-xs font-semibold">Detach…</button>
           )}
@@ -10221,6 +10284,18 @@ function DistInvoiceDetail({ invoiceId, onClose, onDelete }) {
                   <div className="text-2xl font-bold text-white tracking-wide">INVOICE</div>
                   <div className="text-xs text-slate-400">Invoice# <span className="font-mono text-white">{d.invoiceNumber}</span></div>
                   <div className="mt-2"><div className="text-[10px] uppercase tracking-wide text-slate-500">Balance Due</div><div className="text-lg font-bold text-amber-300">{gbp(d.balance)}</div></div>
+                  <button onClick={async () => {
+                    try {
+                      await enqueueDistDocPrint({
+                        title: "INVOICE", subtitle: d.invoiceNumber,
+                        meta: [`Bill to: ${d.customer?.displayName || ""}`, `Date: ${d.invoiceDate ? new Date(d.invoiceDate).toLocaleDateString("en-GB") : ""}`, `Due: ${d.dueDate ? new Date(d.dueDate).toLocaleDateString("en-GB") : ""}`, `Status: ${(d.status || "").replace("_", " ").toUpperCase()}`],
+                        lines: (d.lines || []).map(l => ({ name: l.item?.name || l.itemId, qty: l.qty, unitPrice: l.rate, amount: l.amount != null ? l.amount : (Number(l.qty) || 0) * (Number(l.rate) || 0) })),
+                        totals: [{ label: "Net", value: d.net }, { label: "VAT", value: d.vat }, ...(Number(d.shipping) ? [{ label: "Shipping", value: d.shipping }] : []), { label: "TOTAL", value: d.grand, strong: true }, ...(d.paid > 0 ? [{ label: "Paid", value: d.paid }] : []), { label: "Balance due", value: d.balance, strong: true }],
+                        footer: "Create Brands Distribution",
+                      }, null);
+                      alert("Sent to the warehouse printer.");
+                    } catch (e2) { alert("Could not queue the print: " + e2.message); }
+                  }} title="Print on the warehouse Star printer" className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 mr-2"><Printer size={13}/> Star</button>
                   <button onClick={() => printDistDoc({
                     docTitle: "INVOICE", docNo: d.invoiceNumber,
                     meta: [["Bill to", d.customer?.displayName || ""], ["Invoice date", d.invoiceDate ? new Date(d.invoiceDate).toLocaleDateString("en-GB") : ""], ["Due date", d.dueDate ? new Date(d.dueDate).toLocaleDateString("en-GB") : ""], ["Status", (d.status || "").replace("_", " ").toUpperCase()]],
