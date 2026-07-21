@@ -11878,6 +11878,7 @@ export async function createDistSalesOrder(so, lines = []) {
     discount: Number(l.discount) || 0, discount_type: l.discountType || "percent", tax_rate_id: l.taxRateId || null,
   }));
   if (lr.length) { const { error: e2 } = await supabase.from("dist_sales_order_lines").insert(lr); if (e2) throw e2; }
+  if ((so.status || "draft") === "confirmed") autoPrintSoTicket(id); // born-confirmed orders print too
   return id;
 }
 
@@ -11921,6 +11922,7 @@ export async function deleteDistSalesOrder(soId) {
 export async function setDistSalesOrderStatus(id, status) {
   const { error } = await supabase.from("dist_sales_orders").update({ status }).eq("id", id);
   if (error) throw error;
+  if (status === "confirmed") autoPrintSoTicket(id); // warehouse ticket, fire-and-forget
 }
 
 // ── COMMITTED stock: SUM of open SO line qty per item (draft/confirmed/picking) ──
@@ -12474,6 +12476,18 @@ export async function postDistInvoice(inv, lines = []) {
   }
   await supabase.from("dist_invoices").update({ posted: true, grand_total: gross }).eq("id", id);
   if (inv.soId) await supabase.from("dist_sales_orders").update({ status: "invoiced" }).eq("id", inv.soId);
+  try {
+    const { data: cust2 } = head.customer_id ? await supabase.from("dist_contacts").select("display_name, company").eq("id", head.customer_id).single() : { data: null };
+    const { data: items2 } = await supabase.from("dist_items").select("id, name");
+    const nb = new Map((items2 || []).map(x => [x.id, x.name]));
+    await supabase.from("ck_label_jobs").insert({ status: "queued", kind: "doc", payload: {
+      title: "INVOICE", subtitle: head.invoice_number,
+      meta: [`Bill to: ${cust2?.display_name || cust2?.company || ""}`, `Date: ${head.invoice_date}`, `Due: ${head.due_date || ""}`],
+      lines: (lines || []).map(l => ({ name: nb.get(l.itemId) || l.description || l.itemId, qty: l.qty, unitPrice: l.unitPrice, amount: (Number(l.qty) || 0) * (Number(l.unitPrice) || 0) })),
+      totals: [{ label: "TOTAL (ex VAT - see A4)", value: (lines || []).reduce((a, l) => a + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0), strong: true }],
+      footer: "Create Brands Distribution",
+    }, created_by: "auto" });
+  } catch { /* never block invoicing */ }
   return id;
 }
 
@@ -14364,6 +14378,33 @@ export async function enqueueCkLabelJob(run, copies, user) {
   });
   if (error) throw error;
   return true;
+}
+
+// AUTO-PRINT: fire-and-forget warehouse ticket for a confirmed SO. Fetches
+// the minimal data itself; never blocks or fails the business operation.
+export async function autoPrintSoTicket(soId) {
+  try {
+    const { data: so } = await supabase.from("dist_sales_orders").select("*, dist_sales_order_lines(*)").eq("id", soId).single();
+    if (!so) return;
+    const [{ data: cust }, { data: items }] = await Promise.all([
+      so.customer_id ? supabase.from("dist_contacts").select("display_name, company").eq("id", so.customer_id).single() : Promise.resolve({ data: null }),
+      supabase.from("dist_items").select("id, name"),
+    ]);
+    const nameById = new Map((items || []).map(i => [i.id, i.name]));
+    const lines = (so.dist_sales_order_lines || []).map(l => {
+      const qty = Number(l.qty) || 0; const rate = Number(l.unit_price) || 0;
+      const disc = Number(l.discount) || 0; const gross = qty * rate;
+      return { name: nameById.get(l.item_id) || l.item_id, qty, unitPrice: rate,
+        amount: l.discount_type === "percent" ? gross * (1 - disc / 100) : gross - disc };
+    });
+    const net = lines.reduce((a, l) => a + l.amount, 0);
+    await supabase.from("ck_label_jobs").insert({ status: "queued", kind: "doc", payload: {
+      title: "SALES ORDER", subtitle: so.so_number,
+      meta: [`Customer: ${cust?.display_name || cust?.company || ""}`, `Date: ${so.order_date || ""}`, `Status: CONFIRMED`],
+      lines, totals: [{ label: "Net (ex VAT/ship)", value: net, strong: true }],
+      note: so.note || "", footer: "Create Brands Distribution",
+    }, created_by: "auto" });
+  } catch { /* printing must never break order flow */ }
 }
 
 // Receipt-style document (SO / invoice) on the warehouse Star printer.
