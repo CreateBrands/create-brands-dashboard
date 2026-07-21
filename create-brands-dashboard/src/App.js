@@ -9335,7 +9335,7 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
                 lines: (so.lines || []).map(l => {
                   const it = itemById.get(l.itemId); const qty = Number(l.qty) || 0; const rate = Number(l.unitPrice) || 0;
                   const disc = Number(l.discount) || 0; const gross = qty * rate;
-                  return { name: cleanName(it?.name) || l.itemId, qty, unitPrice: rate, amount: l.discountType === "percent" ? gross * (1 - disc / 100) : gross - disc };
+                  return { name: cleanName(it?.name) || l.itemId, category: it?.category || "", qty, unitPrice: rate, amount: l.discountType === "percent" ? gross * (1 - disc / 100) : gross - disc };
                 }),
                 totals: [{ label: "Subtotal", value: totals.subTotal }, { label: "VAT", value: totals.taxTotal }, ...(Number(so.shippingCharge) ? [{ label: "Shipping", value: so.shippingCharge }] : []), { label: "TOTAL", value: grand, strong: true }],
                 note: so.note || "", footer: "Create Brands Distribution",
@@ -10289,7 +10289,7 @@ function DistInvoiceDetail({ invoiceId, onClose, onDelete }) {
                       await enqueueDistDocPrint({
                         title: "INVOICE", subtitle: d.invoiceNumber,
                         meta: [`Bill to: ${d.customer?.displayName || ""}`, `Date: ${d.invoiceDate ? new Date(d.invoiceDate).toLocaleDateString("en-GB") : ""}`, `Due: ${d.dueDate ? new Date(d.dueDate).toLocaleDateString("en-GB") : ""}`, `Status: ${(d.status || "").replace("_", " ").toUpperCase()}`],
-                        lines: (d.lines || []).map(l => ({ name: l.item?.name || l.itemId, qty: l.qty, unitPrice: l.rate, amount: l.amount != null ? l.amount : (Number(l.qty) || 0) * (Number(l.rate) || 0) })),
+                        lines: (d.lines || []).map(l => ({ name: l.item?.name || l.itemId, category: l.item?.category || "", qty: l.qty, unitPrice: l.rate, amount: l.amount != null ? l.amount : (Number(l.qty) || 0) * (Number(l.rate) || 0) })),
                         totals: [{ label: "Net", value: d.net }, { label: "VAT", value: d.vat }, ...(Number(d.shipping) ? [{ label: "Shipping", value: d.shipping }] : []), { label: "TOTAL", value: d.grand, strong: true }, ...(d.paid > 0 ? [{ label: "Paid", value: d.paid }] : []), { label: "Balance due", value: d.balance, strong: true }],
                         footer: "Create Brands Distribution",
                       }, null);

@@ -12478,12 +12478,12 @@ export async function postDistInvoice(inv, lines = []) {
   if (inv.soId) await supabase.from("dist_sales_orders").update({ status: "invoiced" }).eq("id", inv.soId);
   try {
     const { data: cust2 } = head.customer_id ? await supabase.from("dist_contacts").select("display_name, company").eq("id", head.customer_id).single() : { data: null };
-    const { data: items2 } = await supabase.from("dist_items").select("id, name");
-    const nb = new Map((items2 || []).map(x => [x.id, x.name]));
+    const { data: items2 } = await supabase.from("dist_items").select("id, name, category");
+    const nb = new Map((items2 || []).map(x => [x.id, x]));
     await supabase.from("ck_label_jobs").insert({ status: "queued", kind: "doc", payload: {
       title: "INVOICE", subtitle: head.invoice_number,
       meta: [`Bill to: ${cust2?.display_name || cust2?.company || ""}`, `Date: ${head.invoice_date}`, `Due: ${head.due_date || ""}`],
-      lines: (lines || []).map(l => ({ name: nb.get(l.itemId) || l.description || l.itemId, qty: l.qty, unitPrice: l.unitPrice, amount: (Number(l.qty) || 0) * (Number(l.unitPrice) || 0) })),
+      lines: (lines || []).map(l => ({ name: nb.get(l.itemId)?.name || l.description || l.itemId, category: nb.get(l.itemId)?.category || "", qty: l.qty, unitPrice: l.unitPrice, amount: (Number(l.qty) || 0) * (Number(l.unitPrice) || 0) })),
       totals: [{ label: "TOTAL (ex VAT - see A4)", value: (lines || []).reduce((a, l) => a + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0), strong: true }],
       footer: "Create Brands Distribution",
     }, created_by: "auto" });
@@ -14388,13 +14388,14 @@ export async function autoPrintSoTicket(soId) {
     if (!so) return;
     const [{ data: cust }, { data: items }] = await Promise.all([
       so.customer_id ? supabase.from("dist_contacts").select("display_name, company").eq("id", so.customer_id).single() : Promise.resolve({ data: null }),
-      supabase.from("dist_items").select("id, name"),
+      supabase.from("dist_items").select("id, name, category"),
     ]);
-    const nameById = new Map((items || []).map(i => [i.id, i.name]));
+    const itemInfo = new Map((items || []).map(i => [i.id, i]));
     const lines = (so.dist_sales_order_lines || []).map(l => {
       const qty = Number(l.qty) || 0; const rate = Number(l.unit_price) || 0;
       const disc = Number(l.discount) || 0; const gross = qty * rate;
-      return { name: nameById.get(l.item_id) || l.item_id, qty, unitPrice: rate,
+      const info = itemInfo.get(l.item_id);
+      return { name: info?.name || l.item_id, category: info?.category || "", qty, unitPrice: rate,
         amount: l.discount_type === "percent" ? gross * (1 - disc / 100) : gross - disc };
     });
     const net = lines.reduce((a, l) => a + l.amount, 0);
