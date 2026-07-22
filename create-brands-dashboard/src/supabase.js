@@ -5388,13 +5388,42 @@ export async function listInvoices() {
 export async function getInvoiceWithLines(invoiceId) {
   const { data: inv, error: e1 } = await supabase.from("invoices").select("*").eq("id", invoiceId).single();
   if (e1) throw e1;
-  const { data: lines, error: e2 } = await supabase
-    .from("invoice_lines")
-    .select("*")
-    .eq("invoice_id", invoiceId)
-    .order("line_no", { ascending: true });
-  if (e2) throw e2;
-  return { invoice: inv, lines: lines || [] };
+  const fetchLines = async () => {
+    const { data, error } = await supabase.from("invoice_lines").select("*")
+      .eq("invoice_id", invoiceId).order("line_no", { ascending: true });
+    if (error) throw error;
+    return data || [];
+  };
+  let lines = await fetchLines();
+  // ── SELF-HEAL: the extractor predates order_qty and writes pack_qty_base as
+  //    the multi-pack TOTAL. On every open, backfill order_qty from the
+  //    extractor's own JSON and convert totals to per-pack, once per line. ──
+  try {
+    const raw = typeof inv.extracted_json === "string" ? JSON.parse(inv.extracted_json) : inv.extracted_json;
+    const jl = Array.isArray(raw?.lines) ? raw.lines : [];
+    if (jl.length) {
+      const base = Math.min(...lines.map(l => Number(l.line_no)));   // 0- or 1-based
+      let healed = false;
+      for (const l of lines) {
+        const j = jl[Number(l.line_no) - base];
+        if (!j) continue;
+        const upd = {};
+        if (l.order_qty == null && j.order_qty != null) upd.order_qty = Number(j.order_qty);
+        const n = Number(upd.order_qty ?? l.order_qty) || 0;
+        const total = l.pack_qty_base != null ? Number(l.pack_qty_base) : null;
+        const per = j.pack_size != null ? Number(j.pack_size) : null;
+        if (total != null && per != null && n > 1 && Math.abs(total - per * n) < 1e-6 && total !== per) {
+          upd.pack_qty_base = per;   // stored total → per-pack, per the JSON's own pack_size
+        }
+        if (Object.keys(upd).length) {
+          await supabase.from("invoice_lines").update(upd).eq("id", l.id);
+          healed = true;
+        }
+      }
+      if (healed) lines = await fetchLines();
+    }
+  } catch { /* healing is best-effort; never block the reviewer */ }
+  return { invoice: inv, lines };
 }
 
 export async function getInvoiceFileUrl(path) {
