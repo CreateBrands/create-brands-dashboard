@@ -22234,19 +22234,10 @@ function ItemRankTable({ title, subtitle, rows, fmtMoney, accent = "text-emerald
 // sends AGGREGATES ONLY to the Claude API. Owner/HQ only.
 // ===== INVOICES_VIEW_V1: upload → extract → side-by-side review → approve =====
 function InvoiceLineRow({ line, domain, onChanged }) {
-  const perPackBase = (() => {
-    // Extractor legacy: pack_qty_base held the TOTAL across packs (2 x 4-pack
-    // = 8). The field means base units of ONE pack — derive it when the total
-    // divides cleanly by the pack count.
-    const total = line.pack_qty_base != null ? Number(line.pack_qty_base) : null;
-    const n = Number(line.order_qty) || 0;
-    if (total == null) return "";
-    if (n > 1 && total >= n && Math.abs((total / n) - Math.round((total / n) * 1000) / 1000) < 1e-9) {
-      return Math.round((total / n) * 1000) / 1000;
-    }
-    return total;
-  })();
-  const [editQty, setEditQty] = useState(perPackBase);
+  // pack_qty_base is healed to per-pack at fetch (getInvoiceWithLines) using
+  // the extractor JSON's own pack_size — display it verbatim. (A client-side
+  // divide here double-divided healed values: 600g / 20 packs showed 30.)
+  const [editQty, setEditQty] = useState(line.pack_qty_base ?? "");
   const [editCount, setEditCount] = useState(line.order_qty != null ? String(line.order_qty) : String(normaliseReceiptUnits(line.raw_description, line.pack_qty_base != null ? Number(line.pack_qty_base) : 1)));
   const [editPrice, setEditPrice] = useState(line.pack_price_ex_vat ?? "");
   const [search, setSearch] = useState("");
