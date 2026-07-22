@@ -5425,6 +5425,12 @@ export async function fetchAliasFor(name, vendor) {
   const hit = data.find(r => (r.vendor || "") === v) || data.find(r => !r.vendor) || data[0];
   return hit?.store_item_id || null;
 }
+export async function fetchStoreItemName(id) {
+  if (id == null) return null;
+  const { data } = await supabase.from("cogs_store_items").select("name").eq("id", id).maybeSingle();
+  return data?.name || null;
+}
+
 export async function upsertItemAlias({ name, vendor, storeItemId, by }) {
   if (!name || !storeItemId) return;
   const { error } = await supabase.from("supplier_item_aliases").upsert({

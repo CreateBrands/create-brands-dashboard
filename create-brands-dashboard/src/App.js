@@ -183,7 +183,7 @@ import {
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
-  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
+  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
 } from "./supabase";
@@ -22234,7 +22234,19 @@ function ItemRankTable({ title, subtitle, rows, fmtMoney, accent = "text-emerald
 // sends AGGREGATES ONLY to the Claude API. Owner/HQ only.
 // ===== INVOICES_VIEW_V1: upload → extract → side-by-side review → approve =====
 function InvoiceLineRow({ line, domain, onChanged }) {
-  const [editQty, setEditQty] = useState(line.pack_qty_base ?? "");
+  const perPackBase = (() => {
+    // Extractor legacy: pack_qty_base held the TOTAL across packs (2 x 4-pack
+    // = 8). The field means base units of ONE pack — derive it when the total
+    // divides cleanly by the pack count.
+    const total = line.pack_qty_base != null ? Number(line.pack_qty_base) : null;
+    const n = Number(line.order_qty) || 0;
+    if (total == null) return "";
+    if (n > 1 && total >= n && Math.abs((total / n) - Math.round((total / n) * 1000) / 1000) < 1e-9) {
+      return Math.round((total / n) * 1000) / 1000;
+    }
+    return total;
+  })();
+  const [editQty, setEditQty] = useState(perPackBase);
   const [editCount, setEditCount] = useState(line.order_qty != null ? String(line.order_qty) : String(normaliseReceiptUnits(line.raw_description, line.pack_qty_base != null ? Number(line.pack_qty_base) : 1)));
   const [editPrice, setEditPrice] = useState(line.pack_price_ex_vat ?? "");
   const [search, setSearch] = useState("");
@@ -22274,7 +22286,10 @@ function InvoiceLineRow({ line, domain, onChanged }) {
       const found = [];
       try {
         const aliasId = await fetchAliasFor(line.raw_description, "");
-        if (aliasId) found.push({ id: aliasId, name: null, star: true });
+        if (aliasId) {
+          const nm = await fetchStoreItemName(aliasId).catch(() => null);
+          found.push({ id: aliasId, name: nm, star: true });
+        }
       } catch {}
       try {
         const stop = new Set(["pack", "packs", "loose", "finest", "twin", "ready", "strong", "each", "with", "style", "fresh", "large", "small"]);
@@ -22294,7 +22309,7 @@ function InvoiceLineRow({ line, domain, onChanged }) {
         const merged = [];
         for (const f of found) {
           const known = scored.find(sc => sc.id === f.id);
-          merged.push({ id: f.id, name: known ? known.name : "previous match", star: true });
+          merged.push({ id: f.id, name: f.name || (known ? known.name : "previous match"), star: true });
         }
         scored.forEach(sc => { if (!merged.some(m => m.id === sc.id)) merged.push(sc); });
         if (live) setSuggests(merged.slice(0, 3));
