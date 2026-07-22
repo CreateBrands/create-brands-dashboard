@@ -22381,10 +22381,10 @@ function InvoiceLineRow({ line, domain, onChanged }) {
         </div>
       )}
       <div className="flex flex-wrap items-center gap-2 text-xs">
-        <label className="text-slate-500 font-semibold">Qty (packs)</label>
+        <label className="text-slate-500 font-semibold">{/^(kg|g|l|ml)$/i.test(line.pack_unit_raw || "") ? `Qty (${line.pack_unit_raw})` : "Qty (packs)"}</label>
         <input value={editCount} onChange={(e) => setEditCount(e.target.value)}
           className="px-2 py-1 bg-slate-950 border border-indigo-700/50 rounded-lg text-xs text-white font-semibold w-16 focus:outline-none focus:border-indigo-500" />
-        <label className="text-slate-500">Pack qty (base units)</label>
+        <label className="text-slate-500">{/^(kg|g|l|ml)$/i.test(line.pack_unit_raw || "") ? "Unit size" : "Pack qty (base units)"}</label>
         <input value={editQty} onChange={(e) => setEditQty(e.target.value)}
           className="px-2 py-1 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 w-24 focus:outline-none focus:border-indigo-500" />
         <label className="text-slate-500">Pack £ ex-VAT</label>
