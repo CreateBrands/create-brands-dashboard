@@ -9335,7 +9335,7 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
                 lines: (so.lines || []).map(l => {
                   const it = itemById.get(l.itemId); const qty = Number(l.qty) || 0; const rate = Number(l.unitPrice) || 0;
                   const disc = Number(l.discount) || 0; const gross = qty * rate;
-                  return { name: cleanName(it?.name) || l.itemId, category: it?.category || "", qty, unitPrice: rate, amount: l.discountType === "percent" ? gross * (1 - disc / 100) : gross - disc };
+                  return { name: cleanName(it?.name) || l.itemId, category: it?.category || "", qty, unitPrice: rate, note: l.lineNote || "", amount: l.discountType === "percent" ? gross * (1 - disc / 100) : gross - disc };
                 }),
                 totals: [{ label: "Subtotal", value: totals.subTotal }, { label: "VAT", value: totals.taxTotal }, ...(Number(so.shippingCharge) ? [{ label: "Shipping", value: so.shippingCharge }] : []), { label: "TOTAL", value: grand, strong: true }],
                 note: so.note || "", footer: "Create Brands Distribution",
@@ -9629,6 +9629,7 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
                         <div>
                           <div className="text-white">{cleanName(it?.name) || l.itemId}</div>
                           {it && (it.packCount || it.packSize) && <div className="text-[10px] text-slate-500">{it.packCount && it.packCount !== 1 ? `${it.packCount}× ` : ""}{it.packSize || ""}{it.packUnit || ""}</div>}
+                          {l.lineNote && <div className="text-[11px] italic text-amber-400 mt-0.5">📝 {l.lineNote}</div>}
                         </div>
                       </div>
                     </td>
@@ -14368,6 +14369,8 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
       .sort((a, b) => (b.count - a.count) || (b.lastAt - a.lastAt))
       .map(x => x.item);
   }, [orderHistory, catalogue]);
+  const [lineNotes, setLineNotes] = useState({});   // itemId -> instruction for the warehouse
+  const setLineNote = (itemId, t) => setLineNotes(n => { const x = { ...n }; if (!t) delete x[itemId]; else x[itemId] = t; return x; });
   const setQty = (itemId, qty) => { const q = Math.max(0, Number(qty) || 0); setCart(c => { const n = { ...c }; if (q <= 0) delete n[itemId]; else n[itemId] = q; return n; }); };
   const bump = (itemId, d) => setQty(itemId, (cart[itemId] || 0) + d);
 
@@ -14486,14 +14489,14 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
 
       let id = null;
       if (distCartLines.length) {
-        const lines = distCartLines.map(l => ({ itemId: l.id, qty: l.qty, unitPrice: Number(l.price) || 0, taxRateId: l.taxRateId || null, discount: 0, discountType: "percent" }));
+        const lines = distCartLines.map(l => ({ itemId: l.id, qty: l.qty, unitPrice: Number(l.price) || 0, taxRateId: l.taxRateId || null, discount: 0, discountType: "percent", lineNote: lineNotes[l.id] || "" }));
         id = await createDistSalesOrder({ customerId, status: "confirmed", orderDate: new Date().toISOString().slice(0, 10), vatMode: "exclusive", createdBy: currentUser?.id, note: noteParts.join(" · ") }, lines);
       }
       const directPlaced = Object.keys(directGroups).length
         ? await createDirectOrders(activeStoreId, directGroups, currentUser) : [];
       // If this order came from a team round, close the round.
       if (roundLoaded && round) { try { await closeOrderRound(round.id, { status: "placed", soId: id }); } catch {} setRoundLoaded(false); reloadRound(activeStoreId); }
-      setPlaced({ id, count: cartCount, total: cartTotal, direct: directPlaced }); setCart({}); setConfirmOpen(false); setCartOpen(false); setDeliveryDate(""); setOrderNote("");
+      setPlaced({ id, count: cartCount, total: cartTotal, direct: directPlaced }); setCart({}); setLineNotes({}); setConfirmOpen(false); setCartOpen(false); setDeliveryDate(""); setOrderNote("");
     } catch (e) { setErr(e.message); }
     setPlacing(false);
   };
@@ -14955,6 +14958,13 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
                   <div className="min-w-0 flex-1">
                     <div className="text-sm font-semibold truncate" style={{ color: "#3A2E26" }}>{cleanName(l.name)}</div>
                     <div className="text-[11px]" style={{ color: "#9A8770" }}>{gbp(Number(l.price))} each{resolveSupplier(l) ? ` · ${vendorNameOf(resolveSupplier(l))}` : ""}</div>
+                    <input
+                      value={lineNotes[l.id] || ""}
+                      onChange={ev => setLineNote(l.id, ev.target.value)}
+                      placeholder="Instructions (optional) — e.g. ripe, sliced, pack separately"
+                      className="mt-1 w-full px-2 py-1 rounded-lg text-[11px]"
+                      style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}
+                    />
                   </div>
                   <div className="text-xs tabular-nums flex-shrink-0" style={{ color: "#6B5D4F" }}>× {l.qty}</div>
                   <div className="text-sm font-bold tabular-nums flex-shrink-0 w-16 text-right" style={{ color: "#3A2E26" }}>{gbp(l.qty*Number(l.price))}</div>

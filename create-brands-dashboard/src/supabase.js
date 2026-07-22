@@ -11886,7 +11886,7 @@ const mapDistSO = (o) => ({
   shippingCharge: Number(o.shipping_charge) || 0, note: o.note || "", terms: o.terms || "",
   createdBy: o.created_by || null, createdAt: o.created_at, lines: (o.dist_sales_order_lines || []).map(mapDistSOLine),
 });
-const mapDistSOLine = (l) => ({ id: l.id, soId: l.so_id, itemId: l.item_id, qty: Number(l.qty) || 0, fulfilChannel: l.fulfil_channel || null, unitPrice: Number(l.unit_price) || 0, discount: Number(l.discount) || 0, discountType: l.discount_type || "percent", taxRateId: l.tax_rate_id || null });
+const mapDistSOLine = (l) => ({ id: l.id, soId: l.so_id, itemId: l.item_id, qty: Number(l.qty) || 0, fulfilChannel: l.fulfil_channel || null, lineNote: l.line_note || "", unitPrice: Number(l.unit_price) || 0, discount: Number(l.discount) || 0, discountType: l.discount_type || "percent", taxRateId: l.tax_rate_id || null });
 
 export async function fetchDistSalesOrders({ customerId, status } = {}) {
   let q = supabase.from("dist_sales_orders").select("*, dist_sales_order_lines(*)").order("created_at", { ascending: false });
@@ -11911,6 +11911,7 @@ export async function createDistSalesOrder(so, lines = []) {
   const lr = lines.filter(l => l.itemId && Number(l.qty) > 0).map(l => ({
     id: distId("dsol"), so_id: id, item_id: l.itemId, qty: Number(l.qty) || 0, unit_price: Number(l.unitPrice) || 0,
     discount: Number(l.discount) || 0, discount_type: l.discountType || "percent", tax_rate_id: l.taxRateId || null,
+    line_note: (l.lineNote || "").trim() || null,
   }));
   if (lr.length) { const { error: e2 } = await supabase.from("dist_sales_order_lines").insert(lr); if (e2) throw e2; }
   if ((so.status || "draft") === "confirmed") autoPrintSoTicket(id); // born-confirmed orders print too
@@ -14431,6 +14432,7 @@ export async function autoPrintSoTicket(soId) {
       const disc = Number(l.discount) || 0; const gross = qty * rate;
       const info = itemInfo.get(l.item_id);
       return { name: info?.name || l.item_id, category: info?.category || "", qty, unitPrice: rate,
+        note: l.line_note || "",
         amount: l.discount_type === "percent" ? gross * (1 - disc / 100) : gross - disc };
     });
     const net = lines.reduce((a, l) => a + l.amount, 0);
