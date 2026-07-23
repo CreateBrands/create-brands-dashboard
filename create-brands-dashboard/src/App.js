@@ -14415,7 +14415,7 @@ function StockDetailModal({ storeId, storeName, item, usage, usageDays, cleanNam
   );
 }
 
-function DistOrderPortalView({ currentUser, onNavigate, storeIdHint }) {
+function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
   const [customers, setCustomers] = useState([]);
   const [customerId, setCustomerId] = useState("");
   const [catalogue, setCatalogue] = useState([]);
@@ -14448,7 +14448,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdHint }) {
   // profile) — without a store, supplier assignments and tags can't load and
   // every vendor catalogue looks empty. The shell passes the profile store as
   // a hint; the login's own stores win when present.
-  const storeIds = (currentUser?.storeIds?.length ? currentUser.storeIds : (storeIdHint ? [storeIdHint] : []));
+  const storeIds = (currentUser?.storeIds?.length ? currentUser.storeIds : (storeIdsHint || []));
   // The store whose sales history to use = the SELECTED customer's store (each
   // distribution customer is linked to one store). Falls back to the user's
   // first store. This is what item_day_aggregates.store_id matches.
@@ -22523,7 +22523,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
             <MyLoansView currentUser={currentUser} opsTeam={opsTeam}/>
           )}
           {activeView === "order-supplies" && (
-            <DistOrderPortalView currentUser={currentUser} storeIdHint={(myOpsMember?.storeIds && myOpsMember.storeIds[0]) || myOpsMember?.primaryStoreId || myOpsMember?.storeId || null} onNavigate={() => setActiveView("ops-tasks")} />
+            <DistOrderPortalView currentUser={currentUser} storeIdsHint={(myOpsMember?.storeIds && myOpsMember.storeIds.length ? myOpsMember.storeIds : [myOpsMember?.primaryStoreId || myOpsMember?.storeId].filter(Boolean))} onNavigate={() => setActiveView("ops-tasks")} />
           )}
           {activeView === "my-payslips" && (
             <div className="max-w-xl">
