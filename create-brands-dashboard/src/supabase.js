@@ -14460,6 +14460,20 @@ export async function enqueueDistDocPrint(payload, user) {
   return true;
 }
 
+// Per-store ordering preferences kept in app_settings as JSON blobs.
+export async function fetchStoreOrderPrefs(storeId) {
+  const all = await fetchAppSettings().catch(() => ({}));
+  const read = (k) => { try { return JSON.parse(all[k] || "null"); } catch { return null; } };
+  return {
+    approvers: read(`order_approvers:${storeId}`) || [],          // ops_team member ids who may approve staff orders
+    roundDefaults: read(`round_defaults:${storeId}`) || {},       // { basis: "category"|"location" }
+  };
+}
+export async function saveStoreOrderPrefs(storeId, prefs) {
+  if (prefs.approvers !== undefined) await upsertAppSetting(`order_approvers:${storeId}`, JSON.stringify(prefs.approvers || []));
+  if (prefs.roundDefaults !== undefined) await upsertAppSetting(`round_defaults:${storeId}`, JSON.stringify(prefs.roundDefaults || {}));
+}
+
 // Staff-submitted orders awaiting a manager's decision for one customer.
 export async function fetchPendingApprovalSos(customerId) {
   if (!customerId) return [];

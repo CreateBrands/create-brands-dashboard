@@ -183,7 +183,7 @@ import {
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
-  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
+  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, fetchStoreOrderPrefs, saveStoreOrderPrefs, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
 } from "./supabase";
@@ -13118,6 +13118,150 @@ function SalesCategoryMapView() {
   );
 }
 
+function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
+  const myStores = useMemo(() => (stores || []).filter(s => !s.archivedAt && (isHqOrAbove(currentUser?.role) || (currentUser?.storeIds || []).includes(s.id))), [stores, currentUser]);
+  const [storeId, setStoreId] = useState("");
+  const [tab, setTab] = useState("items");
+  const [items, setItems] = useState([]);
+  const [vendors, setVendors] = useState([]);
+  const [tags, setTags] = useState({});
+  const [prefs, setPrefs] = useState({ approvers: [], roundDefaults: {} });
+  const [round, setRound] = useState(null);
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => { if (!storeId && myStores.length) setStoreId(myStores[0].id); }, [myStores, storeId]);
+  useEffect(() => {
+    (async () => {
+      try {
+        const [its, vs] = await Promise.all([fetchDistItems(), fetchDistContacts({ kind: "vendor" })]);
+        setItems((its || []).filter(x => x.active !== false));
+        setVendors((vs || []).filter(v => v.active !== false));
+      } catch (e) { setErr(e.message); }
+    })();
+  }, []);
+  useEffect(() => {
+    if (!storeId) return;
+    (async () => {
+      try {
+        const [t, p, r] = await Promise.all([
+          fetchStoreItemTags(storeId),
+          fetchStoreOrderPrefs(storeId),
+          fetchOpenOrderRound(storeId).catch(() => null),
+        ]);
+        setTags(t || {}); setPrefs(p); setRound(r);
+      } catch (e) { setErr(e.message); }
+    })();
+  }, [storeId]);
+
+  const setTag = async (itemId, field, value) => {
+    setTags(t => ({ ...t, [itemId]: { ...(t[itemId] || {}), [field]: value } }));
+    try { await setStoreItemTag(storeId, itemId, field, value); } catch (e) { setErr(e.message); }
+  };
+  const locations = useMemo(() => Array.from(new Set(Object.values(tags).map(t => (t.location || "").trim()).filter(Boolean))).sort(), [tags]);
+  const vendorName = (id) => { const v = vendors.find(x => x.id === id); return v ? (v.displayName || v.companyName) : id; };
+  const storeMembers = useMemo(() => (opsTeam || []).filter(m => !m.archivedAt && ((m.storeIds || []).includes(storeId) || m.primaryStoreId === storeId || m.storeId === storeId)), [opsTeam, storeId]);
+  const shown = useMemo(() => {
+    const ql = q.trim().toLowerCase();
+    return items.filter(i => !ql || `${i.name} ${i.sku} ${i.category}`.toLowerCase().includes(ql)).slice(0, 200);
+  }, [items, q]);
+
+  const ec = "px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white";
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="text-lg font-bold text-white mr-2">Store Ordering</h2>
+        <select value={storeId} onChange={e => setStoreId(e.target.value)} className={ec}>
+          {myStores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+        {["items", "round", "approvals"].map(k => (
+          <button key={k} onClick={() => setTab(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${tab === k ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-300"}`}>
+            {k === "items" ? "Items · supplier / location / frequency" : k === "round" ? "Team order round" : "Order approvals"}
+          </button>
+        ))}
+      </div>
+      {err && <div className="text-xs text-rose-400">{err}</div>}
+
+      {tab === "items" && (
+        <div className="space-y-2">
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search items…" className={`${ec} w-72`} />
+          <div className="border border-slate-800 rounded-xl overflow-hidden">
+            <div className="grid grid-cols-12 gap-1 px-3 py-2 bg-slate-900/80 text-[10px] uppercase tracking-wide text-slate-500">
+              <div className="col-span-5">Item</div><div className="col-span-3">Supplier</div><div className="col-span-2">Location</div><div className="col-span-2">Frequency</div>
+            </div>
+            {shown.map(i => {
+              const t = tags[i.id] || {};
+              return (
+                <div key={i.id} className="grid grid-cols-12 gap-1 px-3 py-1.5 border-t border-slate-800/60 items-center">
+                  <div className="col-span-5 text-xs text-white truncate">{i.name}<span className="text-slate-600"> · {i.category}</span></div>
+                  <div className="col-span-3">
+                    <select value={t.supplier || i.fulfilledBy || ""} onChange={e => setTag(i.id, "supplier", e.target.value)} className={`${ec} w-full`}>
+                      <option value="">Default — Distribution</option>
+                      {vendors.map(v => <option key={v.id} value={v.id}>{vendorName(v.id)}</option>)}
+                    </select>
+                  </div>
+                  <div className="col-span-2">
+                    <input list="so-locations" value={t.location || ""} onChange={e => setTag(i.id, "location", e.target.value)} placeholder="—" className={`${ec} w-full`} />
+                  </div>
+                  <div className="col-span-2">
+                    <select value={t.tagFrequency || ""} onChange={e => setTag(i.id, "tagFrequency", e.target.value)} className={`${ec} w-full`}>
+                      <option value="">—</option><option value="daily">Daily</option><option value="weekly">Weekly</option>
+                    </select>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <datalist id="so-locations">{locations.map(l => <option key={l} value={l} />)}</datalist>
+          <div className="text-[11px] text-slate-500">Type a new location to add it — it joins the suggestions once used. Changes save instantly, per store. Showing {shown.length} of {items.length}.</div>
+        </div>
+      )}
+
+      {tab === "round" && (
+        <div className="space-y-3 max-w-lg">
+          <div>
+            <label className="text-[11px] text-slate-500 uppercase font-semibold">Group staff sections by</label>
+            <select value={prefs.roundDefaults?.basis || "category"} onChange={async e => { const p = { ...prefs, roundDefaults: { ...prefs.roundDefaults, basis: e.target.value } }; setPrefs(p); await saveStoreOrderPrefs(storeId, { roundDefaults: p.roundDefaults }).catch(ev => setErr(ev.message)); }} className={`${ec} w-full`}>
+              <option value="category">Category</option><option value="location">Location</option>
+            </select>
+            <div className="text-[11px] text-slate-600 mt-1">Sections staff get assigned when a round starts.</div>
+          </div>
+          {round ? (
+            <div className="rounded-xl border border-amber-700/40 bg-amber-900/20 p-3">
+              <div className="text-sm text-amber-300 font-semibold">A team round is open</div>
+              <div className="text-[11px] text-slate-400 mt-0.5">Assign sections, monitor and compile it from the Order page.</div>
+            </div>
+          ) : (
+            <button disabled={busy} onClick={async () => { setBusy(true); try { await createOrderRound(storeId, { id: currentUser?.id, name: currentUser?.name }); setRound(await fetchOpenOrderRound(storeId)); } catch (e) { setErr(e.message); } setBusy(false); }}
+              className="px-4 py-2 rounded-xl text-sm font-bold bg-indigo-600 text-white">Start team order round</button>
+          )}
+        </div>
+      )}
+
+      {tab === "approvals" && (
+        <div className="space-y-2 max-w-lg">
+          <div className="text-xs text-slate-400">Staff orders wait for approval. Managers always can approve — tick anyone else who should too.</div>
+          {storeMembers.map(m => {
+            const on = (prefs.approvers || []).includes(m.id);
+            return (
+              <label key={m.id} className="flex items-center gap-2 text-sm text-white">
+                <input type="checkbox" checked={on} onChange={async e => {
+                  const next = e.target.checked ? [...(prefs.approvers || []), m.id] : (prefs.approvers || []).filter(x => x !== m.id);
+                  setPrefs(p => ({ ...p, approvers: next }));
+                  await saveStoreOrderPrefs(storeId, { approvers: next }).catch(ev => setErr(ev.message));
+                }} />
+                {m.firstName} {m.lastName} <span className="text-slate-500 text-xs">· {m.role || ""}</span>
+              </label>
+            );
+          })}
+          {!storeMembers.length && <div className="text-xs text-slate-500">No team members found for this store.</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DistOrderSetupView() {
   const [cfg, setCfg] = useState({ defaultBrowse: "category", defaultView: "card", categoryOrder: [], collectionOrder: [] });
   const [collections, setCollections] = useState([]);
@@ -14135,7 +14279,9 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   const [splitVendors, setSplitVendors] = useState([]);
   const [supplier, setSupplier] = useState(null);   // { id: 'dist'|vendorId, name } — chosen on entry
   const needsApproval = (currentUser?.role || "") === "staff";   // staff orders await a manager
-  const [pendingApprovals, setPendingApprovals] = useState([]);             // vendorIds opted in for this checkout
+  const [pendingApprovals, setPendingApprovals] = useState([]);
+  const [approverIds, setApproverIds] = useState([]);
+  const canApprove = !needsApproval || approverIds.includes(currentUser?.opsTeamMemberId) || approverIds.includes(currentUser?.id);             // vendorIds opted in for this checkout
   const isManager = ["owner", "hq_staff", "manager"].includes(currentUser?.role);
   const reloadRound = async (sid) => {
     try { setRound(sid ? await fetchOpenOrderRound(sid) : null); } catch { setRound(null); }
@@ -14193,8 +14339,9 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
         const cs = await fetchDistCustomersForStores(storeIds);
         setCustomers(cs);
         if (cs.length) setCustomerId(cs[0].id);
-        if (cs.length && (currentUser?.role || "") !== "staff") {
+        if (cs.length) {
           fetchPendingApprovalSos(cs[0].id).then(setPendingApprovals).catch(() => {});
+          const st = cs[0].storeId; if (st) fetchStoreOrderPrefs(st).then(p => setApproverIds(p.approvers || [])).catch(() => {});
         }
         else setErr("no-link");
       } catch (e) { setErr(e.message); }
@@ -14714,7 +14861,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
                 <div className="text-[11px]" style={{ color: "#9A8770" }}>Direct supplier</div>
               </button>
             ))}
-            {pendingApprovals.length > 0 && !needsApproval && (
+            {pendingApprovals.length > 0 && canApprove && (
               <div className="rounded-2xl p-4 space-y-3" style={{ backgroundColor: "#FFF6E8", border: "1.5px solid #E0A664" }}>
                 <div className="text-sm font-bold" style={{ color: "#3A2E26" }}>Awaiting your approval</div>
                 {pendingApprovals.map(p => (
@@ -61062,6 +61209,7 @@ export default function App() {
                   key: "distribution-setup", label: "Distribution", icon: ShoppingCart, accent: "indigo",
                   desc: "Order page layout and collections.",
                   items: [
+                    { key: "store-ordering", label: "Store Ordering", desc: "Per-store suppliers, locations, frequency, team rounds and approvers.", gate: () => true },
                     { key: "dist-order-setup", label: "Order Page", desc: "Layout, collections, and how items are shown.", gate: gOwner },
                     { key: "dist-order-builder", label: "Order Page Builder", desc: "Drag to arrange departments, collections, and items.", gate: gOwner },
                   ].filter(i => i.gate()),
@@ -61120,6 +61268,7 @@ export default function App() {
               customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} onAssignMemberRole={handleAssignMemberRole}
             />}
             {effectiveActiveView === "setup" && setupPanel === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
+            {effectiveActiveView === "setup" && setupPanel === "store-ordering" && currentUser.role !== "staff" && <StoreOrderingSetupView currentUser={currentUser} stores={stores} opsTeam={opsTeam}/>}
             {effectiveActiveView === "setup" && setupPanel === "dist-order-setup" && currentUser.role === "owner" && <DistOrderSetupView/>}
             {effectiveActiveView === "setup" && setupPanel === "salescats" && <SalesCategoryMapView/>}
             {effectiveActiveView === "setup" && setupPanel === "dist-order-builder" && currentUser.role === "owner" && <DistOrderBuilderView stores={stores}/>}
