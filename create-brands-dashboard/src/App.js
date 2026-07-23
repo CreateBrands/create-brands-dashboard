@@ -14331,7 +14331,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
       if (ia === -1) return 1; if (ib === -1) return -1; return ia - ib;
     });
     return ["All", ...ranked];
-  }, [catalogue, displayCfg, activeDept]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [catalogue, displayCfg, activeDept, supplier]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Active (visible) collections, ordered by config, constrained to department.
   const activeCollections = useMemo(() => {
@@ -14364,7 +14364,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
       if (!matchesTags(i)) return false;
       return inFilter && (!q || `${i.name} ${i.sku} ${i.category}`.toLowerCase().includes(q));
     });
-  }, [catalogue, cat, search, activeDept, tagFilters]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [catalogue, cat, search, activeDept, tagFilters, supplier]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Distinct values available for each tag (from the catalogue) — powers the
   // filter panel's checkboxes.
@@ -14415,7 +14415,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
       location:  countFor("location",  x => x.location),
       category:  countFor("category",  x => x.tagCategory),
     };
-  }, [catalogue, tagFilters, activeDept]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [catalogue, tagFilters, activeDept, supplier]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
   // When browsing a whole department ("All" collections), group the visible
@@ -14647,7 +14647,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   if (!loading && staffRoundMode) {
     const basis = myRoundAsg[0]?.groupBy || "category";
     const mySections = new Set(myRoundAsg.map(x => x.section));
-    const myItems = catalogue.filter(i => mySections.has(roundSectionOf(i, basis)));
+    const myItems = catalogue.filter(i => supplierMatch(i) && mySections.has(roundSectionOf(i, basis)));
     const byCat = {};
     myItems.forEach(i => { const c = roundSectionOf(i, basis); (byCat[c] = byCat[c] || []).push(i); });
     const filledN = myItems.filter(i => Number(roundQty[i.id]) > 0).length;
