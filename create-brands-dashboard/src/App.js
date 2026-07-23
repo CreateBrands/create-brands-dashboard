@@ -15071,6 +15071,9 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdHint }) {
                 </button>
               );
             })}
+            <div className="text-[10px] text-center" style={{ color: "#C9B99F" }}>
+              b23c · store {activeStoreId ? String(activeStoreId).slice(-14) : "NONE"} · {Object.keys(supplierOverrides || {}).length} supplier assignments loaded
+            </div>
             <button disabled={!pickSel.length} onClick={() => setSupplier(pickSel)}
               className="w-full py-3 rounded-2xl text-sm font-bold"
               style={{ backgroundColor: pickSel.length ? "#844429" : "#E8DCC6", color: pickSel.length ? "#FDF2E0" : "#B0A18C" }}>
@@ -59519,7 +59522,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: VIEWHASH+SWFIX 2026-07-20"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: STAFFSTORE+DBG 2026-07-23c"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
