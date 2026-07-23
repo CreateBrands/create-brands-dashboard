@@ -183,7 +183,7 @@ import {
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
-  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
+  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
 } from "./supabase";
@@ -14132,7 +14132,10 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   // Checkout split is OPT-IN per order: by default the WHOLE cart goes through
   // Distribution; the confirm dialog lets you tick which suppliers to split
   // out this time. Reset every time the confirm dialog opens.
-  const [splitVendors, setSplitVendors] = useState([]);             // vendorIds opted in for this checkout
+  const [splitVendors, setSplitVendors] = useState([]);
+  const [supplier, setSupplier] = useState(null);   // { id: 'dist'|vendorId, name } — chosen on entry
+  const needsApproval = (currentUser?.role || "") === "staff";   // staff orders await a manager
+  const [pendingApprovals, setPendingApprovals] = useState([]);             // vendorIds opted in for this checkout
   const isManager = ["owner", "hq_staff", "manager"].includes(currentUser?.role);
   const reloadRound = async (sid) => {
     try { setRound(sid ? await fetchOpenOrderRound(sid) : null); } catch { setRound(null); }
@@ -14190,6 +14193,9 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
         const cs = await fetchDistCustomersForStores(storeIds);
         setCustomers(cs);
         if (cs.length) setCustomerId(cs[0].id);
+        if (cs.length && (currentUser?.role || "") !== "staff") {
+          fetchPendingApprovalSos(cs[0].id).then(setPendingApprovals).catch(() => {});
+        }
         else setErr("no-link");
       } catch (e) { setErr(e.message); }
       setLoading(false);
@@ -14287,7 +14293,9 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   const deptCatSet = useMemo(() => activeDept ? new Set((activeDept.categories || []).map(c => c.toLowerCase())) : null, [activeDept]);
   const deptCollSet = useMemo(() => activeDept ? new Set(activeDept.collectionIds || []) : null, [activeDept]);
   // Does an item belong to the active department (via category OR collection)?
+  const supplierMatch = (i) => !supplier || (supplier.id === "dist" ? !resolveSupplier(i) : resolveSupplier(i) === supplier.id);
   const itemInDept = (i) => {
+    if (!supplierMatch(i)) return false;   // supplier-first: only their items show
     if (!activeDept) return true;
     if (deptCatSet.size && i.category && deptCatSet.has(i.category.toLowerCase())) return true;
     if (deptCollSet.size && (i.collectionIds || []).some(id => deptCollSet.has(id))) return true;
@@ -14565,7 +14573,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
       //    supplier gets its own order + incoming delivery. One cart, many rails.
       // Split is opt-in: an item leaves the Dist order only if its supplier
       // was ticked at confirm. Default (nothing ticked) = one Dist order.
-      const goesDirect = (l) => { const vid = resolveSupplier(l); return vid && splitVendors.includes(vid) ? vid : null; };
+      const goesDirect = (l) => { if (needsApproval) return null; const vid = resolveSupplier(l); return vid && splitVendors.includes(vid) ? vid : null; };
       // Lines are written to the SO in category order, so every downstream
       // document (pick sheet, dispatch, invoice) inherits tidy grouping even
       // where it renders flat (print/PDF).
@@ -14586,7 +14594,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
       let id = null;
       if (distCartLines.length) {
         const lines = distCartLines.map(l => ({ itemId: l.id, qty: l.qty, unitPrice: Number(l.price) || 0, taxRateId: l.taxRateId || null, discount: 0, discountType: "percent", lineNote: lineNotes[l.id] || "", uom: l.itemType === "fresh" ? (lineUoms[l.id] || defaultUomFor(l)) : null }));
-        id = await createDistSalesOrder({ customerId, status: "confirmed", orderDate: new Date().toISOString().slice(0, 10), vatMode: "exclusive", createdBy: currentUser?.id, note: noteParts.join(" · ") }, lines);
+        id = await createDistSalesOrder({ customerId, status: needsApproval ? "pending_approval" : "confirmed", orderDate: new Date().toISOString().slice(0, 10), vatMode: "exclusive", createdBy: currentUser?.id, note: [supplier && supplier.id !== "dist" ? `Supplier: ${supplier.name}` : "", ...noteParts].filter(Boolean).join(" · ") }, lines);
       }
       const directPlaced = Object.keys(directGroups).length
         ? await createDirectOrders(activeStoreId, directGroups, currentUser) : [];
@@ -14687,6 +14695,52 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
 
   return (
     <div className="fixed inset-0 z-40 flex flex-col" style={{ backgroundColor: "#F4E9DD" }}>
+      {supplier === null && (
+        <div className="absolute inset-0 z-30 overflow-y-auto" style={{ backgroundColor: "#F4E9DD" }}>
+          <div className="max-w-lg mx-auto p-5 pt-10 space-y-4">
+            <div>
+              <div className="text-lg font-bold" style={{ color: "#3A2E26" }}>Who are you ordering from?</div>
+              <div className="text-xs mt-0.5" style={{ color: "#9A8770" }}>Pick a supplier — you'll only see their items.{needsApproval ? " Your order will go to a manager for approval." : ""}</div>
+            </div>
+            <button onClick={() => setSupplier({ id: "dist", name: "Distribution (Create Brands)" })}
+              className="w-full text-left rounded-2xl p-4" style={{ backgroundColor: "#FDF8EF", border: "1.5px solid #844429" }}>
+              <div className="text-sm font-bold" style={{ color: "#3A2E26" }}>Distribution — Create Brands</div>
+              <div className="text-[11px]" style={{ color: "#9A8770" }}>Warehouse, Central Kitchen and fresh produce</div>
+            </button>
+            {portalVendors.map(v => (
+              <button key={v.id} onClick={() => setSupplier({ id: v.id, name: v.displayName || v.companyName || "Supplier" })}
+                className="w-full text-left rounded-2xl p-4" style={{ backgroundColor: "#FDF8EF", border: "1px solid #E8DCC6" }}>
+                <div className="text-sm font-bold" style={{ color: "#3A2E26" }}>{v.displayName || v.companyName}</div>
+                <div className="text-[11px]" style={{ color: "#9A8770" }}>Direct supplier</div>
+              </button>
+            ))}
+            {pendingApprovals.length > 0 && !needsApproval && (
+              <div className="rounded-2xl p-4 space-y-3" style={{ backgroundColor: "#FFF6E8", border: "1.5px solid #E0A664" }}>
+                <div className="text-sm font-bold" style={{ color: "#3A2E26" }}>Awaiting your approval</div>
+                {pendingApprovals.map(p => (
+                  <div key={p.id} className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-xs font-semibold truncate" style={{ color: "#3A2E26" }}>{p.soNumber} · {p.lineCount} item{p.lineCount !== 1 ? "s" : ""}</div>
+                      <div className="text-[10px] truncate" style={{ color: "#9A8770" }}>{p.orderDate}{p.note ? ` · ${p.note}` : ""}</div>
+                    </div>
+                    <div className="flex gap-1.5 flex-shrink-0">
+                      <button onClick={async () => { try { await setDistSalesOrderStatus(p.id, "cancelled"); setPendingApprovals(x => x.filter(y => y.id !== p.id)); } catch (ev) { alert(ev.message); } }}
+                        className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold" style={{ backgroundColor: "#F3EDE2", color: "#9A8770" }}>Reject</button>
+                      <button onClick={async () => { try { await setDistSalesOrderStatus(p.id, "confirmed"); setPendingApprovals(x => x.filter(y => y.id !== p.id)); } catch (ev) { alert(ev.message); } }}
+                        className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold" style={{ backgroundColor: "#5C9442", color: "#fff" }}>Approve</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      {supplier !== null && (
+        <button onClick={() => setSupplier(null)} className="absolute top-14 right-3 z-30 px-2.5 py-1.5 rounded-full text-[11px] font-semibold shadow" style={{ backgroundColor: "#FDF8EF", border: "1px solid #E8DCC6", color: "#844429" }}>
+          {supplier.name} · change
+        </button>
+      )}
       {/* Header */}
       <div className="flex-shrink-0 px-4 sm:px-6 py-3 flex items-center justify-between gap-3 flex-wrap" style={{ backgroundColor: "#FBF6EC", borderBottom: "1px solid #E8DCC6" }}>
         <div className="flex items-center gap-3">

@@ -14460,6 +14460,16 @@ export async function enqueueDistDocPrint(payload, user) {
   return true;
 }
 
+// Staff-submitted orders awaiting a manager's decision for one customer.
+export async function fetchPendingApprovalSos(customerId) {
+  if (!customerId) return [];
+  const { data } = await supabase.from("dist_sales_orders")
+    .select("id, so_number, order_date, created_by, note, dist_sales_order_lines(id)")
+    .eq("customer_id", customerId).eq("status", "pending_approval")
+    .order("created_at", { ascending: true });
+  return (data || []).map(r => ({ id: r.id, soNumber: r.so_number, orderDate: r.order_date, createdBy: r.created_by, note: r.note || "", lineCount: (r.dist_sales_order_lines || []).length }));
+}
+
 // Latest fresh-purchase delivery per store (last few days) — lets the fresh
 // board show whether a bought order's receipts became a delivery and whether
 // the store has received it.
