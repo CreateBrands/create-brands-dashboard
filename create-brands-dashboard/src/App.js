@@ -13206,7 +13206,7 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
                       const label = sel.length === 0 ? "Default — Distribution" : sel.length === 1 ? vendorName(sel[0]) : `${sel.length} suppliers`;
                       return (
                         <>
-                          <button onClick={() => setSupOpen(supOpen === i.id ? null : i.id)} className={`${ec} w-full text-left truncate`}>{label} \u25be</button>
+                          <button onClick={() => setSupOpen(supOpen === i.id ? null : i.id)} className={`${ec} w-full text-left truncate`}>{label} ▾</button>
                           {supOpen === i.id && (
                             <div className="absolute z-20 mt-1 w-64 max-h-64 overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 p-2 space-y-1 shadow-xl">
                               {vendors.map(v => {
