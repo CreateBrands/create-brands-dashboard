@@ -14491,6 +14491,14 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdHint }) {
   };
   useEffect(() => { setRoundLoaded(false); reloadRound(activeStoreId); /* eslint-disable-next-line */ }, [activeStoreId]);
   useEffect(() => {
+    if (!customerId) return;
+    fetchPendingApprovalSos(customerId).then(setPendingApprovals).catch(() => {});
+  }, [customerId]);
+  useEffect(() => {
+    if (!activeStoreId) return;
+    fetchStoreOrderPrefs(activeStoreId).then(p => setApproverIds(p.approvers || [])).catch(() => {});
+  }, [activeStoreId]);
+  useEffect(() => {
     if (!activeStoreId) return;
     fetchStoreSupplierOverrides(activeStoreId).then(setSupplierOverrides).catch(() => setSupplierOverrides({}));
     // PRIVACY: stores only ever see vendors explicitly flagged visible — the
@@ -14543,10 +14551,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdHint }) {
         const cs = await fetchDistCustomersForStores(storeIds);
         setCustomers(cs);
         if (cs.length) setCustomerId(cs[0].id);
-        if (cs.length) {
-          fetchPendingApprovalSos(cs[0].id).then(setPendingApprovals).catch(() => {});
-          const st = cs[0].storeId; if (st) fetchStoreOrderPrefs(st).then(p => setApproverIds(p.approvers || [])).catch(() => {});
-        }
+
         else setErr("no-link");
       } catch (e) { setErr(e.message); }
       setLoading(false);
@@ -15051,6 +15056,16 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdHint }) {
       {supplier === null && (
         <div className="absolute inset-0 z-30 overflow-y-auto" style={{ backgroundColor: "#F4E9DD" }}>
           <div className="max-w-lg mx-auto p-5 pt-10 space-y-4">
+            {customers.length > 1 && (
+              <div>
+                <div className="text-[10px] uppercase tracking-wide font-semibold mb-1" style={{ color: "#9A8770" }}>Ordering for</div>
+                <select value={customerId} onChange={ev => { setCustomerId(ev.target.value); setCart({}); setPickSel([]); }}
+                  className="w-full px-3 py-2.5 rounded-xl text-sm font-semibold"
+                  style={{ backgroundColor: "#FDF8EF", border: "1.5px solid #E8DCC6", color: "#3A2E26" }}>
+                  {customers.map(c => <option key={c.id} value={c.id}>{c.displayName || c.companyName || c.name || c.id}</option>)}
+                </select>
+              </div>
+            )}
             <div>
               <div className="text-lg font-bold" style={{ color: "#3A2E26" }}>Who are you ordering from?</div>
               <div className="text-xs mt-0.5" style={{ color: "#9A8770" }}>Pick a supplier — you'll only see their items.{needsApproval ? " Your order will go to a manager for approval." : ""}</div>
@@ -15115,7 +15130,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdHint }) {
           </div>
           {customers.length > 1 ? (
             <select value={customerId} onChange={e => { setCustomerId(e.target.value); setCart({}); }} className="px-2.5 py-1.5 rounded-lg text-xs" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}>
-              {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {customers.map(c => <option key={c.id} value={c.id}>{c.displayName || c.companyName || c.name || c.id}</option>)}
             </select>
           ) : customers.length === 1 ? <div className="text-sm self-center" style={{ color: "#9A8770" }}>{customers[0].name}</div> : null}
         </div>
