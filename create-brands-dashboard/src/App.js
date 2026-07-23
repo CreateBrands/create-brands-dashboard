@@ -4927,8 +4927,12 @@ function DistTypedItemsView({ itemType, currentUser }) {
     const size = Number(l?.packSize) || 0;
     const unit = l?.packUnit || "";
     if (!size || !unit || unit === "ea" || unit === "each" || unit === "unit") {
-      const per = Number(l?.packCount) || 0;
-      return per > 1 ? `${q} × ${per}pk (${q * per} ea)` : `${q} ea`;
+      // Case-packed counted items define the case EITHER as packCount or as
+      // packSize with an each-unit ("1 case = 5 units"). Honour both — the SO
+      // qty is CASES, and the shopper needs the unit total.
+      const per = (Number(l?.packCount) > 1 && Number(l?.packCount))
+               || (Number(l?.packSize) > 1 && Number(l?.packSize)) || 0;
+      return per > 1 ? `${q} case${q === 1 ? "" : "s"} (${q * per} ea)` : `${q} ea`;
     }
     const total = q * size;
     const pretty = (unit === "g" && total >= 1000) ? `${(total / 1000).toFixed(total % 1000 ? 1 : 0)}kg`
