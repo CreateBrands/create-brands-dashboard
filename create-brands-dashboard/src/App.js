@@ -14277,7 +14277,9 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   // Distribution; the confirm dialog lets you tick which suppliers to split
   // out this time. Reset every time the confirm dialog opens.
   const [splitVendors, setSplitVendors] = useState([]);
-  const [supplier, setSupplier] = useState(null);   // { id: 'dist'|vendorId, name } — chosen on entry
+  const [supplier, setSupplier] = useState(null);   // null | [{ id:'dist'|vendorId, name }, …] — one or more, chosen on entry
+  const [pickSel, setPickSel] = useState([]);       // picker draft selection
+  const togglePick = (opt) => setPickSel(sel => sel.some(x => x.id === opt.id) ? sel.filter(x => x.id !== opt.id) : [...sel, opt]);
   const needsApproval = (currentUser?.role || "") === "staff";   // staff orders await a manager
   const [pendingApprovals, setPendingApprovals] = useState([]);
   const [approverIds, setApproverIds] = useState([]);
@@ -14440,7 +14442,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   const deptCatSet = useMemo(() => activeDept ? new Set((activeDept.categories || []).map(c => c.toLowerCase())) : null, [activeDept]);
   const deptCollSet = useMemo(() => activeDept ? new Set(activeDept.collectionIds || []) : null, [activeDept]);
   // Does an item belong to the active department (via category OR collection)?
-  const supplierMatch = (i) => !supplier || (supplier.id === "dist" ? !resolveSupplier(i) : resolveSupplier(i) === supplier.id);
+  const supplierMatch = (i) => !supplier || supplier.some(sp => sp.id === "dist" ? !resolveSupplier(i) : resolveSupplier(i) === sp.id);
   const itemInDept = (i) => {
     if (!supplierMatch(i)) return false;   // supplier-first: only their items show
     if (!activeDept) return true;
@@ -14741,7 +14743,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
       let id = null;
       if (distCartLines.length) {
         const lines = distCartLines.map(l => ({ itemId: l.id, qty: l.qty, unitPrice: Number(l.price) || 0, taxRateId: l.taxRateId || null, discount: 0, discountType: "percent", lineNote: lineNotes[l.id] || "", uom: l.itemType === "fresh" ? (lineUoms[l.id] || defaultUomFor(l)) : null }));
-        id = await createDistSalesOrder({ customerId, status: needsApproval ? "pending_approval" : "confirmed", orderDate: new Date().toISOString().slice(0, 10), vatMode: "exclusive", createdBy: currentUser?.id, note: [supplier && supplier.id !== "dist" ? `Supplier: ${supplier.name}` : "", ...noteParts].filter(Boolean).join(" · ") }, lines);
+        id = await createDistSalesOrder({ customerId, status: needsApproval ? "pending_approval" : "confirmed", orderDate: new Date().toISOString().slice(0, 10), vatMode: "exclusive", createdBy: currentUser?.id, note: [(supplier || []).filter(sp => sp.id !== "dist").length ? `Suppliers: ${(supplier || []).filter(sp => sp.id !== "dist").map(sp => sp.name).join(", ")}` : "", ...noteParts].filter(Boolean).join(" · ") }, lines);
       }
       const directPlaced = Object.keys(directGroups).length
         ? await createDirectOrders(activeStoreId, directGroups, currentUser) : [];
@@ -14849,18 +14851,27 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
               <div className="text-lg font-bold" style={{ color: "#3A2E26" }}>Who are you ordering from?</div>
               <div className="text-xs mt-0.5" style={{ color: "#9A8770" }}>Pick a supplier — you'll only see their items.{needsApproval ? " Your order will go to a manager for approval." : ""}</div>
             </div>
-            <button onClick={() => setSupplier({ id: "dist", name: "Distribution (Create Brands)" })}
-              className="w-full text-left rounded-2xl p-4" style={{ backgroundColor: "#FDF8EF", border: "1.5px solid #844429" }}>
-              <div className="text-sm font-bold" style={{ color: "#3A2E26" }}>Distribution — Create Brands</div>
-              <div className="text-[11px]" style={{ color: "#9A8770" }}>Warehouse, Central Kitchen and fresh produce</div>
+            {[{ id: "dist", name: "Distribution (Create Brands)", desc: "Warehouse, Central Kitchen and fresh produce" },
+              ...portalVendors.map(v => ({ id: v.id, name: v.displayName || v.companyName || "Supplier", desc: "Direct supplier" }))].map(opt => {
+              const on = pickSel.some(x => x.id === opt.id);
+              return (
+                <button key={opt.id} onClick={() => togglePick(opt)}
+                  className="w-full text-left rounded-2xl p-4 flex items-center gap-3"
+                  style={{ backgroundColor: on ? "#EAF3E7" : "#FDF8EF", border: on ? "1.5px solid #5C9442" : "1px solid #E8DCC6" }}>
+                  <div className="w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0 text-white text-xs font-bold"
+                    style={{ backgroundColor: on ? "#5C9442" : "#E8DCC6" }}>{on ? "\u2713" : ""}</div>
+                  <div>
+                    <div className="text-sm font-bold" style={{ color: "#3A2E26" }}>{opt.name}</div>
+                    <div className="text-[11px]" style={{ color: "#9A8770" }}>{opt.desc}</div>
+                  </div>
+                </button>
+              );
+            })}
+            <button disabled={!pickSel.length} onClick={() => setSupplier(pickSel)}
+              className="w-full py-3 rounded-2xl text-sm font-bold"
+              style={{ backgroundColor: pickSel.length ? "#844429" : "#E8DCC6", color: pickSel.length ? "#FDF2E0" : "#B0A18C" }}>
+              {pickSel.length ? `Start ordering \u00b7 ${pickSel.length} supplier${pickSel.length > 1 ? "s" : ""}` : "Select at least one supplier"}
             </button>
-            {portalVendors.map(v => (
-              <button key={v.id} onClick={() => setSupplier({ id: v.id, name: v.displayName || v.companyName || "Supplier" })}
-                className="w-full text-left rounded-2xl p-4" style={{ backgroundColor: "#FDF8EF", border: "1px solid #E8DCC6" }}>
-                <div className="text-sm font-bold" style={{ color: "#3A2E26" }}>{v.displayName || v.companyName}</div>
-                <div className="text-[11px]" style={{ color: "#9A8770" }}>Direct supplier</div>
-              </button>
-            ))}
             {pendingApprovals.length > 0 && canApprove && (
               <div className="rounded-2xl p-4 space-y-3" style={{ backgroundColor: "#FFF6E8", border: "1.5px solid #E0A664" }}>
                 <div className="text-sm font-bold" style={{ color: "#3A2E26" }}>Awaiting your approval</div>
@@ -14884,8 +14895,8 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
         </div>
       )}
       {supplier !== null && (
-        <button onClick={() => setSupplier(null)} className="absolute top-14 right-3 z-30 px-2.5 py-1.5 rounded-full text-[11px] font-semibold shadow" style={{ backgroundColor: "#FDF8EF", border: "1px solid #E8DCC6", color: "#844429" }}>
-          {supplier.name} · change
+        <button onClick={() => { setPickSel(supplier); setSupplier(null); }} className="absolute top-14 right-3 z-30 px-2.5 py-1.5 rounded-full text-[11px] font-semibold shadow" style={{ backgroundColor: "#FDF8EF", border: "1px solid #E8DCC6", color: "#844429" }}>
+          {supplier.length === 1 ? supplier[0].name : `${supplier.length} suppliers`} · change
         </button>
       )}
       {/* Header */}
