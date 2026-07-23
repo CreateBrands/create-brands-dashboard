@@ -11937,6 +11937,7 @@ export async function updateDistSalesOrder(so, lines = []) {
   const lr = lines.filter(l => l.itemId && Number(l.qty) > 0).map(l => ({
     id: distId("dsol"), so_id: so.id, item_id: l.itemId, qty: Number(l.qty) || 0, unit_price: Number(l.unitPrice) || 0,
     discount: Number(l.discount) || 0, discount_type: l.discountType || "percent", tax_rate_id: l.taxRateId || null,
+    line_note: (l.lineNote || "").trim() || null,
   }));
   if (lr.length) { const { error: e2 } = await supabase.from("dist_sales_order_lines").insert(lr); if (e2) throw e2; }
   return so.id;

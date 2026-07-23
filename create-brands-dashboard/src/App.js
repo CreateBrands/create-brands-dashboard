@@ -7897,6 +7897,9 @@ function DistItemTable({ items, taxRates, lines, setLines, vatMode, setVatMode, 
               <div className="col-span-4">
                 <SearchableItemSelect items={items} value={l.itemId || ""}
                   onSelect={(it) => upd(i, { itemId: it?.id || "", taxRateId: it?.taxRateId || l.taxRateId, unitPrice: l.unitPrice || it?.purchaseRate || "", accountCode: l.accountCode || it?.expenseAccountCode || "" })} />
+                <input value={l.lineNote || ""} onChange={e => upd(i, { lineNote: e.target.value })}
+                  placeholder="Item note (optional)"
+                  className="mt-1 w-full px-2 py-1 rounded-lg bg-slate-900 border border-slate-800 text-[11px] text-amber-300 placeholder-slate-600"/>
               </div>
               <div className="col-span-2"><input value={l.accountCode || ""} onChange={e => upd(i, { accountCode: e.target.value })} placeholder="Acct" className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white font-mono"/></div>
               <div className="col-span-1"><input type="number" value={l.qty} onChange={e => upd(i, { qty: e.target.value })} className="w-full px-1.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white text-right"/></div>
