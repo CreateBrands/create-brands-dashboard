@@ -22068,6 +22068,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
   const MORE_NAV = [
     ...(isCkUser ? [{ key: "central-kitchen", label: "Central Kitchen", icon: ChefHat }] : []),
     ...(isDriverRole ? [{ key: "fresh-produce", label: "Fresh Produce", icon: ShoppingCart }] : []),
+    { key: "order-supplies", label: "Order Supplies",  icon: ShoppingCart },
     { key: "ops-temps",      label: "Temperature Log", icon: Thermometer },
     { key: "ops-deliveries", label: "Deliveries",      icon: Truck },
     { key: "ops-network",    label: "Ops Status",      icon: ShieldCheck },
@@ -22498,6 +22499,9 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
           )}
           {activeView === "my-loans" && (
             <MyLoansView currentUser={currentUser} opsTeam={opsTeam}/>
+          )}
+          {activeView === "order-supplies" && (
+            <DistOrderPortalView currentUser={currentUser} onNavigate={() => setActiveView("ops-tasks")} />
           )}
           {activeView === "my-payslips" && (
             <div className="max-w-xl">
