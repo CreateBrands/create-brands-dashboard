@@ -13172,6 +13172,17 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
     ...(prefs.locations || []),
     ...Object.values(tags).flatMap(t => String(t.location || "").split(",")).map(x => x.trim()).filter(Boolean),
   ])).sort(), [tags, prefs.locations]);
+  const roundBasis = prefs.roundDefaults?.basis || "category";
+  const roundSections = useMemo(() => (roundBasis === "location" ? locations : itemCategories), [roundBasis, locations, itemCategories]);
+  const defaultAsg = prefs.roundDefaults?.assignments || {};   // { section: memberId }
+  const saveDefaultAsg = async (section, userId) => {
+    const assignments = { ...defaultAsg };
+    if (userId) assignments[section] = userId; else delete assignments[section];
+    const roundDefaults = { ...prefs.roundDefaults, assignments };
+    setPrefs(p => ({ ...p, roundDefaults }));
+    await saveStoreOrderPrefs(storeId, { roundDefaults }).catch(ev => setErr(ev.message));
+  };
+  const memberName = (id) => { const m2 = storeMembers.find(x => x.id === id); return m2 ? `${m2.firstName} ${m2.lastName}` : ""; };
   const saveLocations = async (list) => { setPrefs(p => ({ ...p, locations: list })); await saveStoreOrderPrefs(storeId, { locations: list }).catch(ev => setErr(ev.message)); };
   const renameLocation = async (oldName) => {
     const next = (window.prompt(`Rename location "${oldName}" to:`, oldName) || "").trim();
@@ -13351,8 +13362,8 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
                   className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-900/40 text-rose-300 border border-rose-800">Cancel round</button>
               </div>
               {(() => {
-                const basis = prefs.roundDefaults?.basis || "category";
-                const sections = basis === "location" ? locations : itemCategories;
+                const basis = roundBasis;
+                const sections = roundSections;
                 const asgBySection = {}; (round.assignments || []).forEach(x => { asgBySection[x.section] = x; });
                 const linesBySection = {};
                 (round.lines || []).forEach(l => {
@@ -13369,6 +13380,7 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
                   try {
                     await saveOrderRoundAssignments(round.id, next, basis);
                     setRound(await fetchOpenOrderRound(storeId));
+                    saveDefaultAsg(section, userId);   // the round IS the preference — remember for next time
                   } catch (ev) { setErr(ev.message); }
                 };
                 return (
@@ -13395,8 +13407,31 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
               })()}
             </div>
           ) : (
-            <button disabled={busy} onClick={async () => { setBusy(true); try { await createOrderRound(storeId, { id: currentUser?.id, name: currentUser?.name }); setRound(await fetchOpenOrderRound(storeId)); } catch (e) { setErr(e.message); } setBusy(false); }}
-              className="px-4 py-2 rounded-xl text-sm font-bold bg-indigo-600 text-white">Start team order round</button>
+            <>
+            <div className="space-y-1.5">
+              <div className="text-[10px] uppercase tracking-wide text-slate-500">Default section assignments ({roundBasis}) — saved, applied on start</div>
+              {roundSections.map(sec => (
+                <div key={sec} className="flex items-center gap-2">
+                  <div className="text-xs text-white w-44 truncate">{sec}</div>
+                  <select value={defaultAsg[sec] || ""} onChange={ev => saveDefaultAsg(sec, ev.target.value || null)} className={`${ec} flex-1`}>
+                    <option value="">— unassigned —</option>
+                    {storeMembers.map(m2 => <option key={m2.id} value={m2.id}>{m2.firstName} {m2.lastName}</option>)}
+                  </select>
+                </div>
+              ))}
+            </div>
+            <button disabled={busy} onClick={async () => {
+              setBusy(true);
+              try {
+                const created = await createOrderRound(storeId, { id: currentUser?.id, name: currentUser?.name });
+                const roundId = created?.id || created;
+                const rows = roundSections.map(sec => ({ section: sec, userId: defaultAsg[sec] || null, userName: memberName(defaultAsg[sec]) }));
+                if (roundId && rows.some(r => r.userId)) await saveOrderRoundAssignments(roundId, rows, roundBasis);
+                setRound(await fetchOpenOrderRound(storeId));
+              } catch (e2) { setErr(e2.message); }
+              setBusy(false);
+            }} className="px-4 py-2 rounded-xl text-sm font-bold bg-indigo-600 text-white">Start team order round — with saved assignments</button>
+            </>
           )}
         </div>
       )}
