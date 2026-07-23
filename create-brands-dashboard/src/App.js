@@ -14457,6 +14457,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   }, [orderHistory, catalogue]);
   const [lineNotes, setLineNotes] = useState({});   // itemId -> instruction for the warehouse
   const [lineUoms, setLineUoms] = useState({});     // itemId -> chosen unit (fresh items)
+  const [addDlg, setAddDlg] = useState(null);       // { item, qty, uom } — fresh add-to-order dialog
   const UOM_OPTIONS = ["Kg", "Liter", "Each", "Pack", "Box", "Case"];
   const defaultUomFor = (it) => {
     const u = (it?.packUnit || "").toLowerCase();
@@ -14508,10 +14509,10 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
             <div className="flex items-center gap-1">
               <button onClick={() => bump(i.id, -1)} className="w-8 h-8 rounded-lg font-bold text-lg leading-none flex items-center justify-center" style={{ backgroundColor: "#E2CFBC", color: "#3A2E26" }}>−</button>
               <input value={qty} onChange={e => setQty(i.id, e.target.value)} className="w-9 text-center px-0.5 py-1.5 rounded-lg text-sm" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
-              <button onClick={() => bump(i.id, 1)} className="w-8 h-8 rounded-lg font-bold text-lg leading-none flex items-center justify-center" style={{ backgroundColor: "#5C9442", color: "#fff" }}>+</button>
+              <button onClick={() => i.itemType === "fresh" ? setAddDlg({ item: i, qty: 1, uom: lineUoms[i.id] || defaultUomFor(i) }) : bump(i.id, 1)} className="w-8 h-8 rounded-lg font-bold text-lg leading-none flex items-center justify-center" style={{ backgroundColor: "#5C9442", color: "#fff" }}>+</button>
             </div>
           ) : (
-            <button onClick={() => bump(i.id, 1)} className="px-3 py-2 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}><Plus size={14}/> Add</button>
+            <button onClick={() => i.itemType === "fresh" ? setAddDlg({ item: i, qty: 1, uom: lineUoms[i.id] || defaultUomFor(i) }) : bump(i.id, 1)} className="px-3 py-2 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}><Plus size={14}/> Add</button>
           )}
         </div>
       </div>
@@ -14533,10 +14534,10 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
             <div className="flex items-center gap-1">
               <button onClick={() => bump(i.id, -1)} className="w-7 h-7 rounded-lg font-bold leading-none flex items-center justify-center" style={{ backgroundColor: "#E2CFBC", color: "#3A2E26" }}>−</button>
               <input value={qty} onChange={e => setQty(i.id, e.target.value)} className="w-8 text-center py-1 rounded-lg text-sm" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
-              <button onClick={() => bump(i.id, 1)} className="w-7 h-7 rounded-lg font-bold leading-none flex items-center justify-center" style={{ backgroundColor: "#5C9442", color: "#fff" }}>+</button>
+              <button onClick={() => i.itemType === "fresh" ? setAddDlg({ item: i, qty: 1, uom: lineUoms[i.id] || defaultUomFor(i) }) : bump(i.id, 1)} className="w-7 h-7 rounded-lg font-bold leading-none flex items-center justify-center" style={{ backgroundColor: "#5C9442", color: "#fff" }}>+</button>
             </div>
           ) : (
-            <button onClick={() => bump(i.id, 1)} className="px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}><Plus size={13}/> Add</button>
+            <button onClick={() => i.itemType === "fresh" ? setAddDlg({ item: i, qty: 1, uom: lineUoms[i.id] || defaultUomFor(i) }) : bump(i.id, 1)} className="px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}><Plus size={13}/> Add</button>
           )}
         </div>
       </div>
@@ -14944,10 +14945,10 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
                             <div className="flex items-center gap-0.5 flex-shrink-0">
                               <button onClick={() => bump(i.id, -1)} className="w-6 h-6 rounded text-sm leading-none" style={{ backgroundColor: "#E2CFBC", color: "#3A2E26" }}>−</button>
                               <span className="w-5 text-center text-xs" style={{ color: "#3A2E26" }}>{qty}</span>
-                              <button onClick={() => bump(i.id, 1)} className="w-6 h-6 rounded text-sm leading-none" style={{ backgroundColor: "#5C9442", color: "#fff" }}>+</button>
+                              <button onClick={() => i.itemType === "fresh" ? setAddDlg({ item: i, qty: 1, uom: lineUoms[i.id] || defaultUomFor(i) }) : bump(i.id, 1)} className="w-6 h-6 rounded text-sm leading-none" style={{ backgroundColor: "#5C9442", color: "#fff" }}>+</button>
                             </div>
                           ) : (
-                            <button onClick={() => bump(i.id, 1)} className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}><Plus size={14}/></button>
+                            <button onClick={() => i.itemType === "fresh" ? setAddDlg({ item: i, qty: 1, uom: lineUoms[i.id] || defaultUomFor(i) }) : bump(i.id, 1)} className="flex-shrink-0 w-7 h-7 rounded-lg flex items-center justify-center" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}><Plus size={14}/></button>
                           )}
                         </div>
                       );
@@ -15062,18 +15063,11 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
                     />
                   </div>
                   {l.itemType === "fresh" ? (
-                    <div className="flex items-center gap-1 flex-shrink-0">
-                      <input type="number" min="0" step="any" value={l.qty}
-                        onChange={ev => setQty(l.id, Number(ev.target.value) || 0)}
-                        className="w-14 px-1.5 py-1 rounded-lg text-xs tabular-nums text-right"
-                        style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
-                      <select value={lineUoms[l.id] || defaultUomFor(l)}
-                        onChange={ev => setLineUoms(u => ({ ...u, [l.id]: ev.target.value }))}
-                        className="px-1 py-1 rounded-lg text-xs"
-                        style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}>
-                        {UOM_OPTIONS.map(u => <option key={u} value={u}>{u}</option>)}
-                      </select>
-                    </div>
+                    <button onClick={() => setAddDlg({ item: l, qty: l.qty, uom: lineUoms[l.id] || defaultUomFor(l) })}
+                      className="text-xs tabular-nums flex-shrink-0 px-2 py-1 rounded-lg font-semibold"
+                      style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}>
+                      {l.qty} {lineUoms[l.id] || defaultUomFor(l)} ✎
+                    </button>
                   ) : (
                     <div className="text-xs tabular-nums flex-shrink-0" style={{ color: "#6B5D4F" }}>× {l.qty}</div>
                   )}
@@ -15256,6 +15250,36 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
           onAddToCart={(id, q) => setQty(id, q)}
           onClose={() => setDetailItem(null)}
         />
+      )}
+      {addDlg && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(40,30,20,0.45)" }} onClick={() => setAddDlg(null)}>
+          <div className="w-full max-w-sm rounded-2xl p-4" style={{ background: "#FFFBF3", border: "1px solid #E8DCC6" }} onClick={ev => ev.stopPropagation()}>
+            <div className="text-sm font-bold mb-0.5" style={{ color: "#3A2E26" }}>{addDlg.item.name}</div>
+            <div className="text-[11px] mb-3" style={{ color: "#9A8770" }}>How much, and in what unit?</div>
+            <div className="flex items-center gap-2">
+              <input type="number" min="0" step="any" autoFocus value={addDlg.qty}
+                onChange={ev => setAddDlg(d => ({ ...d, qty: ev.target.value }))}
+                className="flex-1 px-3 py-2 rounded-xl text-sm tabular-nums" style={{ background: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
+              <select value={addDlg.uom} onChange={ev => setAddDlg(d => ({ ...d, uom: ev.target.value }))}
+                className="px-2 py-2 rounded-xl text-sm" style={{ background: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}>
+                {UOM_OPTIONS.map(u => <option key={u} value={u}>{u}</option>)}
+              </select>
+            </div>
+            <div className="flex gap-2 mt-4">
+              <button onClick={() => setAddDlg(null)} className="flex-1 py-2 rounded-xl text-sm font-semibold" style={{ background: "#F3EDE2", color: "#9A8770" }}>Cancel</button>
+              <button
+                onClick={() => {
+                  const d = addDlg; setAddDlg(null);
+                  const q = Number(d.qty) || 0;
+                  setLineUoms(u => ({ ...u, [d.item.id]: d.uom }));
+                  setQty(d.item.id, q);
+                }}
+                className="flex-1 py-2 rounded-xl text-sm font-bold" style={{ background: "#844429", color: "#FDF2E0" }}>
+                Add to order
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
