@@ -34613,6 +34613,7 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
                 <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <div className="text-sm font-bold truncate" style={{ color: C.ink }}>{l.item_name}</div>
+                    {l.line_note && <div className="text-[11px] italic font-semibold" style={{ color: "#9A5B00" }}>📝 {l.line_note}</div>}
                     <div className="text-[11px]" style={{ color: C.inkFaint }}>
                       Dispatched: {disp}
                       {l.unit_cost != null && <span> · £{Number(l.unit_cost).toFixed(2)} ea · <b style={{ color: short ? "#9A5B00" : C.inkSoft }}>£{(got * (Number(l.unit_cost) || 0)).toFixed(2)}</b></span>}

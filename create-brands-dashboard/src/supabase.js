@@ -15297,8 +15297,9 @@ export async function createStoreDeliveryFromDispatch(soId, dispatchId, dispatch
     // Per-line channel from the SO wins over item type: an item overridden to
     // 'warehouse' rides the van even if fresh-typed; 'fresh'/'detached' never do.
     const { data: soLines } = await supabase.from("dist_sales_order_lines")
-      .select("item_id, fulfil_channel").eq("so_id", soId);
+      .select("item_id, fulfil_channel, line_note").eq("so_id", soId);
     const chanByItem = new Map((soLines || []).map(x => [x.item_id, x.fulfil_channel]));
+    const noteByItem = new Map((soLines || []).filter(x => x.line_note).map(x => [x.item_id, x.line_note]));
     const rideVan = (itemId) => {
       const ch = chanByItem.get(itemId);
       if (ch) return ch === "warehouse";
@@ -15329,6 +15330,7 @@ export async function createStoreDeliveryFromDispatch(soId, dispatchId, dispatch
         qty_dispatched: Number(l.qty) || 0,
         qty_received: null,
         unit_cost: l.unitPrice != null ? Number(l.unitPrice) : null,
+        line_note: noteByItem.get(l.itemId) || null,
       };
     });
     if (lineRows.length) {
