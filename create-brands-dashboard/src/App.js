@@ -183,7 +183,7 @@ import {
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
-  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
+  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
 } from "./supabase";
@@ -4842,18 +4842,31 @@ function DistTypedItemsView({ itemType, currentUser }) {
   const [busy, setBusy] = useState({}); // key -> true while toggling
   const uid = currentUser?.id || currentUser?.name || null;
   // ── DRIVER CLAIMS (fresh only): who is shopping which order ──
-  const [claims, setClaims] = useState({});                 // soId -> { driverId, driverName }
+  const [claims, setClaims] = useState({});
+  const [freshDeliv, setFreshDeliv] = useState({});   // storeId -> latest fresh delivery status;                 // soId -> { driverId, driverName }
   const [claimFilter, setClaimFilter] = useState("all");    // "mine" | "unclaimed" | "all"
   const myId = currentUser?.opsTeamMemberId || currentUser?.id || null;
   const myName = currentUser?.name || "Me";
 
+  
+  // Ticking = taking responsibility: claim any affected unclaimed order.
+  const autoClaim = (soIds) => {
+    const mine = { id: myId, name: myName };
+    (soIds || []).forEach(soId => {
+      if (!claims[soId]) {
+        setClaims(c => ({ ...c, [soId]: { makerId: myId, makerName: myName } }));
+        setFreshClaim(soId, mine).catch(() => {});
+      }
+    });
+  };
   const load = useCallback(async () => {
     setLoading(true); setErr("");
     try {
-      const [ords, cls] = await Promise.all([
+      const [ords, cls, fdel] = await Promise.all([
         fetchDistOrdersByItemType(itemType, { includeDone: showDone }),
         isFresh ? fetchFreshClaims().catch(() => ({})) : Promise.resolve({}),
-      ]);
+      , isFresh ? fetchRecentFreshDeliveries().catch(() => ({})) : Promise.resolve({})]);
+      setFreshDeliv(fdel || {});
       setOrders(ords); setClaims(cls);
       // Sensible default: if I already claimed orders, open on MY list.
       if (isFresh && myId && Object.values(cls).some(c => c.driverId === myId)) setClaimFilter(f => f === "all" ? "mine" : f);
@@ -4941,7 +4954,7 @@ function DistTypedItemsView({ itemType, currentUser }) {
   const toggleLine = async (soId, itemId, done) => {
     const key = `${soId}:${itemId}`;
     setBusy(b => ({ ...b, [key]: true })); patchLine(soId, itemId, done);
-    try { await setDistFulfilCheck(soId, itemId, done, uid); }
+    try { await setDistFulfilCheck(soId, itemId, done, uid).then(() => { if (done) autoClaim([soId]); }); }
     catch (e) { setErr(e.message); patchLine(soId, itemId, !done); }
     setBusy(b => ({ ...b, [key]: false }));
   };
@@ -4949,7 +4962,7 @@ function DistTypedItemsView({ itemType, currentUser }) {
     const key = `order:${o.soId}`; setBusy(b => ({ ...b, [key]: true }));
     const ids = o.lines.map(l => l.itemId);
     setOrders(prev => prev.map(x => x.soId !== o.soId ? x : { ...x, lines: x.lines.map(l => ({ ...l, done })), allDone: done }));
-    try { await setDistFulfilOrderChecks(o.soId, ids, done, uid); }
+    try { await setDistFulfilOrderChecks(o.soId, ids, done, uid).then(() => { if (done) autoClaim([o.soId]); }); }
     catch (e) { setErr(e.message); load(); }
     setBusy(b => ({ ...b, [key]: false }));
   };
@@ -4957,7 +4970,7 @@ function DistTypedItemsView({ itemType, currentUser }) {
     const key = `item:${c.itemId}`; setBusy(b => ({ ...b, [key]: true }));
     const soIds = c.breakdown.map(b => b.soId);
     setOrders(prev => prev.map(o => (soIds.includes(o.soId) ? { ...o, lines: o.lines.map(l => l.itemId === c.itemId ? { ...l, done } : l), allDone: o.lines.every(l => (l.itemId === c.itemId ? done : l.done)) } : o)));
-    try { await setDistFulfilItemChecks(c.itemId, soIds, done, uid); }
+    try { await setDistFulfilItemChecks(c.itemId, soIds, done, uid); if (done) autoClaim(soIds); }
     catch (e) { setErr(e.message); load(); }
     setBusy(b => ({ ...b, [key]: false }));
   };
@@ -5005,7 +5018,21 @@ function DistTypedItemsView({ itemType, currentUser }) {
                   style={{ border: `1.5px solid ${mine ? "#3F6B3A" : other ? WH.line : "#E0A664"}`, background: mine ? "#EAF3E7" : other ? WH.surface : "#FFF6E8" }}>
                   <div>
                     <div className="text-xs font-bold" style={{ color: WH.ink }}>{o.soNumber} · {o.customerName}</div>
-                    <div className="text-[10px]" style={{ color: WH.inkFaint }}>{o.lines.length} item{o.lines.length!==1?"s":""}{o.allDone ? " · all bought" : ""}</div>
+                    <div className="text-[10px]" style={{ color: WH.inkFaint }}>{o.lines.length} item{o.lines.length!==1?"s":""}</div>
+                    {isFresh && (() => {
+                      const d = o.storeId ? freshDeliv[o.storeId] : null;
+                      const afterOrder = d && (!o.orderDate || (d.at || "").slice(0, 10) >= o.orderDate);
+                      const Chip = ({ on, lbl }) => (
+                        <span className="text-[9px] font-bold px-1.5 py-0.5 rounded" style={{ background: on ? "#EAF3E7" : "#F3EDE2", color: on ? "#3F6B3A" : "#B0A18C" }}>{on ? "✓ " : ""}{lbl}</span>
+                      );
+                      return (
+                        <div className="flex gap-1 mt-1">
+                          <Chip on={o.allDone} lbl="Bought"/>
+                          <Chip on={!!afterOrder} lbl="Delivery"/>
+                          <Chip on={!!afterOrder && d.status === "received"} lbl="Received"/>
+                        </div>
+                      );
+                    })()}
                   </div>
                   {mine ? (
                     <button disabled={busy[k]} onClick={() => setClaim(o.soId, false)}

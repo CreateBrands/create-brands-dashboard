@@ -14375,6 +14375,7 @@ export async function fetchDistOrdersByItemType(itemType, { includeDone = false 
     out.push({
       soId: so.id, soNumber: so.soNumber, orderDate: so.orderDate,
       customerId: so.customerId, customerName: cust?.displayName || cust?.companyName || "—",
+      storeId: cust?.storeId || null,
       stage: stageBySo.get(so.id) || so.status || "confirmed",
       lines: withDone,
       allDone: withDone.length > 0 && withDone.every(l => l.done),
@@ -14454,6 +14455,20 @@ export async function enqueueDistDocPrint(payload, user) {
   });
   if (error) throw error;
   return true;
+}
+
+// Latest fresh-purchase delivery per store (last few days) — lets the fresh
+// board show whether a bought order's receipts became a delivery and whether
+// the store has received it.
+export async function fetchRecentFreshDeliveries(days = 4) {
+  const since = new Date(Date.now() - days * 86400000).toISOString();
+  const { data } = await supabase.from("store_deliveries")
+    .select("id, store_id, status, dispatched_at, dispatch_id")
+    .ilike("dispatch_id", "fresh:%").gte("dispatched_at", since)
+    .order("dispatched_at", { ascending: false });
+  const byStore = {};
+  (data || []).forEach(d => { if (!byStore[d.store_id]) byStore[d.store_id] = { status: d.status, at: d.dispatched_at }; });
+  return byStore;
 }
 
 // ── DETACH SO LINES: fresh / direct-supplier lines invoiced separately ──────
