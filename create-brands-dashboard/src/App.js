@@ -4928,7 +4928,7 @@ function DistTypedItemsView({ itemType, currentUser }) {
     const unit = l?.packUnit || "";
     if (!size || !unit || unit === "ea" || unit === "each" || unit === "unit") {
       const per = Number(l?.packCount) || 0;
-      return per > 1 ? `${q} × ${per} = ${q * per}` : `${q}`;
+      return per > 1 ? `${q} × ${per}pk (${q * per} ea)` : `${q} ea`;
     }
     const total = q * size;
     const pretty = (unit === "g" && total >= 1000) ? `${(total / 1000).toFixed(total % 1000 ? 1 : 0)}kg`
