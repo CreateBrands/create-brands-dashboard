@@ -4849,6 +4849,12 @@ function DistTypedItemsView({ itemType, currentUser }) {
   const myName = currentUser?.name || "Me";
 
   
+  // Buying dialog: on fresh, marking bought asks WHAT was actually bought
+  // (unit + amount) so downstream quantities speak one language.
+  const [buyDlg, setBuyDlg] = useState(null);
+  const BUY_UOMS = ["Kg", "Liter", "Each", "Pack", "Box", "Case"];
+  const guessUom = (l) => l?.uom || ((/(kg|^g$)/i.test(l?.packUnit || "")) ? "Kg" : (/(^l$|ml)/i.test(l?.packUnit || "")) ? "Liter" : ((Number(l?.packSize) > 1 && /^(ea|each|unit)?$/i.test(l?.packUnit || "")) || Number(l?.packCount) > 1) ? "Case" : "Each");
+
   // Ticking = taking responsibility: claim any affected unclaimed order.
   const autoClaim = (soIds) => {
     const mine = { id: myId, name: myName };
@@ -4912,7 +4918,8 @@ function DistTypedItemsView({ itemType, currentUser }) {
       const cur = m.get(l.itemId) || { itemId: l.itemId, name: l.name, category: l.category, packUnit: l.packUnit, packSize: l.packSize, packCount: l.packCount, qty: 0, doneQty: 0, breakdown: [] };
       cur.qty += Number(l.qty) || 0;
       if (l.done) cur.doneQty += Number(l.qty) || 0;
-      cur.breakdown.push({ soNumber: o.soNumber, customerName: o.customerName, qty: l.qty, soId: o.soId, done: l.done });
+      cur.breakdown.push({ soNumber: o.soNumber, customerName: o.customerName, qty: l.qty, soId: o.soId, done: l.done, uom: l.uom || null, bought: l.bought || null });
+      if (l.uom) cur.mixedUoms = [...new Set([...(cur.mixedUoms || []), l.uom])];
       m.set(l.itemId, cur);
     }
     return Array.from(m.values()).map(c => ({ ...c, done: c.breakdown.every(b => b.done) }))
@@ -4924,6 +4931,7 @@ function DistTypedItemsView({ itemType, currentUser }) {
   // with the true total where the pack is a weight/volume.
   const fmtPackQty = (qty, l) => {
     const q = Number(qty) || 0;
+    if (l?.uom) return `${q} ${l.uom}`;   // store chose an explicit unit — it rules
     const size = Number(l?.packSize) || 0;
     const unit = l?.packUnit || "";
     if (!size || !unit || unit === "ea" || unit === "each" || unit === "unit") {
@@ -4955,10 +4963,15 @@ function DistTypedItemsView({ itemType, currentUser }) {
     allDone: o.lines.every(l => (l.itemId === itemId ? done : l.done)),
   }));
 
-  const toggleLine = async (soId, itemId, done) => {
+  const toggleLine = async (soId, itemId, done, bought) => {
+    if (isFresh && done && !bought) {
+      const o = orders.find(x => x.soId === soId); const l = o?.lines.find(x => x.itemId === itemId);
+      setBuyDlg({ kind: "line", soId, itemId, name: l?.name || "", qty: l?.qty ?? "", uom: guessUom(l) });
+      return;
+    }
     const key = `${soId}:${itemId}`;
     setBusy(b => ({ ...b, [key]: true })); patchLine(soId, itemId, done);
-    try { await setDistFulfilCheck(soId, itemId, done, uid).then(() => { if (done) autoClaim([soId]); }); }
+    try { await setDistFulfilCheck(soId, itemId, done, uid, bought).then(() => { if (done) autoClaim([soId]); }); }
     catch (e) { setErr(e.message); patchLine(soId, itemId, !done); }
     setBusy(b => ({ ...b, [key]: false }));
   };
@@ -4966,15 +4979,24 @@ function DistTypedItemsView({ itemType, currentUser }) {
     const key = `order:${o.soId}`; setBusy(b => ({ ...b, [key]: true }));
     const ids = o.lines.map(l => l.itemId);
     setOrders(prev => prev.map(x => x.soId !== o.soId ? x : { ...x, lines: x.lines.map(l => ({ ...l, done })), allDone: done }));
-    try { await setDistFulfilOrderChecks(o.soId, ids, done, uid).then(() => { if (done) autoClaim([o.soId]); }); }
+    try { await setDistFulfilOrderChecks(o.soId, ids, done, uid, done && isFresh ? Object.fromEntries(o.lines.map(l => [l.itemId, { qty: l.qty, uom: guessUom(l) }])) : undefined).then(() => { if (done) autoClaim([o.soId]); }); }
     catch (e) { setErr(e.message); load(); }
     setBusy(b => ({ ...b, [key]: false }));
   };
-  const toggleCombinedItem = async (c, done) => {
+  const toggleCombinedItem = async (c, done, boughtTotal) => {
+    if (isFresh && done && !boughtTotal) {
+      setBuyDlg({ kind: "item", itemId: c.itemId, name: c.name, qty: c.qty, uom: (c.mixedUoms && c.mixedUoms.length === 1) ? c.mixedUoms[0] : guessUom(c), c });
+      return;
+    }
+    if (boughtTotal) {
+      const total = Number(c.qty) || 0;
+      c.__boughtBySo = {};
+      c.breakdown.forEach(x => { const share = total > 0 ? (Number(x.qty) || 0) / total : 0; c.__boughtBySo[x.soId] = { qty: Math.round((Number(boughtTotal.qty) || 0) * share * 100) / 100, uom: boughtTotal.uom }; });
+    }
     const key = `item:${c.itemId}`; setBusy(b => ({ ...b, [key]: true }));
     const soIds = c.breakdown.map(b => b.soId);
     setOrders(prev => prev.map(o => (soIds.includes(o.soId) ? { ...o, lines: o.lines.map(l => l.itemId === c.itemId ? { ...l, done } : l), allDone: o.lines.every(l => (l.itemId === c.itemId ? done : l.done)) } : o)));
-    try { await setDistFulfilItemChecks(c.itemId, soIds, done, uid); if (done) autoClaim(soIds); }
+    try { await setDistFulfilItemChecks(c.itemId, soIds, done, uid, c.__boughtBySo); if (done) autoClaim(soIds); }
     catch (e) { setErr(e.message); load(); }
     setBusy(b => ({ ...b, [key]: false }));
   };
@@ -5097,7 +5119,7 @@ function DistTypedItemsView({ itemType, currentUser }) {
                       </span>
                     </button>
                     <div className="text-right flex-shrink-0">
-                      <div className="text-xl font-black leading-none" style={{ color: c.done ? WH.inkFaint : WH.accent }}>{fmtPackQty(c.qty, c)}</div>
+                      <div className="text-xl font-black leading-none" style={{ color: c.done ? WH.inkFaint : WH.accent }}>{(c.mixedUoms && c.mixedUoms.length ? (c.mixedUoms.length === 1 && c.breakdown.every(x => x.uom) ? `${c.qty} ${c.mixedUoms[0]}` : c.breakdown.map(x => fmtPackQty(x.qty, x.uom ? { uom: x.uom } : c)).join(" + ")) : fmtPackQty(c.qty, c))}</div>
                       <div className="text-[10px]" style={{ color: WH.inkFaint }}>total{isFresh ? " to buy" : " to make"}</div>
                     </div>
                   </div>
@@ -5108,7 +5130,7 @@ function DistTypedItemsView({ itemType, currentUser }) {
                           <div key={i} className="flex items-center gap-2 px-3 py-1.5 text-xs" style={{ background: WH.surface, borderTop: i ? `1px solid ${WH.lineSoft}` : "none" }}>
                             <CheckBox on={b.done} disabled={busy[`${b.soId}:${c.itemId}`]} onClick={() => toggleLine(b.soId, c.itemId, !b.done)}/>
                             <span className="flex-1" style={{ color: WH.inkSoft, textDecoration: b.done ? "line-through" : "none" }}><span className="font-mono font-semibold" style={{ color: WH.accent }}>{b.soNumber}</span> · {b.customerName}</span>
-                            <span className="font-bold" style={{ color: WH.ink }}>{fmtPackQty(b.qty, c)}</span>
+                            <span className="font-bold" style={{ color: WH.ink }}>{(fmtPackQty(b.qty, b.uom ? { uom: b.uom } : c) + (b.bought && (b.bought.qty != null) ? ` · bought ${b.bought.qty} ${b.bought.uom || ""}`.trimEnd() : ""))}</span>
                           </div>
                         ))}
                       </div>
@@ -5143,12 +5165,42 @@ function DistTypedItemsView({ itemType, currentUser }) {
                       <div className="text-sm truncate" style={{ color: WH.ink, textDecoration: l.done ? "line-through" : "none" }}>{cleanName(l.name)}</div>
                       {l.category && <div className="text-[10px]" style={{ color: WH.inkFaint }}>{l.category}</div>}
                     </div>
-                    <div className="text-sm font-bold flex-shrink-0" style={{ color: l.done ? WH.inkFaint : WH.accent }}>{fmtPackQty(l.qty, l)}</div>
+                    <div className="text-sm font-bold flex-shrink-0" style={{ color: l.done ? WH.inkFaint : WH.accent }}>{fmtPackQty(l.qty, l)}{l.bought && l.bought.qty != null ? ` · bought ${l.bought.qty} ${l.bought.uom || ""}`.trimEnd() : ""}</div>
                   </div>
                 ))}
               </div>
             </WhCard>
           ))}
+        </div>
+      )}
+      {buyDlg && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(40,30,20,0.45)" }} onClick={() => setBuyDlg(null)}>
+          <div className="w-full max-w-sm rounded-2xl p-4" style={{ background: "#FFFBF3", border: "1px solid #E8DCC6" }} onClick={ev => ev.stopPropagation()}>
+            <div className="text-sm font-bold mb-0.5" style={{ color: WH.ink }}>Bought — {buyDlg.name}</div>
+            <div className="text-[11px] mb-3" style={{ color: WH.inkFaint }}>Record what was actually purchased so every screen shows the same quantity.</div>
+            <div className="flex items-center gap-2">
+              <input type="number" min="0" step="any" autoFocus value={buyDlg.qty}
+                onChange={ev => setBuyDlg(d => ({ ...d, qty: ev.target.value }))}
+                className="flex-1 px-3 py-2 rounded-xl text-sm tabular-nums" style={{ background: "#FDF2E0", border: "1px solid #E8DCC6", color: WH.ink }}/>
+              <select value={buyDlg.uom} onChange={ev => setBuyDlg(d => ({ ...d, uom: ev.target.value }))}
+                className="px-2 py-2 rounded-xl text-sm" style={{ background: "#FDF2E0", border: "1px solid #E8DCC6", color: WH.ink }}>
+                {BUY_UOMS.map(u => <option key={u} value={u}>{u}</option>)}
+              </select>
+            </div>
+            <div className="flex gap-2 mt-4">
+              <button onClick={() => setBuyDlg(null)} className="flex-1 py-2 rounded-xl text-sm font-semibold" style={{ background: "#F3EDE2", color: WH.inkFaint }}>Cancel</button>
+              <button
+                onClick={() => {
+                  const bought = { qty: Number(buyDlg.qty) || 0, uom: buyDlg.uom };
+                  const d = buyDlg; setBuyDlg(null);
+                  if (d.kind === "line") toggleLine(d.soId, d.itemId, true, bought);
+                  else toggleCombinedItem(d.c, true, bought);
+                }}
+                className="flex-1 py-2 rounded-xl text-sm font-bold text-white" style={{ background: WH.accent }}>
+                Mark bought
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </WhShell>
@@ -14404,6 +14456,15 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
       .map(x => x.item);
   }, [orderHistory, catalogue]);
   const [lineNotes, setLineNotes] = useState({});   // itemId -> instruction for the warehouse
+  const [lineUoms, setLineUoms] = useState({});     // itemId -> chosen unit (fresh items)
+  const UOM_OPTIONS = ["Kg", "Liter", "Each", "Pack", "Box", "Case"];
+  const defaultUomFor = (it) => {
+    const u = (it?.packUnit || "").toLowerCase();
+    if (u === "kg" || u === "g") return "Kg";
+    if (u === "l" || u === "ml") return "Liter";
+    if ((Number(it?.packSize) > 1 && (u === "ea" || u === "each" || u === "unit" || !u)) || Number(it?.packCount) > 1) return "Case";
+    return "Each";
+  };
   const setLineNote = (itemId, t) => setLineNotes(n => { const x = { ...n }; if (!t) delete x[itemId]; else x[itemId] = t; return x; });
   const setQty = (itemId, qty) => { const q = Math.max(0, Number(qty) || 0); setCart(c => { const n = { ...c }; if (q <= 0) delete n[itemId]; else n[itemId] = q; return n; }); };
   const bump = (itemId, d) => setQty(itemId, (cart[itemId] || 0) + d);
@@ -14523,14 +14584,14 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
 
       let id = null;
       if (distCartLines.length) {
-        const lines = distCartLines.map(l => ({ itemId: l.id, qty: l.qty, unitPrice: Number(l.price) || 0, taxRateId: l.taxRateId || null, discount: 0, discountType: "percent", lineNote: lineNotes[l.id] || "" }));
+        const lines = distCartLines.map(l => ({ itemId: l.id, qty: l.qty, unitPrice: Number(l.price) || 0, taxRateId: l.taxRateId || null, discount: 0, discountType: "percent", lineNote: lineNotes[l.id] || "", uom: l.itemType === "fresh" ? (lineUoms[l.id] || defaultUomFor(l)) : null }));
         id = await createDistSalesOrder({ customerId, status: "confirmed", orderDate: new Date().toISOString().slice(0, 10), vatMode: "exclusive", createdBy: currentUser?.id, note: noteParts.join(" · ") }, lines);
       }
       const directPlaced = Object.keys(directGroups).length
         ? await createDirectOrders(activeStoreId, directGroups, currentUser) : [];
       // If this order came from a team round, close the round.
       if (roundLoaded && round) { try { await closeOrderRound(round.id, { status: "placed", soId: id }); } catch {} setRoundLoaded(false); reloadRound(activeStoreId); }
-      setPlaced({ id, count: cartCount, total: cartTotal, direct: directPlaced }); setCart({}); setLineNotes({}); setConfirmOpen(false); setCartOpen(false); setDeliveryDate(""); setOrderNote("");
+      setPlaced({ id, count: cartCount, total: cartTotal, direct: directPlaced }); setCart({}); setLineNotes({}); setLineUoms({}); setConfirmOpen(false); setCartOpen(false); setDeliveryDate(""); setOrderNote("");
     } catch (e) { setErr(e.message); }
     setPlacing(false);
   };
@@ -15000,7 +15061,22 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
                       style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}
                     />
                   </div>
-                  <div className="text-xs tabular-nums flex-shrink-0" style={{ color: "#6B5D4F" }}>× {l.qty}</div>
+                  {l.itemType === "fresh" ? (
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <input type="number" min="0" step="any" value={l.qty}
+                        onChange={ev => setQty(l.id, Number(ev.target.value) || 0)}
+                        className="w-14 px-1.5 py-1 rounded-lg text-xs tabular-nums text-right"
+                        style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
+                      <select value={lineUoms[l.id] || defaultUomFor(l)}
+                        onChange={ev => setLineUoms(u => ({ ...u, [l.id]: ev.target.value }))}
+                        className="px-1 py-1 rounded-lg text-xs"
+                        style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}>
+                        {UOM_OPTIONS.map(u => <option key={u} value={u}>{u}</option>)}
+                      </select>
+                    </div>
+                  ) : (
+                    <div className="text-xs tabular-nums flex-shrink-0" style={{ color: "#6B5D4F" }}>× {l.qty}</div>
+                  )}
                   <div className="text-sm font-bold tabular-nums flex-shrink-0 w-16 text-right" style={{ color: "#3A2E26" }}>{gbp(l.qty*Number(l.price))}</div>
                 </div>
               ), { backgroundColor: "#EFE3CC", color: "#844429" })}
