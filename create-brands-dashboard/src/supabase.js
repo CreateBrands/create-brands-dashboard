@@ -14467,11 +14467,13 @@ export async function fetchStoreOrderPrefs(storeId) {
   return {
     approvers: read(`order_approvers:${storeId}`) || [],          // ops_team member ids who may approve staff orders
     roundDefaults: read(`round_defaults:${storeId}`) || {},       // { basis: "category"|"location" }
+    locations: read(`order_locations:${storeId}`) || [],          // managed location names for this store
   };
 }
 export async function saveStoreOrderPrefs(storeId, prefs) {
   if (prefs.approvers !== undefined) await upsertAppSetting(`order_approvers:${storeId}`, JSON.stringify(prefs.approvers || []));
   if (prefs.roundDefaults !== undefined) await upsertAppSetting(`round_defaults:${storeId}`, JSON.stringify(prefs.roundDefaults || {}));
+  if (prefs.locations !== undefined) await upsertAppSetting(`order_locations:${storeId}`, JSON.stringify(prefs.locations || []));
 }
 
 // Staff-submitted orders awaiting a manager's decision for one customer.

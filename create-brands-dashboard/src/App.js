@@ -13127,6 +13127,10 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
   const [tags, setTags] = useState({});
   const [overrides, setOverrides] = useState({});   // itemId -> comma list of vendor ids (store_item_suppliers)
   const [supOpen, setSupOpen] = useState(null);     // itemId whose supplier popover is open
+  const [locOpen, setLocOpen] = useState(null);     // itemId whose location popover is open
+  const [catFilter, setCatFilter] = useState("");
+  const [newLoc, setNewLoc] = useState("");
+  const closePopovers = () => { setSupOpen(null); setLocOpen(null); };
   const [prefs, setPrefs] = useState({ approvers: [], roundDefaults: {} });
   const [round, setRound] = useState(null);
   const [q, setQ] = useState("");
@@ -13164,13 +13168,38 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
     setTags(t => ({ ...t, [itemId]: { ...(t[itemId] || {}), [field]: value } }));
     try { await setStoreItemTag(storeId, itemId, field, value); } catch (e) { setErr(e.message); }
   };
-  const locations = useMemo(() => Array.from(new Set(Object.values(tags).flatMap(t => String(t.location || "").split(",")).map(x => x.trim()).filter(Boolean))).sort(), [tags]);
+  const locations = useMemo(() => Array.from(new Set([
+    ...(prefs.locations || []),
+    ...Object.values(tags).flatMap(t => String(t.location || "").split(",")).map(x => x.trim()).filter(Boolean),
+  ])).sort(), [tags, prefs.locations]);
+  const saveLocations = async (list) => { setPrefs(p => ({ ...p, locations: list })); await saveStoreOrderPrefs(storeId, { locations: list }).catch(ev => setErr(ev.message)); };
+  const renameLocation = async (oldName) => {
+    const next = (window.prompt(`Rename location "${oldName}" to:`, oldName) || "").trim();
+    if (!next || next === oldName) return;
+    await saveLocations(Array.from(new Set(locations.map(l => l === oldName ? next : l))));
+    for (const [itemId, t] of Object.entries(tags)) {
+      const list = String(t.location || "").split(",").map(x => x.trim()).filter(Boolean);
+      if (list.includes(oldName)) await setTag(itemId, "location", Array.from(new Set(list.map(l => l === oldName ? next : l))).join(","));
+    }
+  };
+  const deleteLocation = async (name) => {
+    if (!window.confirm(`Remove location "${name}"? It will be cleared from every item using it.`)) return;
+    await saveLocations(locations.filter(l => l !== name));
+    for (const [itemId, t] of Object.entries(tags)) {
+      const list = String(t.location || "").split(",").map(x => x.trim()).filter(Boolean);
+      if (list.includes(name)) await setTag(itemId, "location", list.filter(l => l !== name).join(","));
+    }
+  };
   const vendorName = (id) => { const v = vendors.find(x => x.id === id); return v ? (v.displayName || v.companyName) : id; };
   const storeMembers = useMemo(() => (opsTeam || []).filter(m => !m.archivedAt && ((m.storeIds || []).includes(storeId) || m.primaryStoreId === storeId || m.storeId === storeId)), [opsTeam, storeId]);
+  const itemCategories = useMemo(() => Array.from(new Set(items.map(i => i.category).filter(Boolean))).sort(), [items]);
   const shown = useMemo(() => {
     const ql = q.trim().toLowerCase();
-    return items.filter(i => !ql || `${i.name} ${i.sku} ${i.category}`.toLowerCase().includes(ql)).slice(0, 200);
-  }, [items, q]);
+    return items
+      .filter(i => !catFilter || i.category === catFilter)
+      .filter(i => !ql || `${i.name} ${i.sku} ${i.category}`.toLowerCase().includes(ql))
+      .slice(0, 200);
+  }, [items, q, catFilter]);
 
   const ec = "px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white";
   return (
@@ -13188,9 +13217,29 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
       </div>
       {err && <div className="text-xs text-rose-400">{err}</div>}
 
+      {(supOpen || locOpen) && <div className="fixed inset-0 z-10" onClick={closePopovers} />}
       {tab === "items" && (
         <div className="space-y-2">
-          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search items…" className={`${ec} w-72`} />
+          <div className="flex flex-wrap items-center gap-2">
+            <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search items…" className={`${ec} w-72`} />
+            <select value={catFilter} onChange={e => setCatFilter(e.target.value)} className={ec}>
+              <option value="">All categories</option>
+              {itemCategories.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+          </div>
+          <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-2.5 flex flex-wrap items-center gap-1.5">
+            <span className="text-[10px] uppercase tracking-wide text-slate-500 mr-1">Locations</span>
+            {locations.map(l => (
+              <span key={l} className="flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-800 text-[11px] text-white">
+                {l}
+                <button onClick={() => renameLocation(l)} className="text-slate-400 hover:text-white" title="Rename">✎</button>
+                <button onClick={() => deleteLocation(l)} className="text-slate-500 hover:text-rose-400" title="Remove">×</button>
+              </span>
+            ))}
+            <input value={newLoc} onChange={e => setNewLoc(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter" && newLoc.trim()) { saveLocations(Array.from(new Set([...locations, newLoc.trim()]))); setNewLoc(""); } }}
+              placeholder="+ add location, Enter" className={`${ec} w-44`} />
+          </div>
           <div className="border border-slate-800 rounded-xl overflow-hidden">
             <div className="grid grid-cols-12 gap-1 px-3 py-2 bg-slate-900/80 text-[10px] uppercase tracking-wide text-slate-500">
               <div className="col-span-5">Item</div><div className="col-span-3">Supplier</div><div className="col-span-2">Location</div><div className="col-span-2">Frequency</div>
@@ -13206,7 +13255,7 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
                       const label = sel.length === 0 ? "Default — Distribution" : sel.length === 1 ? vendorName(sel[0]) : `${sel.length} suppliers`;
                       return (
                         <>
-                          <button onClick={() => setSupOpen(supOpen === i.id ? null : i.id)} className={`${ec} w-full text-left truncate`}>{label} ▾</button>
+                          <button onClick={() => { setLocOpen(null); setSupOpen(supOpen === i.id ? null : i.id); }} className={`${ec} w-full text-left truncate`}>{label} ▾</button>
                           {supOpen === i.id && (
                             <div className="absolute z-20 mt-1 w-64 max-h-64 overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 p-2 space-y-1 shadow-xl">
                               {vendors.map(v => {
@@ -13224,14 +13273,41 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
                                 );
                               })}
                               <div className="text-[10px] text-slate-500 px-1 pt-1 border-t border-slate-800">None ticked = Default (Distribution)</div>
+                              <button onClick={() => setSupOpen(null)} className="w-full mt-1 py-1 rounded-lg text-[11px] font-semibold bg-slate-800 text-slate-300">Done</button>
                             </div>
                           )}
                         </>
                       );
                     })()}
                   </div>
-                  <div className="col-span-2">
-                    <input list="so-locations" value={t.location || ""} onChange={e => setTag(i.id, "location", e.target.value)} placeholder="—" className={`${ec} w-full`} />
+                  <div className="col-span-2 relative">
+                    {(() => {
+                      const sel = String(t.location || "").split(",").map(x => x.trim()).filter(Boolean);
+                      const label = sel.length === 0 ? "\u2014" : sel.length === 1 ? sel[0] : `${sel.length} locations`;
+                      return (
+                        <>
+                          <button onClick={() => { setSupOpen(null); setLocOpen(locOpen === i.id ? null : i.id); }} className={`${ec} w-full text-left truncate`}>{label} ▾</button>
+                          {locOpen === i.id && (
+                            <div className="absolute z-20 mt-1 w-56 max-h-64 overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 p-2 space-y-1 shadow-xl">
+                              {locations.length === 0 && <div className="text-[11px] text-slate-500 px-1">Add locations above first.</div>}
+                              {locations.map(lname => {
+                                const on = sel.includes(lname);
+                                return (
+                                  <label key={lname} className="flex items-center gap-2 text-xs text-white px-1 py-0.5">
+                                    <input type="checkbox" checked={on} onChange={() => {
+                                      const next = on ? sel.filter(x => x !== lname) : [...sel, lname];
+                                      setTag(i.id, "location", next.join(","));
+                                    }} />
+                                    {lname}
+                                  </label>
+                                );
+                              })}
+                              <button onClick={() => setLocOpen(null)} className="w-full mt-1 py-1 rounded-lg text-[11px] font-semibold bg-slate-800 text-slate-300">Done</button>
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
                   <div className="col-span-2 flex items-center gap-2">
                     {["daily", "weekly"].map(f => {
@@ -13251,7 +13327,6 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
               );
             })}
           </div>
-          <datalist id="so-locations">{locations.map(l => <option key={l} value={l} />)}</datalist>
           <div className="text-[11px] text-slate-500">Locations: type to add new ones; comma-separate for multiple (e.g. "Freezer, Front counter"). Suppliers and frequency allow multiple too. Changes save instantly, per store. Showing {shown.length} of {items.length}.</div>
         </div>
       )}
