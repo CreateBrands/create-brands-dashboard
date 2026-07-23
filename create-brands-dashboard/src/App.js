@@ -13341,9 +13341,58 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
             <div className="text-[11px] text-slate-600 mt-1">Sections staff get assigned when a round starts.</div>
           </div>
           {round ? (
-            <div className="rounded-xl border border-amber-700/40 bg-amber-900/20 p-3">
-              <div className="text-sm text-amber-300 font-semibold">A team round is open</div>
-              <div className="text-[11px] text-slate-400 mt-0.5">Assign sections, monitor and compile it from the Order page.</div>
+            <div className="rounded-xl border border-amber-700/40 bg-amber-900/20 p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-sm text-amber-300 font-semibold">Team round open</div>
+                  <div className="text-[11px] text-slate-400 mt-0.5">Started {String(round.createdAt || "").slice(0, 16).replace("T", " ")}{round.createdByName ? ` by ${round.createdByName}` : ""}</div>
+                </div>
+                <button onClick={async () => { if (!window.confirm("Cancel this round? Entered quantities are discarded.")) return; try { await closeOrderRound(round.id, { status: "cancelled" }); setRound(null); } catch (ev) { setErr(ev.message); } }}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-900/40 text-rose-300 border border-rose-800">Cancel round</button>
+              </div>
+              {(() => {
+                const basis = prefs.roundDefaults?.basis || "category";
+                const sections = basis === "location" ? locations : itemCategories;
+                const asgBySection = {}; (round.assignments || []).forEach(x => { asgBySection[x.section] = x; });
+                const linesBySection = {};
+                (round.lines || []).forEach(l => {
+                  const it = items.find(x => x.id === (l.itemId || l.item_id));
+                  const sec = basis === "location" ? String(it?.location || "").split(",")[0].trim() : (it?.category || "");
+                  linesBySection[sec] = (linesBySection[sec] || 0) + 1;
+                });
+                const setAsg = async (section, userId) => {
+                  const next = sections.map(sec => {
+                    const cur = sec === section ? { userId } : { userId: asgBySection[sec]?.userId };
+                    const m = storeMembers.find(x => x.id === cur.userId);
+                    return { section: sec, userId: cur.userId || null, userName: m ? `${m.firstName} ${m.lastName}` : "" };
+                  });
+                  try {
+                    await saveOrderRoundAssignments(round.id, next, basis);
+                    setRound(await fetchOpenOrderRound(storeId));
+                  } catch (ev) { setErr(ev.message); }
+                };
+                return (
+                  <div className="space-y-1.5">
+                    <div className="text-[10px] uppercase tracking-wide text-slate-500">Assign sections ({basis})</div>
+                    {sections.map(sec => {
+                      const asg = asgBySection[sec];
+                      return (
+                        <div key={sec} className="flex items-center gap-2">
+                          <div className="text-xs text-white w-44 truncate">{sec}</div>
+                          <select value={asg?.userId || ""} onChange={ev => setAsg(sec, ev.target.value || null)} className={`${ec} flex-1`}>
+                            <option value="">— unassigned —</option>
+                            {storeMembers.map(m2 => <option key={m2.id} value={m2.id}>{m2.firstName} {m2.lastName}</option>)}
+                          </select>
+                          <div className="text-[10px] w-20 text-right" style={{ color: asg?.done ? "#5C9442" : "#8896A8" }}>
+                            {asg?.done ? "\u2713 done" : `${linesBySection[sec] || 0} entered`}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    <div className="text-[11px] text-slate-500 pt-1">Staff enter quantities on the Order page; compile the finished round into an order there ("Load compiled list into cart").</div>
+                  </div>
+                );
+              })()}
             </div>
           ) : (
             <button disabled={busy} onClick={async () => { setBusy(true); try { await createOrderRound(storeId, { id: currentUser?.id, name: currentUser?.name }); setRound(await fetchOpenOrderRound(storeId)); } catch (e) { setErr(e.message); } setBusy(false); }}
