@@ -14415,7 +14415,7 @@ function StockDetailModal({ storeId, storeName, item, usage, usageDays, cleanNam
   );
 }
 
-function DistOrderPortalView({ currentUser, onNavigate }) {
+function DistOrderPortalView({ currentUser, onNavigate, storeIdHint }) {
   const [customers, setCustomers] = useState([]);
   const [customerId, setCustomerId] = useState("");
   const [catalogue, setCatalogue] = useState([]);
@@ -14444,7 +14444,11 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   const [consumption, setConsumption] = useState(null); // { byDist, days } from recipe-based usage
 
 
-  const storeIds = currentUser?.storeIds || [];
+  // Staff logins often carry no store_ids (their store lives on the ops-team
+  // profile) — without a store, supplier assignments and tags can't load and
+  // every vendor catalogue looks empty. The shell passes the profile store as
+  // a hint; the login's own stores win when present.
+  const storeIds = (currentUser?.storeIds?.length ? currentUser.storeIds : (storeIdHint ? [storeIdHint] : []));
   // The store whose sales history to use = the SELECTED customer's store (each
   // distribution customer is linked to one store). Falls back to the user's
   // first store. This is what item_day_aggregates.store_id matches.
@@ -14678,7 +14682,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
       if (ia === -1) return 1; if (ib === -1) return -1; return ia - ib;
     });
     return ["All", ...ranked];
-  }, [catalogue, displayCfg, activeDept, supplier]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [catalogue, displayCfg, activeDept, supplier, supplierOverrides]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Active (visible) collections, ordered by config, constrained to department.
   const activeCollections = useMemo(() => {
@@ -14712,7 +14716,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
       if (!matchesTags(i)) return false;
       return inFilter && (!q || `${i.name} ${i.sku} ${i.category}`.toLowerCase().includes(q));
     });
-  }, [catalogue, cat, search, activeDept, tagFilters, supplier]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [catalogue, cat, search, activeDept, tagFilters, supplier, supplierOverrides]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Distinct values available for each tag (from the catalogue) — powers the
   // filter panel's checkboxes.
@@ -14764,7 +14768,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
       location:  countFor("location",  x => x.location),
       category:  countFor("category",  x => x.tagCategory),
     };
-  }, [catalogue, tagFilters, activeDept, supplier]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [catalogue, tagFilters, activeDept, supplier, supplierOverrides]); // eslint-disable-line react-hooks/exhaustive-deps
 
 
   // When browsing a whole department ("All" collections), group the visible
@@ -22501,7 +22505,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
             <MyLoansView currentUser={currentUser} opsTeam={opsTeam}/>
           )}
           {activeView === "order-supplies" && (
-            <DistOrderPortalView currentUser={currentUser} onNavigate={() => setActiveView("ops-tasks")} />
+            <DistOrderPortalView currentUser={currentUser} storeIdHint={(myOpsMember?.storeIds && myOpsMember.storeIds[0]) || myOpsMember?.primaryStoreId || myOpsMember?.storeId || null} onNavigate={() => setActiveView("ops-tasks")} />
           )}
           {activeView === "my-payslips" && (
             <div className="max-w-xl">
