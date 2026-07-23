@@ -15056,7 +15056,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
       {supplier === null && (
         <div className="absolute inset-0 z-30 overflow-y-auto" style={{ backgroundColor: "#F4E9DD" }}>
           <div className="max-w-lg mx-auto p-5 pt-10 space-y-4">
-            {customers.length > 1 && (
+            {customers.length >= 1 && (
               <div>
                 <div className="text-[10px] uppercase tracking-wide font-semibold mb-1" style={{ color: "#9A8770" }}>Ordering for</div>
                 <select value={customerId} onChange={ev => { setCustomerId(ev.target.value); setCart({}); setPickSel([]); }}
@@ -15087,7 +15087,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
               );
             })}
             <div className="text-[10px] text-center" style={{ color: "#C9B99F" }}>
-              b23c · store {activeStoreId ? String(activeStoreId).slice(-14) : "NONE"} · {Object.keys(supplierOverrides || {}).length} supplier assignments loaded
+              b23d · store {activeStoreId ? String(activeStoreId).slice(-14) : "NONE"} · {storeIds.length} store-ids · {customers.length} customers · {Object.keys(supplierOverrides || {}).length} assignments
             </div>
             <button disabled={!pickSel.length} onClick={() => setSupplier(pickSel)}
               className="w-full py-3 rounded-2xl text-sm font-bold"
@@ -59537,7 +59537,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: STAFFSTORE+DBG 2026-07-23c"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: STORESEL 2026-07-23d"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
