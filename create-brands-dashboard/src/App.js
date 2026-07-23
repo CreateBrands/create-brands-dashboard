@@ -13172,6 +13172,7 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
     ...(prefs.locations || []),
     ...Object.values(tags).flatMap(t => String(t.location || "").split(",")).map(x => x.trim()).filter(Boolean),
   ])).sort(), [tags, prefs.locations]);
+  const itemCategories = useMemo(() => Array.from(new Set(items.map(i => i.category).filter(Boolean))).sort(), [items]);
   const roundBasis = prefs.roundDefaults?.basis || "category";
   const roundSections = useMemo(() => (roundBasis === "location" ? locations : itemCategories), [roundBasis, locations, itemCategories]);
   const defaultAsg = prefs.roundDefaults?.assignments || {};   // { section: memberId }
@@ -13203,7 +13204,6 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
   };
   const vendorName = (id) => { const v = vendors.find(x => x.id === id); return v ? (v.displayName || v.companyName) : id; };
   const storeMembers = useMemo(() => (opsTeam || []).filter(m => !m.archivedAt && ((m.storeIds || []).includes(storeId) || m.primaryStoreId === storeId || m.storeId === storeId)), [opsTeam, storeId]);
-  const itemCategories = useMemo(() => Array.from(new Set(items.map(i => i.category).filter(Boolean))).sort(), [items]);
   const shown = useMemo(() => {
     const ql = q.trim().toLowerCase();
     return items
