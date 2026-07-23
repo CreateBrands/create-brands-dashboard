@@ -13125,6 +13125,8 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
   const [items, setItems] = useState([]);
   const [vendors, setVendors] = useState([]);
   const [tags, setTags] = useState({});
+  const [overrides, setOverrides] = useState({});   // itemId -> comma list of vendor ids (store_item_suppliers)
+  const [supOpen, setSupOpen] = useState(null);     // itemId whose supplier popover is open
   const [prefs, setPrefs] = useState({ approvers: [], roundDefaults: {} });
   const [round, setRound] = useState(null);
   const [q, setQ] = useState("");
@@ -13137,7 +13139,9 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
       try {
         const [its, vs] = await Promise.all([fetchDistItems(), fetchDistContacts({ kind: "vendor" })]);
         setItems((its || []).filter(x => x.active !== false));
-        setVendors((vs || []).filter(v => v.active !== false));
+        // Same privacy gate as the store order page: only vendors flagged
+        // visible-to-stores appear here; the rest of the supplier book stays HQ-side.
+        setVendors((vs || []).filter(v => v.active !== false && v.visibleToStores));
       } catch (e) { setErr(e.message); }
     })();
   }, []);
@@ -13145,12 +13149,13 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
     if (!storeId) return;
     (async () => {
       try {
-        const [t, p, r] = await Promise.all([
+        const [t, p, r, ov] = await Promise.all([
           fetchStoreItemTags(storeId),
           fetchStoreOrderPrefs(storeId),
           fetchOpenOrderRound(storeId).catch(() => null),
+          fetchStoreSupplierOverrides(storeId).catch(() => ({})),
         ]);
-        setTags(t || {}); setPrefs(p); setRound(r);
+        setTags(t || {}); setPrefs(p); setRound(r); setOverrides(ov || {});
       } catch (e) { setErr(e.message); }
     })();
   }, [storeId]);
@@ -13159,7 +13164,7 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
     setTags(t => ({ ...t, [itemId]: { ...(t[itemId] || {}), [field]: value } }));
     try { await setStoreItemTag(storeId, itemId, field, value); } catch (e) { setErr(e.message); }
   };
-  const locations = useMemo(() => Array.from(new Set(Object.values(tags).map(t => (t.location || "").trim()).filter(Boolean))).sort(), [tags]);
+  const locations = useMemo(() => Array.from(new Set(Object.values(tags).flatMap(t => String(t.location || "").split(",")).map(x => x.trim()).filter(Boolean))).sort(), [tags]);
   const vendorName = (id) => { const v = vendors.find(x => x.id === id); return v ? (v.displayName || v.companyName) : id; };
   const storeMembers = useMemo(() => (opsTeam || []).filter(m => !m.archivedAt && ((m.storeIds || []).includes(storeId) || m.primaryStoreId === storeId || m.storeId === storeId)), [opsTeam, storeId]);
   const shown = useMemo(() => {
@@ -13195,26 +13200,59 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
               return (
                 <div key={i.id} className="grid grid-cols-12 gap-1 px-3 py-1.5 border-t border-slate-800/60 items-center">
                   <div className="col-span-5 text-xs text-white truncate">{i.name}<span className="text-slate-600"> · {i.category}</span></div>
-                  <div className="col-span-3">
-                    <select value={t.supplier || i.fulfilledBy || ""} onChange={e => setTag(i.id, "supplier", e.target.value)} className={`${ec} w-full`}>
-                      <option value="">Default — Distribution</option>
-                      {vendors.map(v => <option key={v.id} value={v.id}>{vendorName(v.id)}</option>)}
-                    </select>
+                  <div className="col-span-3 relative">
+                    {(() => {
+                      const sel = String(overrides[i.id] ?? i.fulfilledBy ?? "").split(",").map(x => x.trim()).filter(Boolean);
+                      const label = sel.length === 0 ? "Default — Distribution" : sel.length === 1 ? vendorName(sel[0]) : `${sel.length} suppliers`;
+                      return (
+                        <>
+                          <button onClick={() => setSupOpen(supOpen === i.id ? null : i.id)} className={`${ec} w-full text-left truncate`}>{label} \u25be</button>
+                          {supOpen === i.id && (
+                            <div className="absolute z-20 mt-1 w-64 max-h-64 overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 p-2 space-y-1 shadow-xl">
+                              {vendors.map(v => {
+                                const on = sel.includes(v.id);
+                                return (
+                                  <label key={v.id} className="flex items-center gap-2 text-xs text-white px-1 py-0.5">
+                                    <input type="checkbox" checked={on} onChange={async () => {
+                                      const next = on ? sel.filter(x => x !== v.id) : [...sel, v.id];
+                                      const joined = next.join(",");
+                                      setOverrides(o => ({ ...o, [i.id]: joined }));
+                                      try { await setStoreSupplierOverride(storeId, i.id, joined || undefined); } catch (ev) { setErr(ev.message); }
+                                    }} />
+                                    {vendorName(v.id)}
+                                  </label>
+                                );
+                              })}
+                              <div className="text-[10px] text-slate-500 px-1 pt-1 border-t border-slate-800">None ticked = Default (Distribution)</div>
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
                   <div className="col-span-2">
                     <input list="so-locations" value={t.location || ""} onChange={e => setTag(i.id, "location", e.target.value)} placeholder="—" className={`${ec} w-full`} />
                   </div>
-                  <div className="col-span-2">
-                    <select value={t.tagFrequency || ""} onChange={e => setTag(i.id, "tagFrequency", e.target.value)} className={`${ec} w-full`}>
-                      <option value="">—</option><option value="daily">Daily</option><option value="weekly">Weekly</option>
-                    </select>
+                  <div className="col-span-2 flex items-center gap-2">
+                    {["daily", "weekly"].map(f => {
+                      const list = String(t.tagFrequency || "").split(",").map(x => x.trim()).filter(Boolean);
+                      const on = list.includes(f);
+                      return (
+                        <label key={f} className="flex items-center gap-1 text-[11px] text-slate-300">
+                          <input type="checkbox" checked={on} onChange={() => {
+                            const next = on ? list.filter(x => x !== f) : [...list, f];
+                            setTag(i.id, "tagFrequency", next.join(","));
+                          }} />{f === "daily" ? "Daily" : "Weekly"}
+                        </label>
+                      );
+                    })}
                   </div>
                 </div>
               );
             })}
           </div>
           <datalist id="so-locations">{locations.map(l => <option key={l} value={l} />)}</datalist>
-          <div className="text-[11px] text-slate-500">Type a new location to add it — it joins the suggestions once used. Changes save instantly, per store. Showing {shown.length} of {items.length}.</div>
+          <div className="text-[11px] text-slate-500">Locations: type to add new ones; comma-separate for multiple (e.g. "Freezer, Front counter"). Suppliers and frequency allow multiple too. Changes save instantly, per store. Showing {shown.length} of {items.length}.</div>
         </div>
       )}
 
@@ -14300,7 +14338,8 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   const vendorNameOf = (id) => { const v = portalVendors.find(x => x.id === id); return v ? (v.displayName || v.name || "Supplier") : "Supplier"; };
   // Who fulfils this item FOR THIS STORE: store override wins, else the item's
   // global setting; null/undefined = Distribution.
-  const resolveSupplier = (i) => Object.prototype.hasOwnProperty.call(supplierOverrides, i.id) ? supplierOverrides[i.id] : (i.fulfilledBy || null);
+  const resolveSupplierList = (i) => String((Object.prototype.hasOwnProperty.call(supplierOverrides, i.id) ? supplierOverrides[i.id] : i.fulfilledBy) || "").split(",").map(x => x.trim()).filter(Boolean);
+  const resolveSupplier = (i) => resolveSupplierList(i)[0] || null;
   const myRoundMemberId = currentUser?.opsTeamMemberId || currentUser?.id;
   const myRoundAsg = (round?.assignments || []).filter(x => x.userId === myRoundMemberId || x.userId === currentUser?.id);
   const staffRoundMode = !isManager && !!round && myRoundAsg.length > 0;
@@ -14442,7 +14481,7 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
   const deptCatSet = useMemo(() => activeDept ? new Set((activeDept.categories || []).map(c => c.toLowerCase())) : null, [activeDept]);
   const deptCollSet = useMemo(() => activeDept ? new Set(activeDept.collectionIds || []) : null, [activeDept]);
   // Does an item belong to the active department (via category OR collection)?
-  const supplierMatch = (i) => !supplier || supplier.some(sp => sp.id === "dist" ? !resolveSupplier(i) : resolveSupplier(i) === sp.id);
+  const supplierMatch = (i) => { if (!supplier) return true; const list = resolveSupplierList(i); return supplier.some(sp => sp.id === "dist" ? list.length === 0 : list.includes(sp.id)); };
   const itemInDept = (i) => {
     if (!supplierMatch(i)) return false;   // supplier-first: only their items show
     if (!activeDept) return true;
@@ -14500,11 +14539,12 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
     // must match at least one selected value WITHIN each active tag (OR within a
     // tag), and satisfy ALL active tags (AND across tags).
     const activeTag = (arr) => Array.isArray(arr) && arr.length > 0;
+    const anyVal = (sel, raw) => String(raw || "").split(",").map(x => x.trim()).filter(Boolean).some(v => sel.includes(v));
     const matchesTags = (i) => {
-      if (activeTag(tagFilters.supplier)  && !tagFilters.supplier.includes((i.supplier || "").trim()))     return false;
-      if (activeTag(tagFilters.frequency) && !tagFilters.frequency.includes((i.tagFrequency || "").trim())) return false;
-      if (activeTag(tagFilters.location)  && !tagFilters.location.includes((i.location || "").trim()))      return false;
-      if (activeTag(tagFilters.category)  && !tagFilters.category.includes((i.tagCategory || "").trim()))   return false;
+      if (activeTag(tagFilters.supplier)  && !anyVal(tagFilters.supplier, i.supplier))      return false;
+      if (activeTag(tagFilters.frequency) && !anyVal(tagFilters.frequency, i.tagFrequency)) return false;
+      if (activeTag(tagFilters.location)  && !anyVal(tagFilters.location, i.location))      return false;
+      if (activeTag(tagFilters.category)  && !anyVal(tagFilters.category, i.tagCategory))   return false;
       return true;
     };
     return catalogue.filter(i => {
@@ -14548,7 +14588,8 @@ function DistOrderPortalView({ currentUser, onNavigate }) {
       const chk = (tag, get) => {
         if (tag === exceptTag) return true;
         const sel = tagFilters[tag] || [];
-        return sel.length === 0 || sel.includes((get(i) || "").trim());
+        if (sel.length === 0) return true;
+        return String(get(i) || "").split(",").map(x => x.trim()).filter(Boolean).some(v => sel.includes(v));
       };
       return chk("supplier", x => x.supplier) && chk("frequency", x => x.tagFrequency)
         && chk("location", x => x.location) && chk("category", x => x.tagCategory);
