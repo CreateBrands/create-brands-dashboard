@@ -14557,6 +14557,22 @@ export async function detachSoLines({ soId, lineIds, label, user }) {
   if (picks && picks.length) throw new Error("This order has already been picked — delete the pick first.");
   const { data: allLines } = await supabase.from("dist_sales_order_lines").select("id").eq("so_id", soId);
   if ((allLines || []).length <= lineIds.length) throw new Error("That would remove every line — cancel the order instead.");
+  // GUARD (added after the 2026-07-24 incident): detaching deletes the lines,
+  // and the drivers' fresh board shops FROM those lines. Detaching before the
+  // shopping is done erases the drivers' list. Require every selected line to
+  // be marked bought (or the item non-fresh) before it can leave the order.
+  const { data: selLines } = await supabase.from("dist_sales_order_lines").select("id, item_id").in("id", lineIds);
+  const selItemIds = (selLines || []).map(l => l.item_id);
+  if (selItemIds.length) {
+    const { data: freshItems } = await supabase.from("dist_items").select("id").in("id", selItemIds).eq("item_type", "fresh");
+    const freshIds = new Set((freshItems || []).map(x => x.id));
+    if (freshIds.size) {
+      const { data: checks } = await supabase.from("dist_fulfil_checks").select("item_id").eq("so_id", soId).in("item_id", [...freshIds]);
+      const done = new Set((checks || []).map(c => c.item_id));
+      const notBought = [...freshIds].filter(x => !done.has(x));
+      if (notBought.length) throw new Error(`${notBought.length} fresh line${notBought.length !== 1 ? "s haven't" : " hasn't"} been bought yet — the drivers still need them on the fresh board. Mark them bought first (or detach after the shopping run).`);
+    }
+  }
   const { error } = await supabase.from("dist_sales_order_lines").delete().in("id", lineIds).eq("so_id", soId);
   if (error) throw error;
   const stamp = `Detached (invoiced separately): ${label} — ${lineIds.length} line${lineIds.length !== 1 ? "s" : ""} removed by ${user?.name || "Dist"} ${new Date().toISOString().slice(0, 10)}`;
