@@ -14576,6 +14576,13 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
   const [apprBusy, setApprBusy] = useState(false);
   const [mergeSel, setMergeSel] = useState([]);        // soIds ticked for merge
   const reloadApprovals = () => fetchPendingApprovalSos(customerId).then(setPendingApprovals).catch(() => {});
+  // The store's chosen supplier(s) are recorded in the order note as
+  // "Suppliers: A, B". Pull them out to show as their own labelled line.
+  const supplierOf = (note) => {
+    const m = /Suppliers?:\s*([^·]+)/i.exec(note || "");
+    return m ? m[1].trim() : "";
+  };
+  const noteWithoutSuppliers = (note) => (note || "").split("·").map(s => s.trim()).filter(s => s && !/^suppliers?:/i.test(s)).join(" · ");
   const openApproval = async (p) => {
     if (openAppr === p.id) { setOpenAppr(null); return; }
     setOpenAppr(p.id); setApprBusy(true);
@@ -15240,7 +15247,8 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
                         className="rounded flex-shrink-0" />
                       <button onClick={() => openApproval(p)} className="min-w-0 flex-1 text-left">
                         <div className="text-xs font-semibold truncate" style={{ color: "#3A2E26" }}>{p.soNumber} · {p.lineCount} item{p.lineCount !== 1 ? "s" : ""} <span style={{ color: "#C9945A" }}>{openAppr === p.id ? "▾" : "▸ open"}</span></div>
-                        <div className="text-[10px] truncate" style={{ color: "#9A8770" }}>{p.orderDate}{p.note ? ` · ${p.note}` : ""}</div>
+                        <div className="text-[10px] font-semibold truncate" style={{ color: "#844429" }}>→ {supplierOf(p.note) || "Distribution"}</div>
+                        <div className="text-[10px] truncate" style={{ color: "#9A8770" }}>{p.orderDate}{noteWithoutSuppliers(p.note) ? ` · ${noteWithoutSuppliers(p.note)}` : ""}</div>
                       </button>
                       <div className="flex gap-1.5 flex-shrink-0">
                         <button onClick={async () => { try { await setDistSalesOrderStatus(p.id, "cancelled"); setPendingApprovals(x => x.filter(y => y.id !== p.id)); } catch (ev) { alert(ev.message); } }}
@@ -59946,7 +59954,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: APPREDIT 2026-07-24h"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: APPRSUPP 2026-07-24i"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
