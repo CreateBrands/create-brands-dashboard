@@ -10713,6 +10713,7 @@ export async function upsertDistItem(i) {
     purchase_rate: i.purchaseRate != null && i.purchaseRate !== "" ? Number(i.purchaseRate) : null,
     income_account_code: i.incomeAccountCode || null, expense_account_code: i.expenseAccountCode || null,
     ck_product_id: i.ckProductId || null,
+    hidden_from_stores: !!i.hiddenFromStores,
     item_type: i.itemType || (i.ckProductId ? "ck" : "warehouse"),
     fulfilled_by: i.fulfilledBy || null,
     location: i.location || null, supplier: i.supplier || null,

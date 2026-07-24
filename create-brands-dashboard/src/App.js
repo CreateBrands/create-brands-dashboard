@@ -16556,6 +16556,13 @@ function DistItemsView({ currentUser }) {
                 <input value={editItem.sku || ""} onChange={e => setEditItem({ ...editItem, sku: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white font-mono"/></label>
               <label className="text-xs text-slate-400">Category
                 <input value={editItem.category || ""} onChange={e => setEditItem({ ...editItem, category: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
+              <label className="col-span-2 flex items-center gap-2 mt-1 px-3 py-2 rounded-lg bg-slate-800/60 border border-slate-700 cursor-pointer">
+                <input type="checkbox" checked={!!editItem.hiddenFromStores}
+                  onChange={e => setEditItem({ ...editItem, hiddenFromStores: e.target.checked })} className="rounded"/>
+                <span className="text-xs text-white">Hide from ordering pages
+                  <span className="block text-[10px] text-slate-500">Item stays in Distribution (stock, invoicing) but won't appear on any store ordering page.</span>
+                </span>
+              </label>
               <label className="text-xs text-slate-400">Pack count
                 <input type="number" value={editItem.packCount ?? 1} onChange={e => setEditItem({ ...editItem, packCount: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
               <label className="text-xs text-slate-400">Pack size
@@ -59954,7 +59961,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: APPRSUPP 2026-07-24i"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: ITEMHIDE 2026-07-24j"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
