@@ -14488,10 +14488,13 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
   const [pickSel, setPickSel] = useState([]);       // picker draft selection
   const [roundBarOpen, setRoundBarOpen] = useState(false);   // team-round strip collapsed by default
   const [menuOpen, setMenuOpen] = useState(false);           // ONE-BUTTON UI: all chrome lives in this sheet
+  // Anything below manager is a staff viewer: exact-matching "staff" missed
+  // role variants and View-as sessions, leaking prices and order history.
+  const isStaffViewer = !["owner", "hq_staff", "manager"].includes(String(currentUser?.role || "").toLowerCase());
+  const needsApproval = isStaffViewer;   // staff orders await a manager
   // Staff see quantities, never prices; managers see both.
-  const priceFmt = (v) => ((currentUser?.role || "") === "staff" ? "" : gbp(v));
+  const priceFmt = (v) => (isStaffViewer ? "" : gbp(v));
   const togglePick = (opt) => setPickSel(sel => sel.some(x => x.id === opt.id) ? sel.filter(x => x.id !== opt.id) : [...sel, opt]);
-  const needsApproval = (currentUser?.role || "") === "staff";   // staff orders await a manager
   const [pendingApprovals, setPendingApprovals] = useState([]);
   const [approverIds, setApproverIds] = useState([]);
   const canApprove = !needsApproval || approverIds.includes(currentUser?.opsTeamMemberId) || approverIds.includes(currentUser?.id);             // vendorIds opted in for this checkout
@@ -14990,7 +14993,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
       <div className="max-w-md mx-auto text-center py-16 space-y-4">
         <div className="w-16 h-16 rounded-full bg-emerald-500/15 border border-emerald-500/40 flex items-center justify-center mx-auto"><Check size={30} className="text-emerald-400"/></div>
         <h2 className="text-2xl font-bold text-white">{placed.id && directs.length ? `${1+directs.length} orders placed` : "Order placed"}</h2>
-        <p className="text-sm text-slate-400">{placed.count} item{placed.count!==1?"s":""} total{placed.id && (currentUser?.role || "") !== "staff" ? ` · ${gbp(placed.total)} excl. VAT via Distribution` : ""}.</p>
+        <p className="text-sm text-slate-400">{placed.count} item{placed.count!==1?"s":""} total{placed.id && !isStaffViewer ? ` · ${gbp(placed.total)} excl. VAT via Distribution` : ""}.</p>
         {placed.id && <div className="text-xs text-slate-500">Distribution will pick and deliver their part.</div>}
         {directs.map(d => (
           <div key={d.orderId} className="rounded-2xl border border-amber-600/40 bg-amber-950/10 p-4 text-left space-y-2">
@@ -15184,7 +15187,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
         </div>
       </div>
       {/* ── MY ORDERS entry point ── */}
-      {!loading && (currentUser?.role || "") !== "staff" && (
+      {!loading && !isStaffViewer && (
         <div className="flex-shrink-0 px-4 sm:px-6 py-1.5 flex justify-end" style={{ backgroundColor: "#FBF6EC" }}>
           <button onClick={() => setHistoryOpen(true)} className="px-3 py-1.5 rounded-xl text-xs font-bold" style={{ backgroundColor: "#F3EADA", color: "#844429", border: "1px solid #E8DCC6" }}>
             My orders{orderHistory.length ? ` (${orderHistory.length})` : ""}
@@ -15442,7 +15445,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
                 <div className="space-y-7">
                   {groupedVisible.map(g => (
                     <div key={g.id}>
-                      <div className="flex items-center gap-2 mb-3 sticky top-0 z-10 py-1" style={{ backgroundColor: "#F4E9DD" }}>
+                      <div className="flex items-center gap-2 mb-2 sticky top-0 z-10 py-2 -mx-4 sm:-mx-6 px-4 sm:px-6" style={{ backgroundColor: "#F4E9DD", boxShadow: "0 1px 0 #E8DCC6" }}>
                         <h3 className="text-base font-bold" style={{ color: "#3A2E26" }}>{g.name}</h3>
                         <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full" style={{ backgroundColor: "#FBF6EC", border: "1px solid #E8DCC6", color: "#9A8770" }}>{g.items.length}</span>
                         <div className="flex-1 h-px" style={{ backgroundColor: "#E8DCC6" }}/>
@@ -59582,7 +59585,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: ONEBUTTON 2026-07-23f"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: STAFFGATE 2026-07-23g"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
