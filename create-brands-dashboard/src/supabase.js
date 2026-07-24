@@ -784,6 +784,19 @@ export async function fetchInboxMessages() {
   return data.map(dbMsgToApp);
 }
 
+// Clear a whole conversation: deletes every message in the thread, for everyone.
+export async function deleteChatThread({ scope, id, myId, otherId }) {
+  let q = supabase.from("inbox_messages").delete();
+  if (scope === "store") q = q.eq("to_scope", "store").eq("to_store_id", id);
+  else if (scope === "group") q = q.eq("to_scope", "group").eq("to_group_id", id);
+  else if (scope === "location") q = q.eq("to_scope", "location").eq("to_brand_id", id);
+  else if (scope === "broadcast") q = q.eq("to_scope", "all_locations");
+  else if (scope === "dm") q = q.eq("to_scope", "individual").or(`and(from_id.eq.${myId},to_person_id.eq.${otherId}),and(from_id.eq.${otherId},to_person_id.eq.${myId})`);
+  else return;
+  const { error } = await q;
+  if (error) throw error;
+}
+
 // ── CHAT GROUPS (WhatsApp-style, manager-created) ──
 export async function fetchChatGroups() {
   const { data } = await supabase.from("chat_groups").select("*").order("created_at");

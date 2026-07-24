@@ -183,7 +183,7 @@ import {
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
-  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, fetchStoreOrderPrefs, saveStoreOrderPrefs, fetchChatGroups, createChatGroup, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
+  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, fetchStoreOrderPrefs, saveStoreOrderPrefs, fetchChatGroups, createChatGroup, updateChatGroup, deleteChatGroup, deleteChatThread, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
 } from "./supabase";
@@ -49007,6 +49007,59 @@ function avatarFor(name = "", color = "") {
 }
 
 // ── New Chat / Compose ────────────────────────────────────────────────────────
+function ManageChatGroupModal({ group, currentUser, opsTeam, onClose, onChanged, onDeleted }) {
+  const [name, setName] = useState(group.name);
+  const [sel, setSel] = useState(group.memberIds || []);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const myStoreIds = currentUser.storeIds || [];
+  const candidates = (opsTeam || []).filter(mm => !mm.archivedAt && (isHqOrAbove(currentUser.role) || (mm.storeIds || []).some(sid => myStoreIds.includes(sid)) || sel.includes(mm.id)));
+  const toggle = (id) => setSel(x => x.includes(id) ? x.filter(y => y !== id) : [...x, id]);
+  return (
+    <Modal title={`Manage — ${group.name}`} onClose={onClose}>
+      <div className="space-y-3">
+        <input value={name} onChange={e => setName(e.target.value)}
+          className="w-full px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-sm text-white" />
+        <div className="text-[11px] text-slate-500 uppercase font-semibold">Members ({sel.length})</div>
+        <div className="space-y-1 max-h-60 overflow-y-auto -mx-1 px-1">
+          {candidates.map(mm => (
+            <label key={mm.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-950 text-sm text-white cursor-pointer">
+              <input type="checkbox" checked={sel.includes(mm.id)} onChange={() => toggle(mm.id)} className="rounded" />
+              {mm.firstName} {mm.lastName} <span className="text-slate-500 text-xs">· {mm.role || ""}</span>
+            </label>
+          ))}
+        </div>
+        {err && <div className="text-xs text-rose-400">{err}</div>}
+        <div className="flex gap-2">
+          <button disabled={busy}
+            onClick={async () => {
+              if (!window.confirm(`Delete group "${group.name}" and its entire chat, for everyone?`)) return;
+              setBusy(true); setErr("");
+              try {
+                await deleteChatThread({ scope: "group", id: group.id });
+                await deleteChatGroup(group.id);
+                onDeleted?.();
+              } catch (e) { setErr(e.message); setBusy(false); }
+            }}
+            className="px-3 py-2.5 rounded-xl text-sm font-semibold bg-rose-950/60 border border-rose-900 text-rose-300">
+            Delete group
+          </button>
+          <button disabled={busy || !name.trim() || sel.length === 0}
+            onClick={async () => {
+              setBusy(true); setErr("");
+              try { await updateChatGroup(group.id, { name: name.trim(), memberIds: sel }); onChanged?.(); onClose(); }
+              catch (e) { setErr(e.message); }
+              setBusy(false);
+            }}
+            className="flex-1 py-2.5 rounded-xl text-sm font-bold bg-indigo-600 text-white disabled:opacity-50">
+            Save changes
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function CreateChatGroupModal({ currentUser, opsTeam, stores = [], onClose, onCreated }) {
   const [name, setName] = useState("");
   const [sel, setSel] = useState([]);
@@ -49466,6 +49519,7 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead,
 function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMarkRead, onReactMessage, onEditMessage, onDeleteMessage, stores = [] }) {
   const [chatGroups, setChatGroups] = useState([]);
   const [groupModal, setGroupModal] = useState(false);
+  const [manageGroup, setManageGroup] = useState(null);   // group object being managed
   useEffect(() => { fetchChatGroups().then(setChatGroups).catch(() => {}); }, []);
   const myOpsId0 = currentUser.opsTeamMemberId || currentUser.id;
   const myStores = (stores || []).filter(st => !st.archivedAt && ((currentUser.storeIds || []).includes(st.id) || isHqOrAbove(currentUser.role)));
@@ -49694,6 +49748,26 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
                 <div className="text-sm font-bold text-white">{activeThread.name}</div>
                 <div className="text-xs text-slate-500">{activeThread.sub}</div>
               </div>
+              {activeThread.type === "group" && (isHqOrAbove(currentUser.role) || currentUser.role === "manager" || chatGroups.find(g => g.id === activeThread.brandId)?.createdBy === currentUser.id) && (
+                <button onClick={() => setManageGroup(chatGroups.find(g => g.id === activeThread.brandId) || null)}
+                  title="Manage group" className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-slate-700 flex items-center justify-center flex-shrink-0">
+                  <Settings size={14} className="text-slate-300"/>
+                </button>
+              )}
+              {(isHqOrAbove(currentUser.role) || currentUser.role === "manager" || activeThread.type === "dm") && (
+                <button onClick={async () => {
+                  if (!window.confirm("Delete this whole chat for everyone? This cannot be undone.")) return;
+                  try {
+                    await deleteChatThread({
+                      scope: activeThread.type, id: activeThread.brandId,
+                      myId: currentUser.opsTeamMemberId || currentUser.id, otherId: activeThread.personId,
+                    });
+                    window.location.reload();
+                  } catch (e2) { alert(e2.message); }
+                }} title="Delete chat" className="w-8 h-8 rounded-lg bg-slate-800 hover:bg-rose-800 flex items-center justify-center flex-shrink-0">
+                  <Trash2 size={14} className="text-slate-300"/>
+                </button>
+              )}
             </div>
             {/* Messages + input */}
             <ChatThread
@@ -49719,6 +49793,14 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
           onClose={() => setNewChat(false)}
           myStores={myStores} myChatGroups={myChatGroups}
           onNewGroup={() => { setNewChat(false); setGroupModal(true); }}
+        />
+      )}
+      {manageGroup && (
+        <ManageChatGroupModal
+          group={manageGroup} currentUser={currentUser} opsTeam={opsTeam}
+          onClose={() => setManageGroup(null)}
+          onChanged={async () => { try { setChatGroups(await fetchChatGroups()); } catch {} }}
+          onDeleted={async () => { setManageGroup(null); setActiveThread(null); try { setChatGroups(await fetchChatGroups()); } catch {} }}
         />
       )}
       {groupModal && (
@@ -59702,7 +59784,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: CHATV2 2026-07-23i"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: CHATMGMT 2026-07-23j"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
