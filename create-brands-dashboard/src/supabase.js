@@ -769,13 +769,42 @@ function dbTicketToHelpdesk(t) {
 // ── INBOX MESSAGES ────────────────────────────────────────────────────────────
 
 export async function fetchInboxMessages() {
+  const cutoff = new Date(Date.now() - 48 * 3600 * 1000).toISOString();
+  // Retention: the chat shows a rolling 48-hour window; older rows are purged.
+  // Fire-and-forget delete here is best-effort — the pg_cron job in
+  // add_chat_v2.sql guarantees the wipe even if nobody opens the app.
+  supabase.from("inbox_messages").delete().lt("created_at", cutoff).then(() => {}, () => {});
   const { data, error } = await supabase
     .from("inbox_messages")
     .select("*")
+    .gte("created_at", cutoff)
     .order("created_at", { ascending: false })
-    .limit(300);
+    .limit(500);
   if (error) throw error;
   return data.map(dbMsgToApp);
+}
+
+// ── CHAT GROUPS (WhatsApp-style, manager-created) ──
+export async function fetchChatGroups() {
+  const { data } = await supabase.from("chat_groups").select("*").order("created_at");
+  return (data || []).map(g => ({ id: g.id, name: g.name, memberIds: g.member_ids || [], createdBy: g.created_by, createdByName: g.created_by_name, storeId: g.store_id || null }));
+}
+export async function createChatGroup({ name, memberIds, createdBy, createdByName, storeId }) {
+  const id = `cg-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const { error } = await supabase.from("chat_groups").insert({ id, name, member_ids: memberIds || [], created_by: createdBy || null, created_by_name: createdByName || null, store_id: storeId || null });
+  if (error) throw error;
+  return id;
+}
+export async function updateChatGroup(id, { name, memberIds }) {
+  const row = {};
+  if (name !== undefined) row.name = name;
+  if (memberIds !== undefined) row.member_ids = memberIds;
+  const { error } = await supabase.from("chat_groups").update(row).eq("id", id);
+  if (error) throw error;
+}
+export async function deleteChatGroup(id) {
+  const { error } = await supabase.from("chat_groups").delete().eq("id", id);
+  if (error) throw error;
 }
 
 export async function insertInboxMessage(msg) {
@@ -827,6 +856,7 @@ function appMsgToDb(m) {
     id: m.id, brand_id: m.brandId || null,
     from_id: m.fromId || "", from_name: m.fromName || "", from_role: m.fromRole || "",
     to_scope: m.toScope || "location", to_brand_id: m.toBrandId || null,
+    to_store_id: m.toStoreId || null, to_group_id: m.toGroupId || null,
     to_person_id: m.toPersonId || null, to_person_name: m.toPersonName || null,
     subject: m.subject || "", body: m.body || "", read_by: m.readBy || [],
     attachments: m.attachments || null,
@@ -837,6 +867,7 @@ function dbMsgToApp(m) {
     id: m.id, brandId: m.brand_id,
     fromId: m.from_id, fromName: m.from_name, fromRole: m.from_role,
     toScope: m.to_scope, toBrandId: m.to_brand_id,
+    toStoreId: m.to_store_id || null, toGroupId: m.to_group_id || null,
     toPersonId: m.to_person_id, toPersonName: m.to_person_name,
     subject: m.subject, body: m.body, readBy: m.read_by || [],
     attachments: m.attachments || null,

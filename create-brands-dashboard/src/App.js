@@ -183,7 +183,7 @@ import {
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
-  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, fetchStoreOrderPrefs, saveStoreOrderPrefs, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
+  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, fetchStoreOrderPrefs, saveStoreOrderPrefs, fetchChatGroups, createChatGroup, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
 } from "./supabase";
@@ -22145,6 +22145,8 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
       if (m.fromId === myId || m.fromId === myOpsId) return false;
       if (m.toScope === "all_locations") return true;
       if (m.toScope === "location" && currentUser.brandIds.includes(m.toBrandId)) return true;
+      if (m.toScope === "store" && ((currentUser.storeIds || []).includes(m.toStoreId) || (myOpsMember?.storeIds || []).includes(m.toStoreId))) return true;
+      if (m.toScope === "group") return true; // membership enforced in the chat view itself
       if (m.toScope === "individual" && (m.toPersonId === myId || m.toPersonId === myOpsId)) return true;
       return false;
     }).filter(m => !m.readBy?.includes(myId)).length;
@@ -48988,6 +48990,8 @@ function threadKey(msg, myId, myOpsId) {
     return `dm:${ids[0]}:${ids[1]}`;
   }
   if (msg.toScope === "location") return `loc:${msg.toBrandId}`;
+  if (msg.toScope === "store") return `store:${msg.toStoreId}`;
+  if (msg.toScope === "group") return `grp:${msg.toGroupId}`;
   return "broadcast:all";
 }
 
@@ -49003,7 +49007,48 @@ function avatarFor(name = "", color = "") {
 }
 
 // ── New Chat / Compose ────────────────────────────────────────────────────────
-function NewChatModal({ currentUser, brands, opsTeam, users, onStart, onClose }) {
+function CreateChatGroupModal({ currentUser, opsTeam, stores = [], onClose, onCreated }) {
+  const [name, setName] = useState("");
+  const [sel, setSel] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const myStoreIds = currentUser.storeIds || [];
+  const candidates = (opsTeam || []).filter(mm => !mm.archivedAt && (isHqOrAbove(currentUser.role) || (mm.storeIds || []).some(sid => myStoreIds.includes(sid))));
+  const toggle = (id) => setSel(x => x.includes(id) ? x.filter(y => y !== id) : [...x, id]);
+  return (
+    <Modal title="New Group" onClose={onClose}>
+      <div className="space-y-3">
+        <input value={name} onChange={e => setName(e.target.value)} placeholder="Group name (e.g. London Rd Morning Team)" autoFocus
+          className="w-full px-3 py-2 rounded-xl bg-slate-800 border border-slate-700 text-sm text-white" />
+        <div className="text-[11px] text-slate-500 uppercase font-semibold">Members ({sel.length} picked)</div>
+        <div className="space-y-1 max-h-64 overflow-y-auto -mx-1 px-1">
+          {candidates.map(mm => (
+            <label key={mm.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-950 text-sm text-white cursor-pointer">
+              <input type="checkbox" checked={sel.includes(mm.id)} onChange={() => toggle(mm.id)} className="rounded" />
+              {mm.firstName} {mm.lastName} <span className="text-slate-500 text-xs">· {mm.role || ""}</span>
+            </label>
+          ))}
+          {candidates.length === 0 && <div className="text-xs text-slate-500 text-center py-4">No team members found.</div>}
+        </div>
+        {err && <div className="text-xs text-rose-400">{err}</div>}
+        <button disabled={busy || !name.trim() || sel.length === 0}
+          onClick={async () => {
+            setBusy(true); setErr("");
+            try {
+              await createChatGroup({ name: name.trim(), memberIds: [...new Set([...sel, currentUser.opsTeamMemberId || currentUser.id])], createdBy: currentUser.id, createdByName: currentUser.name, storeId: myStoreIds[0] || null });
+              onCreated?.();
+            } catch (e) { setErr(e.message); }
+            setBusy(false);
+          }}
+          className="w-full py-2.5 rounded-xl text-sm font-bold bg-indigo-600 text-white disabled:opacity-50">
+          Create group
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function NewChatModal({ currentUser, brands, opsTeam, users, onStart, onClose, myStores = [], myChatGroups = [], onNewGroup }) {
   const [search, setSearch] = useState("");
   const isOwner   = isHqOrAbove(currentUser.role);
   const myBrands  = brands.filter(b => currentUser.brandIds.includes(b.id));
@@ -49038,7 +49083,9 @@ function NewChatModal({ currentUser, brands, opsTeam, users, onStart, onClose })
 
   // Groups (channels)
   const groups = [
-    ...myBrands.map(b => ({ id: `loc:${b.id}`, name: b.name, sub: "Whole location", type: "location", color: b.color })),
+    ...myStores.map(st => ({ id: `store:${st.id}`, name: st.name, sub: "This store only", type: "store", color: "#5C9442" })),
+    ...myChatGroups.map(g => ({ id: `grp:${g.id}`, name: g.name, sub: `Group · ${(g.memberIds || []).length} member${(g.memberIds || []).length !== 1 ? "s" : ""}`, type: "group", color: "#7C5CBF" })),
+    ...myBrands.map(b => ({ id: `loc:${b.id}`, name: b.name, sub: "Whole brand (all its stores)", type: "location", color: b.color })),
     ...(isOwner ? [{ id: "broadcast:all", name: "All Locations", sub: "Everyone in the group", type: "broadcast" }] : []),
   ];
 
@@ -49054,6 +49101,12 @@ function NewChatModal({ currentUser, brands, opsTeam, users, onStart, onClose })
           autoFocus
           className={inputCls}
         />
+        {onNewGroup && ["owner", "hq_staff", "manager"].includes(currentUser.role) && (
+          <button onClick={onNewGroup}
+            className="w-full px-3 py-2.5 rounded-xl text-sm font-semibold text-left bg-indigo-950/60 border border-indigo-800 text-indigo-300">
+            + New group… <span className="text-indigo-500 font-normal">pick members, like WhatsApp</span>
+          </button>
+        )}
         <div className="space-y-1 max-h-80 overflow-y-auto -mx-1 px-1">
           {filtered.length === 0 && (
             <div className="text-xs text-slate-500 text-center py-6">No matches</div>
@@ -49150,8 +49203,10 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead,
       id:        `msg-${Date.now()}`,
       brandId:   thread.type === "location" ? thread.brandId : null,
       fromId:    myId, fromName: currentUser.name, fromRole: currentUser.role,
-      toScope:   thread.type === "location" ? "location" : thread.type === "broadcast" ? "all_locations" : "individual",
+      toScope:   thread.type === "location" ? "location" : thread.type === "broadcast" ? "all_locations" : thread.type === "store" ? "store" : thread.type === "group" ? "group" : "individual",
       toBrandId: thread.type === "location" ? thread.brandId : null,
+      toStoreId: thread.type === "store" ? thread.brandId : null,
+      toGroupId: thread.type === "group" ? thread.brandId : null,
       toPersonId:   thread.type === "dm" ? thread.personId   : null,
       toPersonName: thread.type === "dm" ? thread.personName : null,
       subject: thread.name, body: text,
@@ -49408,7 +49463,13 @@ function ChatThread({ thread, messages, currentUser, brands, onSend, onMarkRead,
 }
 
 // ── Main InboxView ─────────────────────────────────────────────────────────────
-function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMarkRead, onReactMessage, onEditMessage, onDeleteMessage }) {
+function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMarkRead, onReactMessage, onEditMessage, onDeleteMessage, stores = [] }) {
+  const [chatGroups, setChatGroups] = useState([]);
+  const [groupModal, setGroupModal] = useState(false);
+  useEffect(() => { fetchChatGroups().then(setChatGroups).catch(() => {}); }, []);
+  const myOpsId0 = currentUser.opsTeamMemberId || currentUser.id;
+  const myStores = (stores || []).filter(st => !st.archivedAt && ((currentUser.storeIds || []).includes(st.id) || isHqOrAbove(currentUser.role)));
+  const myChatGroups = chatGroups.filter(g => (g.memberIds || []).includes(myOpsId0) || (g.memberIds || []).includes(currentUser.id) || g.createdBy === currentUser.id || isHqOrAbove(currentUser.role));
   const [activeThread, setActiveThread] = useState(null);
   const [newChat, setNewChat]           = useState(false);
   const [search, setSearch]             = useState("");
@@ -49423,6 +49484,8 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
     if (msg.fromId === myId || msg.fromId === myOpsId) return true;
     if (msg.toScope === "all_locations") return true;
     if (msg.toScope === "location" && myBrandIds.includes(msg.toBrandId)) return true;
+    if (msg.toScope === "store" && ((currentUser.storeIds || []).includes(msg.toStoreId) || isHqOrAbove(currentUser.role))) return true;
+    if (msg.toScope === "group" && myChatGroups.some(g => g.id === msg.toGroupId)) return true;
     if (msg.toScope === "individual" && (msg.toPersonId === myId || msg.toPersonId === myOpsId)) return true;
     return false;
   };
@@ -49447,6 +49510,12 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
       } else if (m.toScope === "location") {
         const b = brands.find(x => x.id === m.toBrandId);
         name = b?.name || "Location"; sub = "Location channel"; type = "location"; brandId = m.toBrandId; color = b?.color || "#844429";
+      } else if (m.toScope === "store") {
+        const st = (stores || []).find(x => x.id === m.toStoreId);
+        name = st?.name || "Store"; sub = "Store channel"; type = "store"; brandId = m.toStoreId; color = "#5C9442";
+      } else if (m.toScope === "group") {
+        const g = chatGroups.find(x => x.id === m.toGroupId);
+        name = g?.name || "Group"; sub = "Group chat"; type = "group"; brandId = m.toGroupId; color = "#7C5CBF";
       } else {
         // DM — the "other" person
         const isFromMe = m.fromId === myId || m.fromId === myOpsId;
@@ -49480,7 +49549,15 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
   const handleStartChat = (option) => {
     setNewChat(false);
     let key, name, sub, type, brandId, personId, personName, color;
-    if (option.type === "location") {
+    if (option.type === "store") {
+      const sId = option.id.replace("store:", "");
+      key = `store:${sId}`; name = option.name; sub = "Store channel";
+      type = "store"; brandId = sId; color = "#5C9442";
+    } else if (option.type === "group") {
+      const gId = option.id.replace("grp:", "");
+      key = `grp:${gId}`; name = option.name; sub = "Group chat";
+      type = "group"; brandId = gId; color = "#7C5CBF";
+    } else if (option.type === "location") {
       const bId = option.id.replace("loc:", "");
       const b = brands.find(x => x.id === bId);
       key = `loc:${bId}`; name = b?.name || "Location"; sub = "Location channel";
@@ -49640,6 +49717,15 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
           currentUser={currentUser} brands={brands} opsTeam={opsTeam} users={users}
           onStart={handleStartChat}
           onClose={() => setNewChat(false)}
+          myStores={myStores} myChatGroups={myChatGroups}
+          onNewGroup={() => { setNewChat(false); setGroupModal(true); }}
+        />
+      )}
+      {groupModal && (
+        <CreateChatGroupModal
+          currentUser={currentUser} opsTeam={opsTeam} stores={stores}
+          onClose={() => setGroupModal(false)}
+          onCreated={async () => { setGroupModal(false); try { setChatGroups(await fetchChatGroups()); } catch {} }}
         />
       )}
     </div>
@@ -49763,7 +49849,7 @@ function CommunicationView({
             : <EmployeeHelpdeskView brands={brands} stores={stores} tickets={tickets} currentUser={currentUser} onAdd={onAddTicket} onUpdate={onUpdateTicket}/>
         )}
         {tab === "chat" && (
-          <InboxView currentUser={currentUser} brands={brands} opsTeam={opsTeam} users={users} messages={messages} onSend={onSend} onMarkRead={onMarkRead} onReactMessage={onReactMessage} onEditMessage={onEditMessage} onDeleteMessage={onDeleteMessage}/>
+          <InboxView currentUser={currentUser} brands={brands} opsTeam={opsTeam} users={users} messages={messages} onSend={onSend} onMarkRead={onMarkRead} onReactMessage={onReactMessage} onEditMessage={onEditMessage} onDeleteMessage={onDeleteMessage} stores={stores}/>
         )}
         {tab === "availability" && (
           isEmployee
@@ -59616,7 +59702,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: MOBILEDLG 2026-07-23h"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: CHATV2 2026-07-23i"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
