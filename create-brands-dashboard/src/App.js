@@ -59926,6 +59926,7 @@ export default function App() {
       return window.localStorage.getItem("cb.lastView") || "dashboard";
     } catch { return "dashboard"; }
   });
+  const mainScrollRef = useRef(null);
   useEffect(() => {
     try {
       window.localStorage.setItem("cb.lastView", activeView);
@@ -59935,6 +59936,12 @@ export default function App() {
       if (activeView !== "employee-profile") {
         window.history.replaceState(null, "", `#v/${activeView}`);
       }
+    } catch {}
+    // Reset scroll to the top when switching views — otherwise the new page
+    // inherits the previous view's scroll offset and opens mid-page.
+    try {
+      if (mainScrollRef.current) mainScrollRef.current.scrollTop = 0;
+      window.scrollTo(0, 0);
     } catch {}
   }, [activeView]);
 
@@ -59961,7 +59968,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: ITEMHIDE 2026-07-24j"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: SCROLLTOP 2026-07-24k"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
@@ -61685,7 +61692,7 @@ export default function App() {
             </div>
           </div>
           {/* Content */}
-          <main className="flex-1 overflow-y-auto p-6 pb-24 md:pb-6">
+          <main ref={mainScrollRef} className="flex-1 overflow-y-auto p-6 pb-24 md:pb-6">
             <DistDocLinkProvider onNavigate={setActiveView} onConvert={setPendingConvert}>
             {String(effectiveActiveView).startsWith("dist-") && (
               <button onClick={() => setDistSearchOpen(true)} title="Search Distribution (items, customers, orders, invoices…)"
