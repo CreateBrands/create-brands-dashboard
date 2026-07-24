@@ -59878,7 +59878,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: FULFILDATE 2026-07-24e"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: CKORDER 2026-07-24f"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
@@ -61322,7 +61322,7 @@ export default function App() {
         { key: "operations:ops-assigns",    view: "operations", tab: "ops-assigns",    label: "Assignments",   icon: ClipboardList },
         { key: "operations:smallware",      view: "operations", tab: "smallware",      label: "Assets",        icon: Package },
       ]},
-      { key: "dist-order",     label: "Order", icon: ShoppingCart, hideForCK: true },
+      { key: "dist-order",     label: "Order Supplies", icon: ShoppingCart },
       { key: "agent-inbox",    label: "Agent Inbox", icon: Sparkles, badge: agentPendingCount > 0 ? agentPendingCount.toString() : null },
       { key: "eod",            label: "EOD Report",      icon: FileText, hideForCK: true },
     ]},
