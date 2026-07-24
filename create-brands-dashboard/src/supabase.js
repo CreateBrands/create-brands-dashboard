@@ -10614,7 +10614,7 @@ const mapDistItem = (i) => ({
   packUnit: i.pack_unit || "", taxRateId: i.tax_rate_id || null,
   sellRate: i.sell_rate != null ? Number(i.sell_rate) : null, purchaseRate: i.purchase_rate != null ? Number(i.purchase_rate) : null,
   incomeAccountCode: i.income_account_code || null, expenseAccountCode: i.expense_account_code || null,
-  ckProductId: i.ck_product_id || null,
+  ckProductId: i.ck_product_id || null, hiddenFromStores: !!i.hidden_from_stores,
   reorderPoint: i.reorder_point != null ? Number(i.reorder_point) : 0, imageUrl: i.image_url || "",
   itemType: i.item_type || "warehouse", // "warehouse" (stocked) | "ck" | "fresh" (non-stocked)
   fulfilledBy: i.fulfilled_by || null,  // null = Distribution; else dist_contacts vendor id (direct supplier)
@@ -11802,12 +11802,13 @@ export async function fetchDistCustomersForStores(storeIds = []) {
 // price (price-list entry, else item default). One round-trip for the portal.
 // Deliberately returns NO stock figures — stores order blind (SoW principle).
 export async function fetchDistPortalCatalogue(customerId) {
-  const [items, priceList, collLinks, collections] = await Promise.all([
+  const [itemsAll, priceList, collLinks, collections] = await Promise.all([
     fetchDistItems(),
     customerId ? fetchDistPriceList(customerId) : Promise.resolve([]),
     supabase.from("dist_collection_items").select("collection_id, item_id").then(r => r.data || []),
     fetchDistCollections().catch(() => []),
   ]);
+  const items = (itemsAll || []).filter(i => !i.hiddenFromStores);   // CK/internal items never reach the store ordering page
   const priceByItem = new Map((priceList || []).map(p => [p.itemId, p.sellPrice]));
   // Manual membership from the link table.
   const collsByItem = new Map();
