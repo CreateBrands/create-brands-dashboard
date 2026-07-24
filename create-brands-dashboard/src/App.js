@@ -14487,6 +14487,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
   const [supplier, setSupplier] = useState(null);   // null | [{ id:'dist'|vendorId, name }, …] — one or more, chosen on entry
   const [pickSel, setPickSel] = useState([]);       // picker draft selection
   const [roundBarOpen, setRoundBarOpen] = useState(false);   // team-round strip collapsed by default
+  const [menuOpen, setMenuOpen] = useState(false);           // ONE-BUTTON UI: all chrome lives in this sheet
   // Staff see quantities, never prices; managers see both.
   const priceFmt = (v) => ((currentUser?.role || "") === "staff" ? "" : gbp(v));
   const togglePick = (opt) => setPickSel(sel => sel.some(x => x.id === opt.id) ? sel.filter(x => x.id !== opt.id) : [...sel, opt]);
@@ -15127,11 +15128,34 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
           </div>
         </div>
       )}
+
+      {/* ── ONE-BUTTON UI: floating menu button; every control lives in the sheet ── */}
       {supplier !== null && (
-        <button onClick={() => { setPickSel(supplier); setSupplier(null); }} className="absolute top-14 right-3 z-30 px-2.5 py-1.5 rounded-full text-[11px] font-semibold shadow" style={{ backgroundColor: "#FDF8EF", border: "1px solid #E8DCC6", color: "#844429" }}>
-          {supplier.length === 1 ? supplier[0].name : `${supplier.length} suppliers`} · change
+        <button onClick={() => setMenuOpen(true)}
+          className="absolute top-2 right-3 z-40 w-11 h-11 rounded-full shadow-lg flex items-center justify-center"
+          style={{ backgroundColor: "#844429", color: "#FDF2E0" }} title="Menu">
+          <Menu size={20}/>
         </button>
       )}
+      {menuOpen && (
+        <div className="absolute inset-0 z-40" style={{ background: "rgba(40,30,20,0.35)" }} onClick={() => setMenuOpen(false)}>
+          <div className="absolute top-0 right-0 w-full sm:w-[430px] max-h-full overflow-y-auto shadow-2xl"
+            style={{ backgroundColor: "#F4E9DD" }} onClick={ev => ev.stopPropagation()}>
+            <div className="px-4 py-2 flex items-center justify-between" style={{ borderBottom: "1px solid #E8DCC6" }}>
+              <div className="text-sm font-bold" style={{ color: "#3A2E26" }}>Menu</div>
+              <button onClick={() => setMenuOpen(false)} className="px-2.5 py-1 rounded-lg text-xs font-bold" style={{ backgroundColor: "#F3EADA", color: "#844429" }}>Done</button>
+            </div>
+            <div className="px-4 py-2">
+              <div className="relative">
+                <Search size={14} className="absolute left-3 top-2.5" style={{ color: "#C9B99F" }}/>
+                <input value={search} onChange={ev => setSearch(ev.target.value)} placeholder="Search products…"
+                  className="w-full pl-9 pr-3 py-2 rounded-xl text-sm" style={{ backgroundColor: "#FFFFFF", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
+              </div>
+              <button onClick={() => { setMenuOpen(false); setPickSel(supplier || []); setSupplier(null); }}
+                className="w-full mt-2 px-3 py-2 rounded-xl text-xs font-semibold text-left" style={{ backgroundColor: "#FDF8EF", border: "1px solid #E8DCC6", color: "#844429" }}>
+                Supplier: {supplier && supplier.length === 1 ? supplier[0].name : `${(supplier || []).length} selected`} — change
+              </button>
+            </div>
       {/* Header */}
       <div className="flex-shrink-0 px-4 sm:px-6 py-1.5 flex items-center justify-between gap-3 flex-wrap" style={{ backgroundColor: "#FBF6EC", borderBottom: "1px solid #E8DCC6" }}>
         <div className="flex items-center gap-3">
@@ -15224,8 +15248,11 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
           })()}
         </div>
       )}
+          </div>
+        </div>
+      )}
 
-      {/* Round assignment modal */}
+      {/* Round assignment modal */}      {/* Round assignment modal */}
       {roundAssignOpen && round && (() => {
         const cats = {};
         catalogue.forEach(i => { const c = roundSectionOf(i, roundBasis); cats[c]=(cats[c]||0)+1; });
@@ -15368,7 +15395,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
           {/* Catalogue column (scrolls) */}
           <div className="flex-1 flex flex-col min-w-0">
             {/* Sticky controls: search + COLLECTION sub-bar */}
-            <div className="flex-shrink-0 px-4 sm:px-6 pt-3 pb-2 space-y-2.5" style={{ backgroundColor: "#F4E9DD", borderBottom: "1px solid #E8DCC6" }}>
+            <div style={{ display: "none" }} className="flex-shrink-0 px-4 sm:px-6 pt-3 pb-2 space-y-2.5" style={{ backgroundColor: "#F4E9DD", borderBottom: "1px solid #E8DCC6" }}>
               <div className="flex items-center gap-2">
                 <div className="relative flex-1 max-w-xl"><Search size={16} className="absolute left-3.5 top-3" style={{ color: "#9A8770" }}/><input value={search} onChange={e => setSearch(e.target.value)} placeholder={`Search ${catalogue.length} products…`} className="w-full pl-10 pr-3 py-2.5 rounded-xl text-sm focus:outline-none" style={{ backgroundColor: "#FBF6EC", border: "1px solid #E8DCC6", color: "#3A2E26" }}/></div>
                 {departments.length > 0 && (
@@ -59555,7 +59582,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: COMPACTUI 2026-07-23e"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: ONEBUTTON 2026-07-23f"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
