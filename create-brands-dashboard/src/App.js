@@ -5034,7 +5034,7 @@ function DistTypedItemsView({ itemType, currentUser }) {
         <WhCard title="Who's shopping what">
           <div className="text-[11px] mb-2.5" style={{ color: WH.inkFaint }}>Pick up orders — your shopping list then combines only your orders' items.</div>
           <div className="flex flex-wrap gap-2">
-            {orders.map(o => {
+            {orders.filter(o => !o.allDone).map(o => {
               const cl = claims[o.soId];
               const mine = cl && cl.driverId === myId;
               const other = cl && !mine;
@@ -5044,7 +5044,10 @@ function DistTypedItemsView({ itemType, currentUser }) {
                   style={{ border: `1.5px solid ${mine ? "#3F6B3A" : other ? WH.line : "#E0A664"}`, background: mine ? "#EAF3E7" : other ? WH.surface : "#FFF6E8" }}>
                   <div>
                     <div className="text-xs font-bold" style={{ color: WH.ink }}>{o.soNumber} · {o.customerName}</div>
-                    <div className="text-[10px]" style={{ color: WH.inkFaint }}>{o.lines.length} item{o.lines.length!==1?"s":""}</div>
+                    <div className="text-[10px]" style={{ color: WH.inkFaint }}>
+                      {o.lines.length} item{o.lines.length!==1?"s":""}
+                      {o.orderDate ? ` · ${(() => { const t = new Date().toISOString().slice(0,10); const y = new Date(Date.now()-86400000).toISOString().slice(0,10); const d = String(o.orderDate).slice(0,10); const dd = d === t ? "today" : d === y ? "yesterday" : d.slice(8,10)+"/"+d.slice(5,7); return `ordered ${dd}`; })()}` : ""}
+                    </div>
                     {isFresh && (() => {
                       const d = o.storeId ? freshDeliv[o.storeId] : null;
                       const afterOrder = d && (!o.orderDate || (d.at || "").slice(0, 10) >= o.orderDate);
@@ -5074,6 +5077,21 @@ function DistTypedItemsView({ itemType, currentUser }) {
               );
             })}
           </div>
+          {orders.some(o => o.allDone) && (
+            <details className="mt-2">
+              <summary className="text-[11px] font-semibold cursor-pointer select-none" style={{ color: "#3F6B3A" }}>
+                ✓ Completed — {orders.filter(o => o.allDone).length} order{orders.filter(o => o.allDone).length !== 1 ? "s" : ""} fully bought (tap to view)
+              </summary>
+              <div className="flex flex-wrap gap-2 mt-2">
+                {orders.filter(o => o.allDone).map(o => (
+                  <div key={`done:${o.soId}`} className="rounded-xl px-3 py-1.5" style={{ border: "1px solid #CBDEC6", background: "#F2F7F0", opacity: 0.85 }}>
+                    <div className="text-[11px] font-bold" style={{ color: "#3F6B3A" }}>✓ {o.soNumber} · {o.customerName}</div>
+                    <div className="text-[9px]" style={{ color: WH.inkFaint }}>{o.lines.length} items{o.orderDate ? ` · ${String(o.orderDate).slice(8,10)}/${String(o.orderDate).slice(5,7)}` : ""}{claims[o.soId] ? ` · ${claims[o.soId].driverName || "claimed"}` : ""}</div>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
           <div className="flex gap-1.5 mt-3">
             {[["mine", `Mine (${orders.filter(o => claims[o.soId]?.driverId === myId).length})`],
               ["unclaimed", `Unclaimed (${orders.filter(o => !claims[o.soId]).length})`],
@@ -5118,8 +5136,8 @@ function DistTypedItemsView({ itemType, currentUser }) {
                         <span className="text-[11px]" style={{ color: WH.inkFaint }}>{c.category || "—"} · {c.breakdown.length} order{c.breakdown.length===1?"":"s"}</span>
                       </span>
                     </button>
-                    <div className="text-right flex-shrink-0">
-                      <div className="text-xl font-black leading-none" style={{ color: c.done ? WH.inkFaint : WH.accent }}>{(c.mixedUoms && c.mixedUoms.length ? (c.mixedUoms.length === 1 && c.breakdown.every(x => x.uom) ? `${c.qty} ${c.mixedUoms[0]}` : c.breakdown.map(x => fmtPackQty(x.qty, x.uom ? { uom: x.uom } : c)).join(" + ")) : fmtPackQty(c.qty, c))}</div>
+                    <div className="text-right flex-shrink-0 max-w-[38vw] sm:max-w-none">
+                      <div className="text-sm sm:text-xl font-black leading-tight break-words" style={{ color: c.done ? WH.inkFaint : WH.accent }}>{(c.mixedUoms && c.mixedUoms.length ? (c.mixedUoms.length === 1 && c.breakdown.every(x => x.uom) ? `${c.qty} ${c.mixedUoms[0]}` : c.breakdown.map(x => fmtPackQty(x.qty, x.uom ? { uom: x.uom } : c)).join(" + ")) : fmtPackQty(c.qty, c))}</div>
                       <div className="text-[10px]" style={{ color: WH.inkFaint }}>total{isFresh ? " to buy" : " to make"}</div>
                     </div>
                   </div>
@@ -59809,7 +59827,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: SMARTPICK 2026-07-24a"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: FRESHDATES 2026-07-24b"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
