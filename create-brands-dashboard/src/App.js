@@ -4851,6 +4851,28 @@ function DistTypedItemsView({ itemType, currentUser }) {
   
   // Buying dialog: on fresh, marking bought asks WHAT was actually bought
   // (unit + amount) so downstream quantities speak one language.
+  // DAY FILTER: which day's orders are we shopping for? Orders carry a wanted
+  // date (expected ship, falling back to the order date).
+  const [dayFilter, setDayFilter] = useState("all");   // all | today | tomorrow | yesterday | past
+  const dayKey = (o) => String(o.wantedDate || o.orderDate || "").slice(0, 10);
+  const dayLabel = (d) => {
+    if (!d) return "no date";
+    const t = new Date(); const iso = (x) => x.toISOString().slice(0, 10);
+    const today = iso(t), tom = iso(new Date(Date.now() + 86400000)), yest = iso(new Date(Date.now() - 86400000));
+    if (d === today) return "today";
+    if (d === tom) return "tomorrow";
+    if (d === yest) return "yesterday";
+    return `${d.slice(8, 10)}/${d.slice(5, 7)}`;
+  };
+  const dayBucket = (o) => {
+    const d = dayKey(o); if (!d) return "past";
+    const iso = (x) => x.toISOString().slice(0, 10);
+    const today = iso(new Date()), tom = iso(new Date(Date.now() + 86400000)), yest = iso(new Date(Date.now() - 86400000));
+    if (d === today) return "today";
+    if (d === tom) return "tomorrow";
+    if (d === yest) return "yesterday";
+    return d > tom ? "later" : "past";
+  };
   const [buyDlg, setBuyDlg] = useState(null);
   const BUY_UOMS = ["Kg", "Liter", "Each", "Pack", "Box", "Case"];
   const guessUom = (l) => l?.uom || ((/(kg|^g$)/i.test(l?.packUnit || "")) ? "Kg" : (/(^l$|ml)/i.test(l?.packUnit || "")) ? "Liter" : ((Number(l?.packSize) > 1 && /^(ea|each|unit)?$/i.test(l?.packUnit || "")) || Number(l?.packCount) > 1) ? "Case" : "Each");
@@ -4894,13 +4916,14 @@ function DistTypedItemsView({ itemType, currentUser }) {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return claimScoped;
-    return claimScoped.filter(o =>
+    const dayScoped = dayFilter === "all" ? claimScoped : claimScoped.filter(o => dayBucket(o) === dayFilter);
+    if (!q) return dayScoped;
+    return dayScoped.filter(o =>
       (o.soNumber || "").toLowerCase().includes(q) ||
       (o.customerName || "").toLowerCase().includes(q) ||
       o.lines.some(l => (l.name || "").toLowerCase().includes(q))
     );
-  }, [claimScoped, search]);
+  }, [claimScoped, search, dayFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setClaim = async (soId, take) => {
     const key = `claim:${soId}`; setBusy(b => ({ ...b, [key]: true }));
@@ -5030,6 +5053,21 @@ function DistTypedItemsView({ itemType, currentUser }) {
     >
       {/* ── DRIVER ORDER PICK-UP (fresh only): claim whole orders; your
              shopping list combines only what you claimed. ── */}
+      {!loading && orders.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-3">
+          {[["all", "All"], ["today", "Today"], ["tomorrow", "Tomorrow"], ["yesterday", "Yesterday"], ["later", "Later"], ["past", "Older"]].map(([k, lbl]) => {
+            const n = k === "all" ? claimScoped.length : claimScoped.filter(o => dayBucket(o) === k).length;
+            if (k !== "all" && n === 0) return null;
+            return (
+              <button key={k} onClick={() => setDayFilter(k)}
+                className="px-3 py-1.5 rounded-full text-xs font-bold"
+                style={dayFilter === k ? { background: WH.accent, color: "#fff" } : { background: WH.surface, border: `1px solid ${WH.line}`, color: WH.inkFaint }}>
+                {lbl} {n > 0 ? `(${n})` : ""}
+              </button>
+            );
+          })}
+        </div>
+      )}
       {!loading && isFresh && orders.length > 0 && (
         <WhCard title="Who's shopping what">
           <div className="text-[11px] mb-2.5" style={{ color: WH.inkFaint }}>Pick up orders — your shopping list then combines only your orders' items.</div>
@@ -5045,8 +5083,9 @@ function DistTypedItemsView({ itemType, currentUser }) {
                   <div>
                     <div className="text-xs font-bold" style={{ color: WH.ink }}>{o.soNumber} · {o.customerName}</div>
                     <div className="text-[10px]" style={{ color: WH.inkFaint }}>
-                      {o.lines.length} item{o.lines.length!==1?"s":""}
-                      {o.orderDate ? ` · ${(() => { const t = new Date().toISOString().slice(0,10); const y = new Date(Date.now()-86400000).toISOString().slice(0,10); const d = String(o.orderDate).slice(0,10); const dd = d === t ? "today" : d === y ? "yesterday" : d.slice(8,10)+"/"+d.slice(5,7); return `ordered ${dd}`; })()}` : ""}
+                      <span className="font-bold" style={{ color: dayBucket(o) === "today" ? "#B45309" : WH.inkFaint }}>for {dayLabel(dayKey(o))}</span>
+                      {" · "}{o.lines.length} item{o.lines.length!==1?"s":""}
+                      {o.orderDate ? ` · placed ${dayLabel(String(o.orderDate).slice(0,10))}` : ""}
                     </div>
                     {isFresh && (() => {
                       const d = o.storeId ? freshDeliv[o.storeId] : null;
@@ -59827,7 +59866,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: FRESHDATES 2026-07-24b"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: DAYFILTER 2026-07-24c"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views

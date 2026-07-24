@@ -14417,7 +14417,7 @@ export async function fetchDistOrdersByItemType(itemType, { includeDone = false 
     const withDone = matchLines.map(l => ({ ...l, done: checks.has(`${so.id}:${l.itemId}`), bought: (checks.bought || {})[`${so.id}:${l.itemId}`] || null }));
     const cust = custById.get(so.customerId);
     out.push({
-      soId: so.id, soNumber: so.soNumber, orderDate: so.orderDate,
+      soId: so.id, soNumber: so.soNumber, orderDate: so.orderDate, wantedDate: so.expectedShip || so.orderDate || null,
       customerId: so.customerId, customerName: cust?.displayName || cust?.companyName || "—",
       storeId: cust?.storeId || null,
       stage: stageBySo.get(so.id) || so.status || "confirmed",
