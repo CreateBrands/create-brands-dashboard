@@ -49585,6 +49585,16 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
   });
 
   // Sort threads by latest message
+  // Always-present rooms: the user's store channels and their groups appear in
+  // the list even before the first message — no hunting through "New chat".
+  myStores.forEach(st => {
+    const key = `store:${st.id}`;
+    if (!threadMap[key]) threadMap[key] = { key, name: st.name, sub: "Store channel", type: "store", brandId: st.id, color: "#5C9442", messages: [] };
+  });
+  myChatGroups.forEach(g => {
+    const key = `grp:${g.id}`;
+    if (!threadMap[key]) threadMap[key] = { key, name: g.name, sub: `Group · ${(g.memberIds || []).length} members`, type: "group", brandId: g.id, color: "#7C5CBF", messages: [] };
+  });
   const threads = Object.values(threadMap).sort((a, b) => {
     const aLast = a.messages[a.messages.length - 1]?.createdAt || "";
     const bLast = b.messages[b.messages.length - 1]?.createdAt || "";
@@ -49655,6 +49665,13 @@ function InboxView({ currentUser, brands, opsTeam, users, messages, onSend, onMa
             title="New chat">
             <Plus size={18} className="text-white"/>
           </button>
+          {["owner", "hq_staff", "manager"].includes(currentUser.role) && (
+            <button onClick={() => setGroupModal(true)}
+              className="px-3 h-9 rounded-full bg-indigo-700 hover:bg-indigo-600 flex items-center justify-center transition-all shadow-md text-xs font-bold text-white"
+              title="Create a group chat">
+              + Group
+            </button>
+          )}
         </div>
 
         {/* Search */}
@@ -59784,7 +59801,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: CHATMGMT 2026-07-23j"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: CHATSEED 2026-07-23k"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
