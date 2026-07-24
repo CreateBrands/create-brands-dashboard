@@ -13332,8 +13332,13 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
             {shown.map(i => {
               const t = tags[i.id] || {};
               return (
-                <div key={i.id} className="grid grid-cols-12 gap-1 px-3 py-1.5 border-t border-slate-800/60 items-center">
-                  <div className="col-span-5 text-xs text-white truncate">{i.name}<span className="text-slate-600"> · {i.category}</span></div>
+                <div key={i.id} className="grid grid-cols-12 gap-1 px-3 py-1.5 border-t border-slate-800/60 items-center" style={t.disabled ? { opacity: 0.4 } : undefined}>
+                  <div className="col-span-5 text-xs text-white truncate flex items-center gap-2">
+                    <input type="checkbox" title="Available to this store (untick to hide from its ordering page)"
+                      checked={!t.disabled} onChange={e => setTag(i.id, "disabled", !e.target.checked)}
+                      className="rounded flex-shrink-0" />
+                    <span className="truncate">{i.name}<span className="text-slate-600"> · {i.category}</span></span>
+                  </div>
                   <div className="col-span-3 relative">
                     {(() => {
                       const sel = String(overrides[i.id] ?? i.fulfilledBy ?? "").split(",").map(x => x.trim()).filter(Boolean);
@@ -14675,18 +14680,20 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
         if (sid) {
           try {
             const stTags = await fetchStoreItemTags(sid);
-            finalRows = rows.map(it => {
-              const ov = stTags[it.id];
-              if (!ov) return it;
-              // Apply each per-store override that's set; otherwise keep global.
-              return {
-                ...it,
-                tagFrequency: ov.tagFrequency || it.tagFrequency,
-                supplier:     ov.supplier     || it.supplier,
-                location:     ov.location     || it.location,
-                tagCategory:  ov.tagCategory  || it.tagCategory,
-              };
-            });
+            finalRows = rows
+              .filter(it => !(stTags[it.id] && stTags[it.id].disabled))   // per-store: item switched off for THIS store
+              .map(it => {
+                const ov = stTags[it.id];
+                if (!ov) return it;
+                // Apply each per-store override that's set; otherwise keep global.
+                return {
+                  ...it,
+                  tagFrequency: ov.tagFrequency || it.tagFrequency,
+                  supplier:     ov.supplier     || it.supplier,
+                  location:     ov.location     || it.location,
+                  tagCategory:  ov.tagCategory  || it.tagCategory,
+                };
+              });
           } catch { /* non-fatal — fall back to global tags */ }
         }
         setCatalogue(finalRows);
@@ -59878,7 +59885,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: CKORDER 2026-07-24f"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: STOREDISABLE 2026-07-24g"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views

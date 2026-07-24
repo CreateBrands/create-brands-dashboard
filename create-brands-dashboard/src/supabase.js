@@ -10746,7 +10746,7 @@ export async function fetchStoreItemTags(storeId) {
   if (!storeId) return {};
   const { data, error } = await supabase
     .from("dist_item_store_tags")
-    .select("item_id, tag_frequency, supplier, location, tag_category")
+    .select("item_id, tag_frequency, supplier, location, tag_category, disabled")
     .eq("store_id", storeId);
   if (error) throw error;
   const map = {};
@@ -10756,6 +10756,7 @@ export async function fetchStoreItemTags(storeId) {
       supplier: r.supplier || "",
       location: r.location || "",
       tagCategory: r.tag_category || "",
+      disabled: !!r.disabled,
     };
   });
   return map;   // { itemId: { tagFrequency, supplier, location, tagCategory } }
@@ -10766,27 +10767,29 @@ export async function fetchStoreItemTags(storeId) {
 // that field. If all 4 fields end up empty, the row is deleted (full fallback).
 export async function setStoreItemTag(storeId, itemId, field, value) {
   if (!storeId || !itemId) throw new Error("store and item required");
-  const colMap = { tagFrequency: "tag_frequency", supplier: "supplier", location: "location", tagCategory: "tag_category" };
+  const colMap = { tagFrequency: "tag_frequency", supplier: "supplier", location: "location", tagCategory: "tag_category", disabled: "disabled" };
   const col = colMap[field];
   if (!col) throw new Error(`unknown tag field: ${field}`);
-  const val = (value || "").trim();
+  const isBool = field === "disabled";
+  const val = isBool ? !!value : (value || "").trim();
   // Read the current row (if any) so we can merge and know whether it becomes empty.
   const { data: existing } = await supabase.from("dist_item_store_tags")
-    .select("tag_frequency, supplier, location, tag_category")
+    .select("tag_frequency, supplier, location, tag_category, disabled")
     .eq("store_id", storeId).eq("item_id", itemId).maybeSingle();
   const row = {
     tag_frequency: existing?.tag_frequency || null,
     supplier: existing?.supplier || null,
     location: existing?.location || null,
     tag_category: existing?.tag_category || null,
+    disabled: !!existing?.disabled,
   };
-  row[col] = val || null;
-  const allEmpty = !row.tag_frequency && !row.supplier && !row.location && !row.tag_category;
+  row[col] = isBool ? !!value : (val || null);
+  const allEmpty = !row.tag_frequency && !row.supplier && !row.location && !row.tag_category && !row.disabled;
   if (allEmpty) {
     const { error } = await supabase.from("dist_item_store_tags")
       .delete().eq("store_id", storeId).eq("item_id", itemId);
     if (error) throw error;
-    return { storeId, itemId, tagFrequency: "", supplier: "", location: "", tagCategory: "" };
+    return { storeId, itemId, tagFrequency: "", supplier: "", location: "", tagCategory: "", disabled: false };
   }
   const { data, error } = await supabase.from("dist_item_store_tags")
     .upsert({ store_id: storeId, item_id: itemId, ...row, updated_at: new Date().toISOString() }, { onConflict: "store_id,item_id" })
@@ -10795,7 +10798,7 @@ export async function setStoreItemTag(storeId, itemId, field, value) {
   return {
     storeId, itemId,
     tagFrequency: data?.tag_frequency || "", supplier: data?.supplier || "",
-    location: data?.location || "", tagCategory: data?.tag_category || "",
+    location: data?.location || "", tagCategory: data?.tag_category || "", disabled: !!data?.disabled,
   };
 }
 
