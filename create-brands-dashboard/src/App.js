@@ -15085,12 +15085,17 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
               <div className="text-lg font-bold" style={{ color: "#3A2E26" }}>Who are you ordering from?</div>
               <div className="text-xs mt-0.5" style={{ color: "#9A8770" }}>Pick a supplier — you'll only see their items.{needsApproval ? " Your order will go to a manager for approval." : ""}</div>
             </div>
-            {[{ id: "dist", name: "Distribution (Create Brands)", desc: "Warehouse, Central Kitchen and fresh produce" },
-              ...portalVendors.map(v => ({ id: v.id, name: v.displayName || v.companyName || "Supplier", desc: "Direct supplier" }))].map(opt => {
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {[{ id: "dist", name: "Distribution (Create Brands)", desc: "Warehouse, Central Kitchen and fresh produce", span: true },
+              // Smart list: a supplier appears only when at least one of this
+              // store's items is assigned to them — empty suppliers are noise.
+              ...portalVendors
+                .filter(v => catalogue.some(i => resolveSupplierList(i).includes(v.id)))
+                .map(v => ({ id: v.id, name: v.displayName || v.companyName || "Supplier", desc: `${catalogue.filter(i => resolveSupplierList(i).includes(v.id)).length} items` }))].map(opt => {
               const on = pickSel.some(x => x.id === opt.id);
               return (
                 <button key={opt.id} onClick={() => togglePick(opt)}
-                  className="w-full text-left rounded-2xl p-4 flex items-center gap-3"
+                  className={`w-full text-left rounded-2xl p-3 flex items-center gap-3 ${opt.span ? "sm:col-span-2" : ""}`}
                   style={{ backgroundColor: on ? "#EAF3E7" : "#FDF8EF", border: on ? "1.5px solid #5C9442" : "1px solid #E8DCC6" }}>
                   <div className="w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0 text-white text-xs font-bold"
                     style={{ backgroundColor: on ? "#5C9442" : "#E8DCC6" }}>{on ? "\u2713" : ""}</div>
@@ -15101,6 +15106,8 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
                 </button>
               );
             })}
+            </div>
+            <div className="sticky bottom-0 pt-2 pb-1 space-y-2" style={{ background: "#F4E9DD" }}>
             <div className="text-[10px] text-center" style={{ color: "#C9B99F" }}>
               b23d · store {activeStoreId ? String(activeStoreId).slice(-14) : "NONE"} · {storeIds.length} store-ids · {customers.length} customers · {Object.keys(supplierOverrides || {}).length} assignments
             </div>
@@ -15109,6 +15116,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
               style={{ backgroundColor: pickSel.length ? "#844429" : "#E8DCC6", color: pickSel.length ? "#FDF2E0" : "#B0A18C" }}>
               {pickSel.length ? `Start ordering \u00b7 ${pickSel.length} supplier${pickSel.length > 1 ? "s" : ""}` : "Select at least one supplier"}
             </button>
+            </div>
             {pendingApprovals.length > 0 && canApprove && (
               <div className="rounded-2xl p-4 space-y-3" style={{ backgroundColor: "#FFF6E8", border: "1.5px solid #E0A664" }}>
                 <div className="text-sm font-bold" style={{ color: "#3A2E26" }}>Awaiting your approval</div>
@@ -59801,7 +59809,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: CHATSEED 2026-07-23k"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: SMARTPICK 2026-07-24a"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
