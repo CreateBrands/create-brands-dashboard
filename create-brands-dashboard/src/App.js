@@ -15733,22 +15733,52 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
           onClose={() => setDetailItem(null)}
         />
       )}
-      {addDlg && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(40,30,20,0.45)" }} onClick={() => setAddDlg(null)}>
-          <div className="w-full max-w-sm rounded-2xl p-4" style={{ background: "#FFFBF3", border: "1px solid #E8DCC6" }} onClick={ev => ev.stopPropagation()}>
-            <div className="text-sm font-bold mb-0.5" style={{ color: "#3A2E26" }}>{addDlg.item.name}</div>
-            <div className="text-[11px] mb-3" style={{ color: "#9A8770" }}>How much, and in what unit?</div>
-            <div className="flex items-center gap-2">
-              <input type="number" min="0" step="any" autoFocus value={addDlg.qty}
-                onChange={ev => setAddDlg(d => ({ ...d, qty: ev.target.value }))}
-                className="flex-1 px-3 py-2 rounded-xl text-sm tabular-nums" style={{ background: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
-              <select value={addDlg.uom} onChange={ev => setAddDlg(d => ({ ...d, uom: ev.target.value }))}
-                className="px-2 py-2 rounded-xl text-sm" style={{ background: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}>
-                {UOM_OPTIONS.map(u => <option key={u} value={u}>{u}</option>)}
-              </select>
-            </div>
-            <div className="flex gap-2 mt-4">
-              <button onClick={() => setAddDlg(null)} className="flex-1 py-2 rounded-xl text-sm font-semibold" style={{ background: "#F3EDE2", color: "#9A8770" }}>Cancel</button>
+      {addDlg && (() => {
+        const it = addDlg.item;
+        const per = (Number(it?.packCount) > 1 && Number(it.packCount)) || (Number(it?.packSize) > 1 && /^(ea|each|unit)?$/i.test(it?.packUnit || "") && Number(it.packSize)) || 0;
+        // Quick amounts: sensible counts, plus the item's own pack multiples
+        const presets = [];
+        [1, 2, 3, 5, 10].forEach(n => presets.push({ v: n, label: String(n) }));
+        if (per) [1, 2, 3].forEach(n => { if (!presets.some(p => p.v === n * per)) presets.push({ v: n * per, label: `${n * per} (${n} case${n > 1 ? "s" : ""})` }); });
+        const setV = (v) => setAddDlg(d => ({ ...d, qty: Math.max(0, Math.round(v * 100) / 100) }));
+        const cur = Number(addDlg.qty) || 0;
+        return (
+          <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" style={{ background: "rgba(40,30,20,0.45)" }} onClick={() => setAddDlg(null)}>
+            <div className="w-full sm:max-w-md rounded-t-3xl sm:rounded-2xl p-5 pb-7 sm:pb-5 max-h-[85vh] overflow-y-auto" style={{ background: "#FFFBF3" }} onClick={ev => ev.stopPropagation()}>
+              <div className="w-10 h-1 rounded-full mx-auto mb-3 sm:hidden" style={{ background: "#E8DCC6" }} />
+              <div className="text-base font-bold" style={{ color: "#3A2E26" }}>{it.name}</div>
+              {per ? <div className="text-[11px] mt-0.5" style={{ color: "#9A8770" }}>1 case = {per} ea</div> : null}
+
+              <div className="text-[11px] uppercase tracking-wide font-semibold mt-4 mb-1.5" style={{ color: "#9A8770" }}>Unit</div>
+              <div className="grid grid-cols-3 gap-2">
+                {UOM_OPTIONS.map(u => (
+                  <button key={u} onClick={() => setAddDlg(d => ({ ...d, uom: u }))}
+                    className="py-2.5 rounded-xl text-sm font-semibold"
+                    style={addDlg.uom === u ? { background: "#844429", color: "#FDF2E0" } : { background: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}>
+                    {u}
+                  </button>
+                ))}
+              </div>
+
+              <div className="text-[11px] uppercase tracking-wide font-semibold mt-4 mb-1.5" style={{ color: "#9A8770" }}>Amount</div>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setV(cur - 1)} className="w-12 h-12 rounded-xl text-xl font-bold flex-shrink-0" style={{ background: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }}>−</button>
+                <input type="number" min="0" step="any" inputMode="decimal" value={addDlg.qty}
+                  onChange={ev => setAddDlg(d => ({ ...d, qty: ev.target.value }))}
+                  className="flex-1 h-12 px-3 rounded-xl text-lg font-bold text-center tabular-nums"
+                  style={{ background: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
+                <button onClick={() => setV(cur + 1)} className="w-12 h-12 rounded-xl text-xl font-bold flex-shrink-0" style={{ background: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }}>+</button>
+              </div>
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {presets.map(p => (
+                  <button key={p.label} onClick={() => setV(p.v)}
+                    className="px-3 py-1.5 rounded-full text-xs font-semibold"
+                    style={cur === p.v ? { background: "#5C9442", color: "#fff" } : { background: "#F3EDE2", color: "#6B5D4F" }}>
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+
               <button
                 onClick={() => {
                   const d = addDlg; setAddDlg(null);
@@ -15756,13 +15786,14 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
                   setLineUoms(u => ({ ...u, [d.item.id]: d.uom }));
                   setQty(d.item.id, q);
                 }}
-                className="flex-1 py-2 rounded-xl text-sm font-bold" style={{ background: "#844429", color: "#FDF2E0" }}>
+                className="w-full h-12 mt-5 rounded-xl text-base font-bold" style={{ background: "#844429", color: "#FDF2E0" }}>
                 Add to order
               </button>
+              <button onClick={() => setAddDlg(null)} className="w-full py-3 mt-1 text-sm font-semibold" style={{ color: "#9A8770" }}>Cancel</button>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
     </div>
   );
 }
@@ -59585,7 +59616,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: STAFFGATE 2026-07-23g"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: MOBILEDLG 2026-07-23h"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
