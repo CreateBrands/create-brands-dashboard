@@ -11802,13 +11802,19 @@ export async function fetchDistCustomersForStores(storeIds = []) {
 // price (price-list entry, else item default). One round-trip for the portal.
 // Deliberately returns NO stock figures — stores order blind (SoW principle).
 export async function fetchDistPortalCatalogue(customerId) {
-  const [itemsAll, priceList, collLinks, collections] = await Promise.all([
+  const [itemsAll, priceList, collLinks, collections, custRow] = await Promise.all([
     fetchDistItems(),
     customerId ? fetchDistPriceList(customerId) : Promise.resolve([]),
     supabase.from("dist_collection_items").select("collection_id, item_id").then(r => r.data || []),
     fetchDistCollections().catch(() => []),
+    customerId ? supabase.from("dist_contacts").select("is_central_kitchen").eq("id", customerId).maybeSingle().then(r => r.data) : Promise.resolve(null),
   ]);
-  const items = (itemsAll || []).filter(i => !i.hiddenFromStores);   // CK/internal items never reach the store ordering page
+  // Directional visibility. Central Kitchen sees its own ck-type items; stores
+  // see everything EXCEPT items flagged hidden_from_stores (the CK ingredients).
+  const orderingIsCK = !!(custRow && custRow.is_central_kitchen);
+  const items = (itemsAll || []).filter(i =>
+    orderingIsCK ? (i.itemType === "ck" || !i.hiddenFromStores) : !i.hiddenFromStores
+  );
   const priceByItem = new Map((priceList || []).map(p => [p.itemId, p.sellPrice]));
   // Manual membership from the link table.
   const collsByItem = new Map();
