@@ -14486,6 +14486,9 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
   const [splitVendors, setSplitVendors] = useState([]);
   const [supplier, setSupplier] = useState(null);   // null | [{ id:'dist'|vendorId, name }, …] — one or more, chosen on entry
   const [pickSel, setPickSel] = useState([]);       // picker draft selection
+  const [roundBarOpen, setRoundBarOpen] = useState(false);   // team-round strip collapsed by default
+  // Staff see quantities, never prices; managers see both.
+  const priceFmt = (v) => ((currentUser?.role || "") === "staff" ? "" : gbp(v));
   const togglePick = (opt) => setPickSel(sel => sel.some(x => x.id === opt.id) ? sel.filter(x => x.id !== opt.id) : [...sel, opt]);
   const needsApproval = (currentUser?.role || "") === "staff";   // staff orders await a manager
   const [pendingApprovals, setPendingApprovals] = useState([]);
@@ -14876,7 +14879,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
           <div className="text-[11px] mt-1 flex items-center gap-1" style={{ color: "#9A8770" }}><Package size={11}/> {unitLabel(i)}</div>
         </div>
         <div className="mt-2.5 flex items-end justify-between gap-2">
-          <div className="text-lg font-bold" style={{ color: "#844429" }}>{gbp(i.price)}</div>
+          <div className="text-lg font-bold" style={{ color: "#844429" }}>{priceFmt(i.price)}</div>
           {qty > 0 ? (
             <div className="flex items-center gap-1">
               <button onClick={() => bump(i.id, -1)} className="w-8 h-8 rounded-lg font-bold text-lg leading-none flex items-center justify-center" style={{ backgroundColor: "#E2CFBC", color: "#3A2E26" }}>−</button>
@@ -14900,7 +14903,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
           <button onClick={() => setDetailItem(i)} className="text-sm font-semibold truncate text-left hover:underline block w-full" style={{ color: "#3A2E26" }}>{cleanName(i.name)}</button>
           <div className="text-[11px] flex items-center gap-2" style={{ color: "#9A8770" }}><span className="flex items-center gap-1"><Package size={10}/> {unitLabel(i)}</span>{i.sku && <span style={{ color: "#A8835C" }}>{i.sku}</span>}</div>
         </div>
-        <div className="text-sm font-bold w-16 text-right flex-shrink-0" style={{ color: "#844429" }}>{gbp(i.price)}</div>
+        <div className="text-sm font-bold w-16 text-right flex-shrink-0" style={{ color: "#844429" }}>{priceFmt(i.price)}</div>
         <div className="flex-shrink-0 w-[104px] flex justify-end">
           {qty > 0 ? (
             <div className="flex items-center gap-1">
@@ -14986,7 +14989,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
       <div className="max-w-md mx-auto text-center py-16 space-y-4">
         <div className="w-16 h-16 rounded-full bg-emerald-500/15 border border-emerald-500/40 flex items-center justify-center mx-auto"><Check size={30} className="text-emerald-400"/></div>
         <h2 className="text-2xl font-bold text-white">{placed.id && directs.length ? `${1+directs.length} orders placed` : "Order placed"}</h2>
-        <p className="text-sm text-slate-400">{placed.count} item{placed.count!==1?"s":""} total{placed.id ? ` · ${gbp(placed.total)} excl. VAT via Distribution` : ""}.</p>
+        <p className="text-sm text-slate-400">{placed.count} item{placed.count!==1?"s":""} total{placed.id && (currentUser?.role || "") !== "staff" ? ` · ${gbp(placed.total)} excl. VAT via Distribution` : ""}.</p>
         {placed.id && <div className="text-xs text-slate-500">Distribution will pick and deliver their part.</div>}
         {directs.map(d => (
           <div key={d.orderId} className="rounded-2xl border border-amber-600/40 bg-amber-950/10 p-4 text-left space-y-2">
@@ -15130,12 +15133,9 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
         </button>
       )}
       {/* Header */}
-      <div className="flex-shrink-0 px-4 sm:px-6 py-3 flex items-center justify-between gap-3 flex-wrap" style={{ backgroundColor: "#FBF6EC", borderBottom: "1px solid #E8DCC6" }}>
+      <div className="flex-shrink-0 px-4 sm:px-6 py-1.5 flex items-center justify-between gap-3 flex-wrap" style={{ backgroundColor: "#FBF6EC", borderBottom: "1px solid #E8DCC6" }}>
         <div className="flex items-center gap-3">
-          <div>
-            <div className="text-[11px] uppercase tracking-widest font-semibold" style={{ color: "#C9854F" }}>Distribution</div>
-            <h2 className="text-xl font-bold leading-tight" style={{ color: "#3A2E26" }}>Order supplies</h2>
-          </div>
+          <h2 className="text-base font-bold leading-tight" style={{ color: "#3A2E26" }}>Order supplies</h2>
           {customers.length > 1 ? (
             <select value={customerId} onChange={e => { setCustomerId(e.target.value); setCart({}); }} className="px-2.5 py-1.5 rounded-lg text-xs" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}>
               {customers.map(c => <option key={c.id} value={c.id}>{c.displayName || c.companyName || c.name || c.id}</option>)}
@@ -15160,7 +15160,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
         </div>
       </div>
       {/* ── MY ORDERS entry point ── */}
-      {!loading && (
+      {!loading && (currentUser?.role || "") !== "staff" && (
         <div className="flex-shrink-0 px-4 sm:px-6 py-1.5 flex justify-end" style={{ backgroundColor: "#FBF6EC" }}>
           <button onClick={() => setHistoryOpen(true)} className="px-3 py-1.5 rounded-xl text-xs font-bold" style={{ backgroundColor: "#F3EADA", color: "#844429", border: "1px solid #E8DCC6" }}>
             My orders{orderHistory.length ? ` (${orderHistory.length})` : ""}
@@ -15168,8 +15168,18 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
         </div>
       )}
 
-      {/* ── TEAM ORDER ROUND — manager panel ── */}
-      {isManager && !loading && (
+      {/* ── TEAM ORDER ROUND — manager panel (collapsible; thin by default) ── */}
+      {isManager && !loading && round && !roundBarOpen && (
+        <button onClick={() => setRoundBarOpen(true)} className="flex-shrink-0 px-4 sm:px-6 py-1 text-left text-[11px] font-semibold" style={{ backgroundColor: "#FFF6E8", color: "#3A2E26", borderBottom: "1px solid #E8DCC6" }}>
+          Team round · {(round.assignments || []).filter(x => x.status === "done").length}/{(round.assignments || []).length} submitted · tap to manage ▾
+        </button>
+      )}
+      {isManager && !loading && !round && !roundBarOpen && (
+        <button onClick={() => setRoundBarOpen(true)} className="flex-shrink-0 px-4 sm:px-6 py-1 text-left text-[11px]" style={{ backgroundColor: "#FBF6EC", color: "#9A8770", borderBottom: "1px solid #E8DCC6" }}>
+          Team order round ▾
+        </button>
+      )}
+      {isManager && !loading && roundBarOpen && (
         <div className="flex-shrink-0 px-4 sm:px-6 py-2" style={{ backgroundColor: "#FBF6EC", borderBottom: "1px solid #E8DCC6" }}>
           {!round ? (
             <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -15381,7 +15391,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
                         <div key={i.id} className="rounded-xl p-2 flex items-center gap-2" style={qty>0 ? { border: "1px solid #5C9442", backgroundColor: "#E4EFD9" } : { border: "1px solid #E8DCC6", backgroundColor: "#FDF2E0" }}>
                           <div className="min-w-0 flex-1">
                             <div className="text-xs font-semibold truncate" style={{ color: "#3A2E26" }}>{cleanName(i.name)}</div>
-                            <div className="text-[10px]" style={{ color: "#9A8770" }}>{gbp(i.price)}</div>
+                            <div className="text-[10px]" style={{ color: "#9A8770" }}>{priceFmt(i.price)}</div>
                           </div>
                           {qty > 0 ? (
                             <div className="flex items-center gap-0.5 flex-shrink-0">
@@ -15428,13 +15438,13 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
               {cartLines.length === 0 && <div className="px-4 py-10 text-center text-sm" style={{ color: "#9A8770" }}>Your cart is empty.<br/>Tap <span style={{ color: "#844429" }}>Add</span> on any product.</div>}
               {catHeaderRows(l => (
                 <div key={l.id} className="px-4 py-2.5 flex items-center justify-between gap-2" style={{ borderBottom: "1px solid #F0E4D2" }}>
-                  <div className="min-w-0"><div className="text-sm truncate" style={{ color: "#3A2E26" }}>{cleanName(l.name)}</div><div className="text-[11px]" style={{ color: "#9A8770" }}>{l.qty} × {gbp(l.price)}</div></div>
-                  <div className="flex items-center gap-2 flex-shrink-0"><span className="text-sm font-medium" style={{ color: "#3A2E26" }}>{gbp(l.qty*Number(l.price))}</span><button onClick={() => setQty(l.id, 0)} style={{ color: "#A8835C" }}><Trash2 size={14}/></button></div>
+                  <div className="min-w-0"><div className="text-sm truncate" style={{ color: "#3A2E26" }}>{cleanName(l.name)}</div><div className="text-[11px]" style={{ color: "#9A8770" }}>{l.qty} × {priceFmt(l.price)}</div></div>
+                  <div className="flex items-center gap-2 flex-shrink-0"><span className="text-sm font-medium" style={{ color: "#3A2E26" }}>{priceFmt(l.qty*Number(l.price))}</span><button onClick={() => setQty(l.id, 0)} style={{ color: "#A8835C" }}><Trash2 size={14}/></button></div>
                 </div>
               ), { backgroundColor: "#EFE3CC", color: "#844429" })}
             </div>
             <div className="px-4 py-3 space-y-2.5" style={{ borderTop: "1px solid #E8DCC6" }}>
-              <div className="flex justify-between text-sm"><span style={{ color: "#9A8770" }}>Subtotal (excl. VAT)</span><span className="font-bold" style={{ color: "#C9854F" }}>{gbp(cartTotal)}</span></div>
+              <div className="flex justify-between text-sm"><span style={{ color: "#9A8770" }}>Subtotal (excl. VAT)</span><span className="font-bold" style={{ color: "#C9854F" }}>{priceFmt(cartTotal)}</span></div>
               <button onClick={() => { setSplitVendors([]); setConfirmOpen(true); }} disabled={!cartLines.length} className="w-full py-2.5 rounded-xl disabled:opacity-40 text-sm font-semibold" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>Review &amp; place order</button>
             </div>
           </div>
@@ -15445,7 +15455,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
       {cartCount > 0 && (
         <button onClick={() => setCartOpen(true)} className="lg:hidden fixed bottom-4 left-4 right-4 z-30 py-3.5 rounded-2xl font-semibold shadow-2xl flex items-center justify-between px-5" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>
           <span className="flex items-center gap-2"><ShoppingCart size={18}/> {cartCount} item{cartCount!==1?"s":""}</span>
-          <span>{gbp(cartTotal)} ›</span>
+          <span>{priceFmt(cartTotal)} ›</span>
         </button>
       )}
       {cartOpen && (
@@ -15454,7 +15464,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
             <div className="max-h-80 overflow-y-auto divide-y divide-slate-800/60 border border-slate-800 rounded-xl">
               {catHeaderRows(l => (
                 <div key={l.id} className="px-3 py-2.5 flex items-center justify-between gap-2">
-                  <div className="min-w-0"><div className="text-sm text-white truncate">{cleanName(l.name)}</div><div className="text-[11px] text-slate-500">{gbp(l.price)} each</div></div>
+                  <div className="min-w-0"><div className="text-sm text-white truncate">{cleanName(l.name)}</div><div className="text-[11px] text-slate-500">{priceFmt(l.price)} each</div></div>
                   <div className="flex items-center gap-1.5 flex-shrink-0">
                     <button onClick={() => bump(l.id, -1)} className="w-7 h-7 rounded-lg bg-slate-800 text-white font-bold">−</button>
                     <span className="w-6 text-center text-white text-sm">{l.qty}</span>
@@ -15463,7 +15473,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
                 </div>
               ), { backgroundColor: "#1E293B", color: "#F59E0B" })}
             </div>
-            <div className="flex justify-between text-sm font-bold"><span className="text-white">Subtotal (excl. VAT)</span><span className="text-white">{gbp(cartTotal)}</span></div>
+            <div className="flex justify-between text-sm font-bold"><span className="text-white">Subtotal (excl. VAT)</span><span className="text-white">{priceFmt(cartTotal)}</span></div>
             <button onClick={() => { setCartOpen(false); setSplitVendors([]); setConfirmOpen(true); }} disabled={!cartLines.length} className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold">Review &amp; place order</button>
           </div>
         </Modal>
@@ -15476,7 +15486,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
           <div className="flex-shrink-0 flex items-center justify-between px-4 sm:px-8 py-3" style={{ backgroundColor: "#FDF8EF", borderBottom: "1px solid #E8DCC6" }}>
             <button onClick={() => setConfirmOpen(false)} className="text-sm font-semibold flex items-center gap-1.5" style={{ color: "#844429" }}>← Back to cart</button>
             <div className="text-base font-bold" style={{ color: "#3A2E26" }}>Review your order</div>
-            <div className="text-sm tabular-nums font-bold" style={{ color: "#844429" }}>{gbp(cartTotal)}</div>
+            <div className="text-sm tabular-nums font-bold" style={{ color: "#844429" }}>{priceFmt(cartTotal)}</div>
           </div>
           <div className="flex-1 overflow-y-auto">
           <div className="max-w-3xl mx-auto w-full px-4 sm:px-6 py-5 space-y-4 pb-32">
@@ -15495,7 +15505,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="text-sm font-semibold truncate" style={{ color: "#3A2E26" }}>{cleanName(l.name)}</div>
-                    <div className="text-[11px]" style={{ color: "#9A8770" }}>{gbp(Number(l.price))} each{resolveSupplier(l) ? ` · ${vendorNameOf(resolveSupplier(l))}` : ""}</div>
+                    <div className="text-[11px]" style={{ color: "#9A8770" }}>{priceFmt(Number(l.price))} each{resolveSupplier(l) ? ` · ${vendorNameOf(resolveSupplier(l))}` : ""}</div>
                     <input
                       value={lineNotes[l.id] || ""}
                       onChange={ev => setLineNote(l.id, ev.target.value)}
@@ -15513,7 +15523,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
                   ) : (
                     <div className="text-xs tabular-nums flex-shrink-0" style={{ color: "#6B5D4F" }}>× {l.qty}</div>
                   )}
-                  <div className="text-sm font-bold tabular-nums flex-shrink-0 w-16 text-right" style={{ color: "#3A2E26" }}>{gbp(l.qty*Number(l.price))}</div>
+                  <div className="text-sm font-bold tabular-nums flex-shrink-0 w-16 text-right" style={{ color: "#3A2E26" }}>{priceFmt(l.qty*Number(l.price))}</div>
                 </div>
               ), { backgroundColor: "#EFE3CC", color: "#844429" })}
             </div>
@@ -15521,8 +15531,8 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
             {/* ── Order summary ── */}
             <div className="rounded-xl px-3 py-2.5 space-y-1" style={{ backgroundColor: "#FDF8EF", border: "1px solid #E8DCC6" }}>
               <div className="flex justify-between text-xs" style={{ color: "#6B5D4F" }}><span>Items</span><span className="tabular-nums">{cartCount}</span></div>
-              <div className="flex justify-between text-xs" style={{ color: "#6B5D4F" }}><span>Subtotal (excl. VAT)</span><span className="tabular-nums">{gbp(cartTotal)}</span></div>
-              <div className="flex justify-between text-base font-black pt-1 border-t" style={{ color: "#3A2E26", borderColor: "#E8DCC6" }}><span>Total</span><span className="tabular-nums">{gbp(cartTotal)}</span></div>
+              <div className="flex justify-between text-xs" style={{ color: "#6B5D4F" }}><span>Subtotal (excl. VAT)</span><span className="tabular-nums">{priceFmt(cartTotal)}</span></div>
+              <div className="flex justify-between text-base font-black pt-1 border-t" style={{ color: "#3A2E26", borderColor: "#E8DCC6" }}><span>Total</span><span className="tabular-nums">{priceFmt(cartTotal)}</span></div>
               <div className="text-[10px]" style={{ color: "#9A8770" }}>Direct-supplier items are billed by the supplier — their prices aren't included here.</div>
             </div>
 
@@ -15573,7 +15583,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
             <div className="max-w-3xl mx-auto w-full flex items-center gap-3">
               <button onClick={() => setConfirmOpen(false)} disabled={placing} className="px-5 py-3 rounded-xl text-sm font-semibold flex-shrink-0" style={{ backgroundColor: "#F3EADA", color: "#6B5D4F" }}>Keep editing</button>
               <button onClick={placeOrder} disabled={placing} className="flex-1 py-3 rounded-xl text-sm font-bold disabled:opacity-40" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>
-                {placing ? "Placing your order…" : `Place order · ${gbp(cartTotal)}`}
+                {placing ? "Placing your order…" : `Place order · ${priceFmt(cartTotal)}`}
               </button>
             </div>
           </div>
@@ -15598,7 +15608,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
                     <div className="flex items-center justify-between gap-2">
                       <div>
                         <div className="text-sm font-bold" style={{ color: "#3A2E26" }}>{o.soNumber} <span className="font-normal" style={{ color: "#9A8770" }}>· {o.orderDate}</span></div>
-                        <div className="text-[11px]" style={{ color: "#9A8770" }}>{gbp(o.total || 0)} excl. VAT</div>
+                        <div className="text-[11px]" style={{ color: "#9A8770" }}>{priceFmt(o.total || 0)} excl. VAT</div>
                       </div>
                       <span className="px-2 py-1 rounded-lg text-[10px] font-bold flex-shrink-0" style={
                         pending ? { background: "#FFF6E8", color: "#B45309" } :
@@ -15648,7 +15658,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
                       .slice(0, 6).map(c => (
                         <button key={c.id} onClick={() => { setAmendOrder(o => ({ ...o, lines: [...o.lines, { itemId: c.id, qty: 1, unitPrice: Number(c.price) || 0, taxRateId: c.taxRateId || null }] })); setAddSearch(""); }}
                           className="w-full text-left px-3 py-2 rounded-lg text-sm flex justify-between" style={{ backgroundColor: "#FFFFFF", border: "1px solid #E8DCC6", color: "#3A2E26" }}>
-                          <span>{cleanName(c.name)}</span><span style={{ color: "#9A8770" }}>{gbp(Number(c.price) || 0)}</span>
+                          <span>{cleanName(c.name)}</span><span style={{ color: "#9A8770" }}>{priceFmt(Number(c.price) || 0)}</span>
                         </button>
                       ))}
                   </div>
