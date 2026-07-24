@@ -183,7 +183,7 @@ import {
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
-  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, fetchStoreOrderPrefs, saveStoreOrderPrefs, fetchChatGroups, createChatGroup, updateChatGroup, deleteChatGroup, deleteChatThread, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment,
+  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, fetchStoreOrderPrefs, saveStoreOrderPrefs, fetchChatGroups, createChatGroup, updateChatGroup, deleteChatGroup, deleteChatThread, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment, editPendingOrderLines, mergePendingOrders,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
 } from "./supabase";
@@ -14571,6 +14571,35 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
   const togglePick = (opt) => setPickSel(sel => sel.some(x => x.id === opt.id) ? sel.filter(x => x.id !== opt.id) : [...sel, opt]);
   const [pendingApprovals, setPendingApprovals] = useState([]);
   const [approverIds, setApproverIds] = useState([]);
+  const [openAppr, setOpenAppr] = useState(null);      // soId expanded for view/edit
+  const [apprLines, setApprLines] = useState([]);      // [{itemId, name, qty, uom}] of the open order
+  const [apprBusy, setApprBusy] = useState(false);
+  const [mergeSel, setMergeSel] = useState([]);        // soIds ticked for merge
+  const reloadApprovals = () => fetchPendingApprovalSos(customerId).then(setPendingApprovals).catch(() => {});
+  const openApproval = async (p) => {
+    if (openAppr === p.id) { setOpenAppr(null); return; }
+    setOpenAppr(p.id); setApprBusy(true);
+    try {
+      const lines = await fetchOrderLinesLight(p.id);
+      const named = lines.map(l => ({ ...l, name: (catalogue.find(c => c.id === l.itemId)?.name) || l.itemId }));
+      setApprLines(named);
+    } catch (ev) { alert(ev.message); } finally { setApprBusy(false); }
+  };
+  const saveApprEdit = async () => {
+    setApprBusy(true);
+    try {
+      await editPendingOrderLines(openAppr, apprLines, currentUser?.name);
+      setOpenAppr(null); await reloadApprovals();
+    } catch (ev) { alert(ev.message); } finally { setApprBusy(false); }
+  };
+  const doMerge = async () => {
+    if (mergeSel.length < 2) return;
+    setApprBusy(true);
+    try {
+      await mergePendingOrders(mergeSel, currentUser?.name);
+      setMergeSel([]); await reloadApprovals();
+    } catch (ev) { alert(ev.message); } finally { setApprBusy(false); }
+  };
   const canApprove = !needsApproval || approverIds.includes(currentUser?.opsTeamMemberId) || approverIds.includes(currentUser?.id);             // vendorIds opted in for this checkout
   const isManager = ["owner", "hq_staff", "manager"].includes(currentUser?.role);
   const reloadRound = async (sid) => {
@@ -15196,18 +15225,50 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
             {pendingApprovals.length > 0 && canApprove && (
               <div className="rounded-2xl p-4 space-y-3" style={{ backgroundColor: "#FFF6E8", border: "1.5px solid #E0A664" }}>
                 <div className="text-sm font-bold" style={{ color: "#3A2E26" }}>Awaiting your approval</div>
+                {mergeSel.length >= 2 && (
+                  <button onClick={doMerge} disabled={apprBusy}
+                    className="w-full py-2 rounded-lg text-xs font-bold" style={{ backgroundColor: "#844429", color: "#fff" }}>
+                    {apprBusy ? "Merging…" : `Merge ${mergeSel.length} orders into one`}
+                  </button>
+                )}
                 {pendingApprovals.map(p => (
-                  <div key={p.id} className="flex items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="text-xs font-semibold truncate" style={{ color: "#3A2E26" }}>{p.soNumber} · {p.lineCount} item{p.lineCount !== 1 ? "s" : ""}</div>
-                      <div className="text-[10px] truncate" style={{ color: "#9A8770" }}>{p.orderDate}{p.note ? ` · ${p.note}` : ""}</div>
+                  <div key={p.id} className="rounded-xl" style={{ border: openAppr === p.id ? "1px solid #E0A664" : "1px solid transparent" }}>
+                    <div className="flex items-center gap-2">
+                      <input type="checkbox" title="Select to merge with other orders"
+                        checked={mergeSel.includes(p.id)}
+                        onChange={e => setMergeSel(x => e.target.checked ? [...x, p.id] : x.filter(y => y !== p.id))}
+                        className="rounded flex-shrink-0" />
+                      <button onClick={() => openApproval(p)} className="min-w-0 flex-1 text-left">
+                        <div className="text-xs font-semibold truncate" style={{ color: "#3A2E26" }}>{p.soNumber} · {p.lineCount} item{p.lineCount !== 1 ? "s" : ""} <span style={{ color: "#C9945A" }}>{openAppr === p.id ? "▾" : "▸ open"}</span></div>
+                        <div className="text-[10px] truncate" style={{ color: "#9A8770" }}>{p.orderDate}{p.note ? ` · ${p.note}` : ""}</div>
+                      </button>
+                      <div className="flex gap-1.5 flex-shrink-0">
+                        <button onClick={async () => { try { await setDistSalesOrderStatus(p.id, "cancelled"); setPendingApprovals(x => x.filter(y => y.id !== p.id)); } catch (ev) { alert(ev.message); } }}
+                          className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold" style={{ backgroundColor: "#F3EDE2", color: "#9A8770" }}>Reject</button>
+                        <button onClick={async () => { try { await setDistSalesOrderStatus(p.id, "confirmed"); setPendingApprovals(x => x.filter(y => y.id !== p.id)); } catch (ev) { alert(ev.message); } }}
+                          className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold" style={{ backgroundColor: "#5C9442", color: "#fff" }}>Approve</button>
+                      </div>
                     </div>
-                    <div className="flex gap-1.5 flex-shrink-0">
-                      <button onClick={async () => { try { await setDistSalesOrderStatus(p.id, "cancelled"); setPendingApprovals(x => x.filter(y => y.id !== p.id)); } catch (ev) { alert(ev.message); } }}
-                        className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold" style={{ backgroundColor: "#F3EDE2", color: "#9A8770" }}>Reject</button>
-                      <button onClick={async () => { try { await setDistSalesOrderStatus(p.id, "confirmed"); setPendingApprovals(x => x.filter(y => y.id !== p.id)); } catch (ev) { alert(ev.message); } }}
-                        className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold" style={{ backgroundColor: "#5C9442", color: "#fff" }}>Approve</button>
-                    </div>
+                    {openAppr === p.id && (
+                      <div className="mt-2 pl-6 pr-1 pb-2 space-y-1.5">
+                        {apprBusy && apprLines.length === 0 ? <div className="text-[11px]" style={{ color: "#9A8770" }}>Loading…</div> : null}
+                        {apprLines.map((l, idx) => (
+                          <div key={l.itemId} className="flex items-center gap-2">
+                            <div className="flex-1 min-w-0 text-[11px] truncate" style={{ color: "#3A2E26" }}>{l.name}</div>
+                            <input type="number" min="0" step="any" value={l.qty}
+                              onChange={e => setApprLines(rows => rows.map((r, i) => i === idx ? { ...r, qty: e.target.value } : r))}
+                              className="w-16 px-2 py-1 rounded-lg text-[11px] text-right" style={{ backgroundColor: "#FFFFFF", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
+                            <span className="text-[10px] w-8" style={{ color: "#9A8770" }}>{l.uom || ""}</span>
+                            <button onClick={() => setApprLines(rows => rows.filter((r, i) => i !== idx))}
+                              className="text-[11px] px-1.5 py-1 rounded" style={{ color: "#B4544E" }}>✕</button>
+                          </div>
+                        ))}
+                        <button onClick={saveApprEdit} disabled={apprBusy}
+                          className="w-full mt-1 py-1.5 rounded-lg text-[11px] font-bold" style={{ backgroundColor: "#844429", color: "#fff" }}>
+                          {apprBusy ? "Saving…" : "Save changes"}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -59885,7 +59946,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: STOREDISABLE 2026-07-24g"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: APPREDIT 2026-07-24h"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views

@@ -12010,6 +12010,58 @@ export async function deleteDistSalesOrder(soId) {
   return true;
 }
 
+// Manager edits a pending order's lines before approving. Records an amendment
+// note so the change is auditable (who edited, when). Lines: [{itemId, qty, uom, unitPrice, taxRateId}].
+export async function editPendingOrderLines(soId, lines, editorName) {
+  const { data: so } = await supabase.from("dist_sales_orders").select("*").eq("id", soId).single();
+  if (!so) throw new Error("Order not found.");
+  if (so.status !== "pending_approval" && so.status !== "confirmed") throw new Error("Only pending or confirmed orders can be edited here.");
+  await supabase.from("dist_sales_order_lines").delete().eq("so_id", soId);
+  const lr = (lines || []).filter(l => l.itemId && Number(l.qty) > 0).map(l => ({
+    id: distId("dsol"), so_id: soId, item_id: l.itemId, qty: Number(l.qty) || 0,
+    unit_price: Number(l.unitPrice) || 0, tax_rate_id: l.taxRateId || null, uom: l.uom || null,
+  }));
+  if (lr.length) { const { error } = await supabase.from("dist_sales_order_lines").insert(lr); if (error) throw error; }
+  const stamp = `Edited by ${editorName || "manager"} on ${new Date().toISOString().slice(0, 10)}`;
+  await supabase.from("dist_sales_orders").update({ note: [so.note, stamp].filter(Boolean).join(" · ") }).eq("id", soId);
+  return soId;
+}
+
+// Merge several PENDING orders from the SAME store into the first one. Duplicate
+// items have their quantities summed. The others are cancelled with a pointer note.
+export async function mergePendingOrders(soIds, editorName) {
+  const ids = [...new Set((soIds || []).filter(Boolean))];
+  if (ids.length < 2) throw new Error("Pick at least two orders to merge.");
+  const { data: sos } = await supabase.from("dist_sales_orders").select("*").in("id", ids);
+  if (!sos || sos.length !== ids.length) throw new Error("Some orders not found.");
+  const cust = sos[0].customer_id;
+  if (!sos.every(o => o.customer_id === cust)) throw new Error("All orders must be for the same store.");
+  if (!sos.every(o => o.status === "pending_approval")) throw new Error("Only pending orders can be merged.");
+  const target = sos.find(o => o.id === ids[0]) || sos[0];
+  const { data: allLines } = await supabase.from("dist_sales_order_lines").select("*").in("so_id", ids);
+  // Sum duplicate items across all orders.
+  const merged = new Map();
+  (allLines || []).forEach(l => {
+    const k = l.item_id;
+    if (!merged.has(k)) merged.set(k, { ...l, qty: 0 });
+    merged.get(k).qty = Number(merged.get(k).qty) + (Number(l.qty) || 0);
+  });
+  await supabase.from("dist_sales_order_lines").delete().in("so_id", ids);
+  const lr = [...merged.values()].map(l => ({
+    id: distId("dsol"), so_id: target.id, item_id: l.item_id, qty: Number(l.qty) || 0,
+    unit_price: Number(l.unit_price) || 0, tax_rate_id: l.tax_rate_id || null, uom: l.uom || null, line_note: l.line_note || null,
+  }));
+  if (lr.length) { const { error } = await supabase.from("dist_sales_order_lines").insert(lr); if (error) throw error; }
+  const others = ids.filter(id => id !== target.id);
+  const stamp = `Merged ${others.length + 1} orders by ${editorName || "manager"} on ${new Date().toISOString().slice(0, 10)}`;
+  await supabase.from("dist_sales_orders").update({ note: [target.note, stamp].filter(Boolean).join(" · ") }).eq("id", target.id);
+  // Cancel the absorbed orders.
+  for (const oid of others) {
+    await supabase.from("dist_sales_orders").update({ status: "cancelled", note: `Merged into ${target.so_number || target.id}` }).eq("id", oid);
+  }
+  return target.id;
+}
+
 export async function setDistSalesOrderStatus(id, status) {
   const { error } = await supabase.from("dist_sales_orders").update({ status }).eq("id", id);
   if (error) throw error;
