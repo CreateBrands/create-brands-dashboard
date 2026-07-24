@@ -4864,14 +4864,24 @@ function DistTypedItemsView({ itemType, currentUser }) {
     if (d === yest) return "yesterday";
     return `${d.slice(8, 10)}/${d.slice(5, 7)}`;
   };
+  // Buckets by FULFILMENT, not by order date: anything not fully bought is
+  // pending (that's the work); everything else is dated by when it was bought.
   const dayBucket = (o) => {
-    const d = dayKey(o); if (!d) return "past";
+    if (!o.allDone) return "pending";
+    const d = String(o.fulfilledAt || "").slice(0, 10);
+    if (!d) return "older";
     const iso = (x) => x.toISOString().slice(0, 10);
-    const today = iso(new Date()), tom = iso(new Date(Date.now() + 86400000)), yest = iso(new Date(Date.now() - 86400000));
+    const today = iso(new Date()), yest = iso(new Date(Date.now() - 86400000));
     if (d === today) return "today";
-    if (d === tom) return "tomorrow";
     if (d === yest) return "yesterday";
-    return d > tom ? "later" : "past";
+    return "older";
+  };
+  const fulfilLabel = (o) => {
+    if (!o.allDone) return null;
+    const d = String(o.fulfilledAt || "").slice(0, 10);
+    if (!d) return "bought";
+    const bucket = dayBucket(o);
+    return bucket === "today" ? "bought today" : bucket === "yesterday" ? "bought yesterday" : `bought ${d.slice(8, 10)}/${d.slice(5, 7)}`;
   };
   const [buyDlg, setBuyDlg] = useState(null);
   const BUY_UOMS = ["Kg", "Liter", "Each", "Pack", "Box", "Case"];
@@ -5055,7 +5065,7 @@ function DistTypedItemsView({ itemType, currentUser }) {
              shopping list combines only what you claimed. ── */}
       {!loading && orders.length > 0 && (
         <div className="flex flex-wrap gap-1.5 mb-3">
-          {[["all", "All"], ["today", "Today"], ["tomorrow", "Tomorrow"], ["yesterday", "Yesterday"], ["later", "Later"], ["past", "Older"]].map(([k, lbl]) => {
+          {[["all", "All"], ["pending", "Still to buy"], ["today", "Bought today"], ["yesterday", "Bought yesterday"], ["older", "Bought earlier"]].map(([k, lbl]) => {
             const n = k === "all" ? claimScoped.length : claimScoped.filter(o => dayBucket(o) === k).length;
             if (k !== "all" && n === 0) return null;
             return (
@@ -5083,7 +5093,9 @@ function DistTypedItemsView({ itemType, currentUser }) {
                   <div>
                     <div className="text-xs font-bold" style={{ color: WH.ink }}>{o.soNumber} · {o.customerName}</div>
                     <div className="text-[10px]" style={{ color: WH.inkFaint }}>
-                      <span className="font-bold" style={{ color: dayBucket(o) === "today" ? "#B45309" : WH.inkFaint }}>for {dayLabel(dayKey(o))}</span>
+                      <span className="font-bold" style={{ color: o.allDone ? "#3F6B3A" : "#B45309" }}>
+                        {o.allDone ? `\u2713 ${fulfilLabel(o)}` : "still to buy"}
+                      </span>
                       {" · "}{o.lines.length} item{o.lines.length!==1?"s":""}
                       {o.orderDate ? ` · placed ${dayLabel(String(o.orderDate).slice(0,10))}` : ""}
                     </div>
@@ -5125,7 +5137,7 @@ function DistTypedItemsView({ itemType, currentUser }) {
                 {orders.filter(o => o.allDone).map(o => (
                   <div key={`done:${o.soId}`} className="rounded-xl px-3 py-1.5" style={{ border: "1px solid #CBDEC6", background: "#F2F7F0", opacity: 0.85 }}>
                     <div className="text-[11px] font-bold" style={{ color: "#3F6B3A" }}>✓ {o.soNumber} · {o.customerName}</div>
-                    <div className="text-[9px]" style={{ color: WH.inkFaint }}>{o.lines.length} items{o.orderDate ? ` · ${String(o.orderDate).slice(8,10)}/${String(o.orderDate).slice(5,7)}` : ""}{claims[o.soId] ? ` · ${claims[o.soId].driverName || "claimed"}` : ""}</div>
+                    <div className="text-[9px]" style={{ color: WH.inkFaint }}>{o.lines.length} items{fulfilLabel(o) ? ` · ${fulfilLabel(o)}` : ""}{claims[o.soId] ? ` · ${claims[o.soId].driverName || "claimed"}` : ""}</div>
                   </div>
                 ))}
               </div>
@@ -59866,7 +59878,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: MOBGRID 2026-07-24d"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: FULFILDATE 2026-07-24e"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views

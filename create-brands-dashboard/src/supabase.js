@@ -14414,10 +14414,13 @@ export async function fetchDistOrdersByItemType(itemType, { includeDone = false 
         return { itemId: l.itemId, name: it?.name || l.itemId, sku: it?.sku || "", category: it?.category || "", qty: l.qty, uom: l.uom || null, packUnit: it?.packUnit, packSize: it?.packSize != null ? Number(it.packSize) : null, packCount: it?.packCount != null ? Number(it.packCount) : null || "" };
       });
     if (!matchLines.length) continue; // order has none of this type — skip
-    const withDone = matchLines.map(l => ({ ...l, done: checks.has(`${so.id}:${l.itemId}`), bought: (checks.bought || {})[`${so.id}:${l.itemId}`] || null }));
+    const withDone = matchLines.map(l => ({ ...l, done: checks.has(`${so.id}:${l.itemId}`), bought: (checks.bought || {})[`${so.id}:${l.itemId}`] || null, doneAt: (checks.doneAt || {})[`${so.id}:${l.itemId}`] || null }));
+    // Fulfilled date = when the LAST line of this order was ticked bought.
+    const doneStamps = withDone.map(l => l.doneAt).filter(Boolean).sort();
+    const fulfilledAt = withDone.length && withDone.every(l => l.done) && doneStamps.length ? doneStamps[doneStamps.length - 1] : null;
     const cust = custById.get(so.customerId);
     out.push({
-      soId: so.id, soNumber: so.soNumber, orderDate: so.orderDate, wantedDate: so.expectedShip || so.orderDate || null,
+      soId: so.id, soNumber: so.soNumber, orderDate: so.orderDate, wantedDate: so.expectedShip || so.orderDate || null, fulfilledAt,
       customerId: so.customerId, customerName: cust?.displayName || cust?.companyName || "—",
       storeId: cust?.storeId || null,
       stage: stageBySo.get(so.id) || so.status || "confirmed",
@@ -14435,11 +14438,15 @@ export async function fetchDistOrdersByItemType(itemType, { includeDone = false 
 // Presence of a (so_id,item_id) row = that line is marked ready/done.
 export async function fetchDistFulfilChecks(soIds = []) {
   if (!soIds.length) { const st = new Set(); st.bought = {}; return st; }
-  const { data, error } = await supabase.from("dist_fulfil_checks").select("so_id, item_id, bought_qty, bought_uom").in("so_id", soIds);
+  const { data, error } = await supabase.from("dist_fulfil_checks").select("so_id, item_id, bought_qty, bought_uom, done_at").in("so_id", soIds);
   if (error) throw error;
   const st = new Set((data || []).map(r => `${r.so_id}:${r.item_id}`));
   st.bought = {};   // "soId:itemId" -> { qty, uom } where the driver recorded actuals
-  (data || []).forEach(r => { if (r.bought_qty != null || r.bought_uom) st.bought[`${r.so_id}:${r.item_id}`] = { qty: r.bought_qty != null ? Number(r.bought_qty) : null, uom: r.bought_uom || null }; });
+  st.doneAt = {};   // "soId:itemId" -> when it was ticked bought (the fulfilment date)
+  (data || []).forEach(r => {
+    if (r.bought_qty != null || r.bought_uom) st.bought[`${r.so_id}:${r.item_id}`] = { qty: r.bought_qty != null ? Number(r.bought_qty) : null, uom: r.bought_uom || null };
+    if (r.done_at) st.doneAt[`${r.so_id}:${r.item_id}`] = r.done_at;
+  });
   return st;
 }
 // Mark or unmark a single order-line.
