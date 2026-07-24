@@ -15142,7 +15142,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
               <div className="text-lg font-bold" style={{ color: "#3A2E26" }}>Who are you ordering from?</div>
               <div className="text-xs mt-0.5" style={{ color: "#9A8770" }}>Pick a supplier — you'll only see their items.{needsApproval ? " Your order will go to a manager for approval." : ""}</div>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div className="grid grid-cols-2 gap-2">
             {[{ id: "dist", name: "Distribution (Create Brands)", desc: "Warehouse, Central Kitchen and fresh produce", span: true },
               // Smart list: a supplier appears only when at least one of this
               // store's items is assigned to them — empty suppliers are noise.
@@ -15152,7 +15152,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
               const on = pickSel.some(x => x.id === opt.id);
               return (
                 <button key={opt.id} onClick={() => togglePick(opt)}
-                  className={`w-full text-left rounded-2xl p-3 flex items-center gap-3 ${opt.span ? "sm:col-span-2" : ""}`}
+                  className={`w-full text-left rounded-2xl p-3 flex items-center gap-2 ${opt.span ? "col-span-2" : ""}`}
                   style={{ backgroundColor: on ? "#EAF3E7" : "#FDF8EF", border: on ? "1.5px solid #5C9442" : "1px solid #E8DCC6" }}>
                   <div className="w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0 text-white text-xs font-bold"
                     style={{ backgroundColor: on ? "#5C9442" : "#E8DCC6" }}>{on ? "\u2713" : ""}</div>
@@ -59866,7 +59866,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: DAYFILTER 2026-07-24c"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: MOBGRID 2026-07-24d"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
