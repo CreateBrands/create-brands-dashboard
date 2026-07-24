@@ -13172,7 +13172,12 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
     ...(prefs.locations || []),
     ...Object.values(tags).flatMap(t => String(t.location || "").split(",")).map(x => x.trim()).filter(Boolean),
   ])).sort(), [tags, prefs.locations]);
-  const itemCategories = useMemo(() => Array.from(new Set(items.map(i => i.category).filter(Boolean))).sort(), [items]);
+  const canonCat = (c) => String(c || "").trim().replace(/\s+/g, " ").toLowerCase();
+  const itemCategories = useMemo(() => {
+    const seen = new Map();   // canonical -> first display spelling
+    items.forEach(i => { const c = (i.category || "").trim(); if (c && !seen.has(canonCat(c))) seen.set(canonCat(c), c); });
+    return Array.from(seen.values()).sort((x, y) => x.localeCompare(y));
+  }, [items]);
   const roundBasis = prefs.roundDefaults?.basis || "category";
   const roundSections = useMemo(() => (roundBasis === "location" ? locations : itemCategories), [roundBasis, locations, itemCategories]);
   const defaultAsg = prefs.roundDefaults?.assignments || {};   // { section: memberId }
@@ -13202,7 +13207,7 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
       if (list.includes(name)) await setTag(itemId, "location", list.filter(l => l !== name).join(","));
     }
   };
-  const vendorName = (id) => { const v = vendors.find(x => x.id === id); return v ? (v.displayName || v.companyName) : id; };
+  const vendorName = (id) => { if (id === "dist") return "Distribution"; const v = vendors.find(x => x.id === id); return v ? (v.displayName || v.companyName) : id; };
   const storeMembers = useMemo(() => (opsTeam || []).filter(m => !m.archivedAt && ((m.storeIds || []).includes(storeId) || m.primaryStoreId === storeId || m.storeId === storeId)), [opsTeam, storeId]);
   const shown = useMemo(() => {
     const ql = q.trim().toLowerCase();
@@ -13263,13 +13268,13 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
                   <div className="col-span-3 relative">
                     {(() => {
                       const sel = String(overrides[i.id] ?? i.fulfilledBy ?? "").split(",").map(x => x.trim()).filter(Boolean);
-                      const label = sel.length === 0 ? "Default — Distribution" : sel.length === 1 ? vendorName(sel[0]) : `${sel.length} suppliers`;
+                      const label = sel.length === 0 ? "Default — Distribution" : sel.length === 1 ? vendorName(sel[0]) : sel.length === 2 ? sel.map(vendorName).join(" + ") : `${sel.length} suppliers`;
                       return (
                         <>
                           <button onClick={() => { setLocOpen(null); setSupOpen(supOpen === i.id ? null : i.id); }} className={`${ec} w-full text-left truncate`}>{label} ▾</button>
                           {supOpen === i.id && (
                             <div className="absolute z-20 mt-1 w-64 max-h-64 overflow-y-auto rounded-xl border border-slate-700 bg-slate-900 p-2 space-y-1 shadow-xl">
-                              {vendors.map(v => {
+                              {[{ id: "dist" }, ...vendors].map(v => {
                                 const on = sel.includes(v.id);
                                 return (
                                   <label key={v.id} className="flex items-center gap-2 text-xs text-white px-1 py-0.5">
@@ -13368,7 +13373,8 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
                 const linesBySection = {};
                 (round.lines || []).forEach(l => {
                   const it = items.find(x => x.id === (l.itemId || l.item_id));
-                  const sec = basis === "location" ? String(it?.location || "").split(",")[0].trim() : (it?.category || "");
+                  const raw = basis === "location" ? String(it?.location || "").split(",")[0].trim() : (it?.category || "");
+                  const sec = sections.find(sx => canonCat(sx) === canonCat(raw)) || raw;   // variant spellings count together
                   linesBySection[sec] = (linesBySection[sec] || 0) + 1;
                 });
                 const setAsg = async (section, userId) => {
@@ -14510,7 +14516,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
   // Who fulfils this item FOR THIS STORE: store override wins, else the item's
   // global setting; null/undefined = Distribution.
   const resolveSupplierList = (i) => String((Object.prototype.hasOwnProperty.call(supplierOverrides, i.id) ? supplierOverrides[i.id] : i.fulfilledBy) || "").split(",").map(x => x.trim()).filter(Boolean);
-  const resolveSupplier = (i) => resolveSupplierList(i)[0] || null;
+  const resolveSupplier = (i) => resolveSupplierList(i).filter(x => x !== "dist")[0] || null;
   const myRoundMemberId = currentUser?.opsTeamMemberId || currentUser?.id;
   const myRoundAsg = (round?.assignments || []).filter(x => x.userId === myRoundMemberId || x.userId === currentUser?.id);
   const staffRoundMode = !isManager && !!round && myRoundAsg.length > 0;
@@ -14649,7 +14655,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
   const deptCatSet = useMemo(() => activeDept ? new Set((activeDept.categories || []).map(c => c.toLowerCase())) : null, [activeDept]);
   const deptCollSet = useMemo(() => activeDept ? new Set(activeDept.collectionIds || []) : null, [activeDept]);
   // Does an item belong to the active department (via category OR collection)?
-  const supplierMatch = (i) => { if (!supplier) return true; const list = resolveSupplierList(i); return supplier.some(sp => sp.id === "dist" ? list.length === 0 : list.includes(sp.id)); };
+  const supplierMatch = (i) => { if (!supplier) return true; const list = resolveSupplierList(i); return supplier.some(sp => sp.id === "dist" ? (list.length === 0 || list.includes("dist")) : list.includes(sp.id)); };
   const itemInDept = (i) => {
     if (!supplierMatch(i)) return false;   // supplier-first: only their items show
     if (!activeDept) return true;
@@ -15005,7 +15011,9 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
   if (!loading && staffRoundMode) {
     const basis = myRoundAsg[0]?.groupBy || "category";
     const mySections = new Set(myRoundAsg.map(x => x.section));
-    const myItems = catalogue.filter(i => supplierMatch(i) && mySections.has(roundSectionOf(i, basis)));
+    const canonSec = (x) => String(x || "").trim().replace(/\s+/g, " ").toLowerCase();
+    const mySectionsCanon = new Set([...mySections].map(canonSec));
+    const myItems = catalogue.filter(i => supplierMatch(i) && mySectionsCanon.has(canonSec(roundSectionOf(i, basis))));
     const byCat = {};
     myItems.forEach(i => { const c = roundSectionOf(i, basis); (byCat[c] = byCat[c] || []).push(i); });
     const filledN = myItems.filter(i => Number(roundQty[i.id]) > 0).length;
