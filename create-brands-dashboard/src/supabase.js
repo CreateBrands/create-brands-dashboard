@@ -2867,6 +2867,38 @@ export async function fetchTrainingOverview() {
   };
 }
 
+// ── HR POLICIES (manager-managed) ──
+export async function fetchHrPolicies({ includeInactive } = {}) {
+  let q = supabase.from("hr_policies").select("*").order("sort_order").order("created_at");
+  if (!includeInactive) q = q.eq("active", true);
+  const { data } = await q;
+  return (data || []).map(p => ({ key: p.key, label: p.label, docUrl: p.doc_url || "", sortOrder: p.sort_order || 0, active: p.active !== false }));
+}
+export async function upsertHrPolicy({ key, label, docUrl, sortOrder, active, createdBy }) {
+  const slug = key || `pol-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const row = { key: slug, label: label || "Untitled policy", doc_url: docUrl || null };
+  if (sortOrder !== undefined) row.sort_order = sortOrder;
+  if (active !== undefined) row.active = !!active;
+  if (createdBy) row.created_by = createdBy;
+  const { error } = await supabase.from("hr_policies").upsert(row, { onConflict: "key" });
+  if (error) throw error;
+  return slug;
+}
+export async function deleteHrPolicy(key) {
+  // Soft-delete: deactivate so historic acknowledgements keep their meaning.
+  const { error } = await supabase.from("hr_policies").update({ active: false }).eq("key", key);
+  if (error) throw error;
+}
+export async function uploadPolicyDoc(file) {
+  if (!file) throw new Error("No file provided.");
+  const ext = (file.name || "policy.pdf").split(".").pop().toLowerCase().replace(/[^a-z0-9]/g, "") || "pdf";
+  const path = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
+  const { error } = await supabase.storage.from("policy-docs").upload(path, file, { upsert: false, contentType: file.type || "application/pdf" });
+  if (error) throw error;
+  const { data } = supabase.storage.from("policy-docs").getPublicUrl(path);
+  return data.publicUrl;
+}
+
 export async function fetchPolicyAcks() {
   const { data, error } = await supabase.from("policy_acknowledgements")
     .select("employee_id, policy_key");

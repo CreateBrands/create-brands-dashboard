@@ -90,7 +90,7 @@ import {
   archiveTrainingTemplate, instantiateTemplate,
   fetchContractTemplates, createContractTemplate, updateContractTemplate, archiveContractTemplate,
   fetchEmployeeContracts, sendContract, signEmployeeContract, voidContract,
-  fetchPolicyAcknowledgements, acknowledgePolicy,
+  fetchPolicyAcknowledgements, acknowledgePolicy, fetchHrPolicies, upsertHrPolicy, deleteHrPolicy, uploadPolicyDoc,
   // Training progress (trainee consumption + manager verify)
   fetchTrainingProgress, setModuleCompletion, setModuleVerification,
   // Payroll
@@ -2789,6 +2789,8 @@ function LegacySteppedContent({ content }) {
 }
 
 function EmployeeOnboardingSection({ employeeId, currentUser, employee = null }) {
+  const [policies, setPolicies] = useState(ONBOARDING_POLICIES);
+  useEffect(() => { fetchHrPolicies().then(ps => setPolicies(ps.length ? ps : ONBOARDING_POLICIES)).catch(() => {}); }, []);
   const [acks, setAcks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [taxStmt, setTaxStmt] = useState(employee?.taxStarterStatement || "");
@@ -2862,7 +2864,7 @@ function EmployeeOnboardingSection({ employeeId, currentUser, employee = null })
   };
 
   if (loading) return null;
-  const allAcked = ONBOARDING_POLICIES.every(p => acks.some(a => a.policyKey === p.key));
+  const allAcked = policies.every(p => acks.some(a => a.policyKey === p.key));
   if (savedTax && allAcked && bankSaved) {
     return (
       <div>
@@ -2929,7 +2931,7 @@ function EmployeeOnboardingSection({ employeeId, currentUser, employee = null })
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
           <div className="text-sm font-semibold text-slate-200 mb-2">Policies to acknowledge</div>
           <div className="space-y-2">
-            {ONBOARDING_POLICIES.map(p => {
+            {policies.map(p => {
               const done = acks.some(a => a.policyKey === p.key);
               return (
                 <div key={p.key} className="flex items-center justify-between gap-3 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2">
@@ -39242,8 +39244,72 @@ function SelfFillLinkCard({ employee, onUpdateEmployee }) {
 
 // Manager/HR onboarding management for one employee: completion gate, tax,
 // bank (owner/HR only), policy acknowledgements.
+function ManagePoliciesModal({ currentUser, onClose, onChanged }) {
+  const [list, setList] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [newLabel, setNewLabel] = useState("");
+  const load = () => fetchHrPolicies({ includeInactive: true }).then(setList).catch(() => {});
+  useEffect(() => { load(); }, []);
+  const addPolicy = async () => {
+    if (!newLabel.trim()) return;
+    setBusy(true); setErr("");
+    try {
+      await upsertHrPolicy({ label: newLabel.trim(), sortOrder: (list.length + 1), active: true, createdBy: currentUser?.name });
+      setNewLabel(""); await load(); onChanged?.();
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  };
+  const uploadDoc = async (key, file) => {
+    if (!file) return;
+    setBusy(true); setErr("");
+    try {
+      const url = await uploadPolicyDoc(file);
+      await upsertHrPolicy({ key, label: list.find(p => p.key === key)?.label, docUrl: url });
+      await load(); onChanged?.();
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  };
+  const rename = async (key, label) => { try { await upsertHrPolicy({ key, label }); onChanged?.(); } catch (e) { setErr(e.message); } };
+  const toggle = async (p) => {
+    setBusy(true);
+    try { await upsertHrPolicy({ key: p.key, label: p.label, active: !p.active }); await load(); onChanged?.(); }
+    catch (e) { setErr(e.message); } finally { setBusy(false); }
+  };
+  return (
+    <Modal title="Manage policies" onClose={onClose}>
+      <div className="space-y-2">
+        {list.map(p => (
+          <div key={p.key} className="flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5" style={p.active ? undefined : { opacity: 0.5 }}>
+            <input value={p.label} onChange={e => setList(x => x.map(q => q.key === p.key ? { ...q, label: e.target.value } : q))}
+              onBlur={e => rename(p.key, e.target.value)}
+              className="flex-1 min-w-0 bg-transparent text-sm text-white outline-none" />
+            {p.docUrl
+              ? <a href={p.docUrl} target="_blank" rel="noreferrer" className="text-[10px] text-sky-400 flex-shrink-0">PDF ✓</a>
+              : <label className="text-[10px] text-slate-400 cursor-pointer flex-shrink-0">+ PDF<input type="file" accept="application/pdf" className="hidden" onChange={e => uploadDoc(p.key, e.target.files[0])} /></label>}
+            <button onClick={() => toggle(p)} className="text-[10px] px-1.5 py-0.5 rounded flex-shrink-0" style={p.active ? { background: "#7f1d1d", color: "#fecaca" } : { background: "#14532d", color: "#bbf7d0" }}>
+              {p.active ? "Disable" : "Enable"}
+            </button>
+          </div>
+        ))}
+        <div className="flex items-center gap-2 pt-1">
+          <input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder="New policy title (e.g. Uniform policy)"
+            onKeyDown={e => { if (e.key === "Enter") addPolicy(); }}
+            className="flex-1 px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white" />
+          <button onClick={addPolicy} disabled={busy || !newLabel.trim()} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-bold disabled:opacity-50">Add</button>
+        </div>
+        {err && <div className="text-xs text-rose-400">{err}</div>}
+        <div className="text-[10px] text-slate-600">Disabling keeps past acknowledgements intact; the policy just stops appearing for new sign-off.</div>
+      </div>
+    </Modal>
+  );
+}
+
 function OnboardingTab({ employee, employeeId, currentUser, onUpdateEmployee }) {
   const isHqOrOwner = currentUser?.role === "owner" || currentUser?.role === "hq_staff";
+  const canManagePolicies = isHqOrOwner || currentUser?.role === "manager";
+  const [policies, setPolicies] = useState(ONBOARDING_POLICIES);
+  const [managePol, setManagePol] = useState(false);
+  const reloadPolicies = () => fetchHrPolicies().then(ps => setPolicies(ps.length ? ps : ONBOARDING_POLICIES)).catch(() => {});
+  useEffect(() => { reloadPolicies(); }, []);
   const [acks, setAcks] = useState([]);
   const [contracts, setContracts] = useState([]);
   const [docs, setDocs] = useState([]);
@@ -39287,7 +39353,7 @@ function OnboardingTab({ employee, employeeId, currentUser, onUpdateEmployee }) 
   const contractSigned = contracts.some(c => c.status === "signed");
   const taxDone = !!employee.taxStarterStatement;
   const bankDone = !!employee.bankProvidedAt;
-  const policiesDone = ONBOARDING_POLICIES.every(p => acks.some(a => a.policyKey === p.key));
+  const policiesDone = policies.every(p => acks.some(a => a.policyKey === p.key));
   const checks = [
     { label: "Required documents approved", done: docsApproved },
     { label: "Contract signed",             done: contractSigned },
@@ -39413,7 +39479,7 @@ function OnboardingTab({ employee, employeeId, currentUser, onUpdateEmployee }) 
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
         <div className={sectionCls}>Policy acknowledgements</div>
         <div className="space-y-2">
-          {ONBOARDING_POLICIES.map(p => {
+          {policies.map(p => {
             const ack = acks.find(a => a.policyKey === p.key);
             return (
               <div key={p.key} className="flex items-center justify-between gap-3 bg-slate-950 border border-slate-800 rounded-lg px-3 py-2">
@@ -39428,7 +39494,11 @@ function OnboardingTab({ employee, employeeId, currentUser, onUpdateEmployee }) 
             );
           })}
         </div>
-        <div className="text-[10px] text-slate-600 mt-2">Employees can also acknowledge these themselves in their portal. Recording here is for in-person sign-off.</div>
+        <div className="flex items-center justify-between mt-2">
+          <div className="text-[10px] text-slate-600">Employees can also acknowledge these themselves in their portal. Recording here is for in-person sign-off.</div>
+          {canManagePolicies && <button onClick={() => setManagePol(true)} className="text-[11px] font-semibold px-2 py-1 rounded-lg bg-slate-800 text-slate-200 flex-shrink-0">Manage policies</button>}
+        </div>
+        {managePol && <ManagePoliciesModal currentUser={currentUser} onClose={() => setManagePol(false)} onChanged={reloadPolicies} />}
       </div>
     </div>
   );
@@ -59968,7 +60038,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: SCROLLTOP 2026-07-24k"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: POLICIES 2026-07-24l"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
