@@ -60300,7 +60300,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: CKNAV 2026-07-25c"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: CKENTITY 2026-07-25d"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
@@ -61847,13 +61847,18 @@ export default function App() {
     if (viewKey === "cogs") return FEATURE_REGISTRY.some(f => f.section === "cogs" && canFeature(f.key));
     return false;
   };
+  // Resolve the entity the user is effectively in. With a single entity the
+  // picker never runs, so selectedEntityBrand stays null even though the user is
+  // unambiguously in that entity — fall back to their sole entity so
+  // entity-scoped nav (e.g. Central Kitchen for a CK-only manager) still shows.
+  const navEntity = selectedEntityBrand || (entityBrands.length === 1 ? entityBrands[0].id : null);
   const NAV_GROUPS = NAV_GROUPS_RAW
     .map(g => ({ ...g, items: g.items.filter(item =>
       canRoleSeeSection(currentUserRole.matrixRole, item) &&
       !(ckOnly && item.hideForCK) &&
       // Entity-scoped items (e.g. Central Kitchen) only appear when that entity
-      // is the one currently entered. selectedEntityBrand holds the brand/entity id.
-      (!item.requiresEntity || selectedEntityBrand === item.requiresEntity)
+      // is the one currently entered (or is the user's sole entity).
+      (!item.requiresEntity || navEntity === item.requiresEntity)
     ).map(item => item.children ? { ...item, children: item.children.filter(c =>
       // Tab-style children may declare gateRole (allowed roles) or gateView
       // (defer to canSeeView). Children with neither are always shown UNLESS an
