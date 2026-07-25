@@ -809,12 +809,14 @@ function deltaStatus(delta, { upIsGood = true, warnAt = 10, badAt = 25 } = {}) {
   return "warn";
 }
 
-function StatCard({ label, value, sub, icon: Icon, accent = "brand", alert = false, status = "neut", note = null }) {
+function StatCard({ label, value, sub, icon: Icon, accent = "brand", alert = false, status = "neut", note = null, onClick = null }) {
   const p = alert ? KPI_PALETTE.red : (KPI_PALETTE[accent] || KPI_PALETTE.brand);
   const st = STATUS_COLORS[status] || STATUS_COLORS.neut;
   return (
-    <div className="group relative rounded-2xl border p-4 flex flex-col gap-2 shadow-[0_1px_2px_rgba(80,40,20,0.04)]"
+    <div className={`group relative rounded-2xl border p-4 flex flex-col gap-2 shadow-[0_1px_2px_rgba(80,40,20,0.04)] ${onClick ? "cursor-pointer hover:brightness-[0.98] transition" : ""}`}
+      onClick={onClick || undefined} role={onClick ? "button" : undefined} tabIndex={onClick ? 0 : undefined}
       style={{ background: p.bg, borderColor: p.bd }}>
+      {onClick && <div className="absolute top-3 right-3 opacity-40 group-hover:opacity-70 transition"><ChevronRight size={15} style={{ color: p.tint }} /></div>}
       <div className="flex items-center gap-2">
         {Icon && <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: p.chip }}><Icon size={14} style={{ color: p.tint }} /></div>}
         <span className="text-[11px] font-semibold uppercase tracking-[0.06em] leading-tight" style={{ color: p.tint }}>{label}</span>
@@ -30180,6 +30182,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
   // Theoretical COGS (recipe x sales) for Prime Cost % and Net Margin. Only for a
   // single selected store (the engine is per-store); "all" leaves these blank.
   const [dashCogs, setDashCogs] = useState(null);
+  const [cogsBreakdown, setCogsBreakdown] = useState(null);
   useEffect(() => {
     let cancelled = false;
     if (!USE_COGS_V2 || !singleStoreId) { setDashCogs(null); return; }
@@ -30194,6 +30197,15 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
     && cur.revenue > 0 && dashCogs.cogs <= cur.revenue * 1.5;
   const primeCostPct = cogsTrustworthy ? ((cur.labourCost + dashCogs.cogs) / cur.revenue) * 100 : null;
   const cogsPct = cogsTrustworthy && cur.revenue > 0 ? (dashCogs.cogs / cur.revenue) * 100 : null;
+  // All-in COGS: the measured (mapped+costed) cost PLUS an estimate for revenue
+  // that has no recipe cost yet — unmapped items and mapped-but-uncosted ones —
+  // charged at an assumed 30% food-cost rate. Without this the headline COGS%
+  // only reflects the costed slice and reads artificially low.
+  const UNCOSTED_COGS_RATE = 0.30;
+  const uncostedRevenue = cogsTrustworthy ? ((dashCogs.unmappedRevenue || 0) + (dashCogs.mappedButUncostedRevenue || 0)) : 0;
+  const estUncostedCogs = uncostedRevenue * UNCOSTED_COGS_RATE;
+  const allInCogs = cogsTrustworthy ? (dashCogs.cogs + estUncostedCogs) : null;
+  const allInCogsPct = (cogsTrustworthy && cur.revenue > 0) ? (allInCogs / cur.revenue) * 100 : null;
   const netMarginPct = cogsTrustworthy ? ((cur.revenue - cur.labourCost - dashCogs.cogs) / cur.revenue) * 100 : null;
   const dashCogsCoverage = cogsTrustworthy ? dashCogs.coverage : null;
 
@@ -30483,6 +30495,49 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
 
   return (
     <div className="space-y-4">
+      {cogsBreakdown && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(30,18,10,0.55)" }} onClick={() => setCogsBreakdown(null)}>
+          <div className="w-full max-w-md rounded-2xl overflow-hidden" style={{ background: "#FBF6EC" }} onClick={e => e.stopPropagation()}>
+            <div className="px-5 py-4 border-b flex items-center justify-between" style={{ borderColor: "#EADFCB" }}>
+              <div>
+                <div className="text-sm font-bold" style={{ color: "#3A2E26" }}>COGS breakdown</div>
+                <div className="text-[11px] mt-0.5" style={{ color: "#9A8770" }}>All-in food cost = measured + estimated on uncosted sales</div>
+              </div>
+              <button onClick={() => setCogsBreakdown(null)} style={{ color: "#9A8770" }}><X size={18} /></button>
+            </div>
+            <div className="p-5 space-y-3">
+              {(() => {
+                const b = cogsBreakdown;
+                const Row = ({ label, sub, value, bold, accent }) => (
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className={`text-sm ${bold ? "font-bold" : ""}`} style={{ color: accent || "#3A2E26" }}>{label}</div>
+                      {sub && <div className="text-[11px] mt-0.5" style={{ color: "#9A8770" }}>{sub}</div>}
+                    </div>
+                    <div className={`text-sm tabular-nums flex-shrink-0 ${bold ? "font-bold" : ""}`} style={{ color: accent || "#3A2E26" }}>{value}</div>
+                  </div>
+                );
+                return (
+                  <>
+                    <Row label="Measured COGS" sub={`From ${fmtCurrency(b.costedRevenue)} of costed sales`} value={fmtCurrency(b.mappedCogs)} />
+                    <div className="border-t" style={{ borderColor: "#EADFCB" }} />
+                    <div className="text-[11px] uppercase tracking-wide font-bold" style={{ color: "#9A8770" }}>Estimated on uncosted sales</div>
+                    <Row label="Unmapped sales" sub="Menu items with no bucket mapping" value={fmtCurrency(b.unmappedRevenue)} />
+                    <Row label="Mapped but uncosted" sub="Mapped, but no recipe cost yet" value={fmtCurrency(b.mappedUncostedRevenue)} />
+                    <Row label={`Estimated COGS @ ${Math.round(b.rate * 100)}%`} sub={`${fmtCurrency(b.unmappedRevenue + b.mappedUncostedRevenue)} × ${Math.round(b.rate * 100)}%`} value={fmtCurrency(b.estUncostedCogs)} accent="#844429" />
+                    <div className="border-t-2" style={{ borderColor: "#DFD0B8" }} />
+                    <Row label="All-in COGS" value={fmtCurrency(b.allInCogs)} bold />
+                    <Row label="All-in COGS %" sub={`Of ${fmtCurrency(b.totalRevenue)} total revenue`} value={`${b.allInCogsPct.toFixed(1)}%`} bold accent="#844429" />
+                  </>
+                );
+              })()}
+              <div className="text-[11px] leading-relaxed pt-1" style={{ color: "#9A8770" }}>
+                The estimate charges uncosted sales at a {Math.round(cogsBreakdown.rate * 100)}% assumed food-cost rate. To replace estimates with real figures, map remaining menu categories and cost their recipes in Mapping &amp; Products.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Compact top bar: filters + Ask the Data on one row */}
       <div className="flex flex-wrap items-center gap-2.5">
         <PeriodFilterBar preset={preset} onPreset={setPreset} customFrom={customFrom} customTo={customTo} onCustomFrom={setCustomFrom} onCustomTo={setCustomTo} />
@@ -30584,7 +30639,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3">
-        <StatCard label="COGS %" value={cogsPct != null ? `${cogsPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={cogsPct != null ? `${fmtCurrency(dashCogs.cogs)} food cost` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={ShoppingCart} accent="caramel" status={cogsPct == null ? "neut" : cogsPct > 35 ? "bad" : cogsPct > 30 ? "warn" : "good"} note={cogsPct == null ? null : cogsPct > 35 ? "high" : cogsPct > 30 ? "watch" : "on track"} alert={cogsPct != null && cogsPct > 35} />
+        <StatCard label="COGS %" value={allInCogsPct != null ? `${allInCogsPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={allInCogsPct != null ? `${fmtCurrency(allInCogs)} all-in${estUncostedCogs > 0 ? ` · incl. est.` : ""}` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={ShoppingCart} accent="caramel" status={allInCogsPct == null ? "neut" : allInCogsPct > 35 ? "bad" : allInCogsPct > 30 ? "warn" : "good"} note={allInCogsPct == null ? null : allInCogsPct > 35 ? "high" : allInCogsPct > 30 ? "watch" : "on track"} alert={allInCogsPct != null && allInCogsPct > 35} onClick={allInCogsPct != null ? () => setCogsBreakdown({ mappedCogs: dashCogs.cogs, costedRevenue: dashCogs.costedRevenue || 0, unmappedRevenue: dashCogs.unmappedRevenue || 0, mappedUncostedRevenue: dashCogs.mappedButUncostedRevenue || 0, estUncostedCogs, allInCogs, allInCogsPct, totalRevenue: cur.revenue, rate: UNCOSTED_COGS_RATE }) : null} />
         <StatCard label="Prime Cost %" value={primeCostPct != null ? `${primeCostPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={primeCostPct != null ? `${fmtCurrency(dashCogs.cogs)} COGS + ${fmtCurrency(cur.labourCost)} labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={Activity} accent="brown" status={primeCostPct == null ? "neut" : primeCostPct > 65 ? "bad" : primeCostPct > 60 ? "warn" : "good"} note={primeCostPct == null ? null : primeCostPct > 65 ? "high" : primeCostPct > 60 ? "watch" : "healthy"} alert={primeCostPct != null && primeCostPct > 65} />
         <StatCard label="Net Margin" value={netMarginPct != null ? `${netMarginPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={netMarginPct != null ? `after COGS + labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={TrendingUp} accent="brand" status={netMarginPct == null ? "neut" : netMarginPct < 0 ? "bad" : netMarginPct < 10 ? "warn" : "good"} note={netMarginPct == null ? null : netMarginPct < 0 ? "loss" : netMarginPct < 10 ? "thin" : "healthy"} />
         <StatCard label="Open Issues" value={openIssues} sub={criticalIssues > 0 ? `${criticalIssues} critical` : "All under control"} icon={AlertCircle} accent="gold" status={criticalIssues > 0 ? "bad" : openIssues > 0 ? "warn" : "good"} note={criticalIssues > 0 ? `${criticalIssues} critical` : openIssues > 0 ? `${openIssues} open` : "clear"} alert={criticalIssues > 0} />
@@ -60332,7 +60387,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: CKMAKELIST 2026-07-25e"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: COGSALLIN 2026-07-25f"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
