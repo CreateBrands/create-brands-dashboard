@@ -6294,15 +6294,16 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                     </div>
                   )}
 
-                  {/* Demand rows — aligned columns */}
+                  {/* Demand rows — table on desktop, cards on mobile */}
                   <div className="px-4 py-2">
+                    {/* Desktop table (md+) */}
                     {rows.length > 0 && (
-                      <div className="grid grid-cols-[1fr_58px_62px_150px] gap-2 text-[9px] uppercase tracking-wider text-slate-600 font-bold pb-1.5 border-b border-slate-800/50">
+                      <div className="hidden md:grid grid-cols-[1fr_58px_62px_150px] gap-2 text-[9px] uppercase tracking-wider text-slate-600 font-bold pb-1.5 border-b border-slate-800/50">
                         <div>Item</div><div className="text-right">Ordered</div><div className="text-right">On hand</div><div className="text-right">Status</div>
                       </div>
                     )}
                     {rows.slice(0, 14).map(r => (
-                      <div key={r.itemId} className="grid grid-cols-[1fr_58px_62px_150px] gap-2 items-center text-xs py-1.5 border-b border-slate-800/40 last:border-0">
+                      <div key={r.itemId} className="hidden md:grid grid-cols-[1fr_58px_62px_150px] gap-2 items-center text-xs py-1.5 border-b border-slate-800/40 last:border-0">
                         <div className="text-slate-300 min-w-0 truncate">{r.name}{!r.linked && <span className="ml-1.5 text-[8px] px-1 py-0.5 rounded bg-amber-600/80 text-white align-middle">NOT LINKED</span>}</div>
                         <div className="text-right tabular-nums text-slate-300 font-semibold">{r.ordered}</div>
                         <div className="text-right tabular-nums text-slate-400">{r.onHand}</div>
@@ -6313,6 +6314,37 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                         </div>
                       </div>
                     ))}
+
+                    {/* Mobile cards (below md): name is the hero, qty a bold badge,
+                        priority shown by size — the top shortfalls get a warm accent. */}
+                    <div className="md:hidden space-y-2 pt-1">
+                      {rows.slice(0, 14).map((r, idx) => {
+                        const isTop = r.short > 0 && idx < 3;   // highest-volume shortfalls
+                        return (
+                          <div key={r.itemId}
+                            className={`flex items-center gap-3 rounded-xl border px-3.5 py-3 ${r.short > 0 ? "bg-slate-900/60" : "bg-slate-900/30"} ${isTop ? "border-l-[3px] border-l-amber-500 border-slate-800" : "border-slate-800/60"}`}>
+                            <div className="flex-1 min-w-0">
+                              <div className="text-[15px] font-semibold text-white leading-snug break-words">{r.name}</div>
+                              <div className="text-[12px] text-slate-400 mt-0.5">
+                                {r.onHand} on hand · {r.ordered} ordered
+                                {!r.linked && <span className="ml-1.5 text-[9px] px-1 py-0.5 rounded bg-amber-600/80 text-white align-middle">NOT LINKED</span>}
+                              </div>
+                            </div>
+                            {r.short > 0 ? (
+                              <div className={`flex-shrink-0 text-center rounded-xl px-3 py-1.5 min-w-[54px] ${isTop ? "bg-amber-500/20" : "bg-slate-800"}`}>
+                                <div className={`text-[22px] font-bold leading-none tabular-nums ${isTop ? "text-amber-300" : "text-slate-100"}`}>{r.short}</div>
+                                <div className={`text-[9px] uppercase tracking-wider mt-1 ${isTop ? "text-amber-400/80" : "text-slate-500"}`}>make</div>
+                              </div>
+                            ) : (
+                              <div className="flex-shrink-0 text-center rounded-xl px-3 py-1.5 min-w-[54px] bg-emerald-900/40">
+                                <div className="text-[11px] font-bold text-emerald-300 leading-tight py-1">COVERED</div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
                     {rows.length === 0 && (
                       <div className="text-xs text-slate-500 py-3">{ckClaimFilter !== "all" ? "No orders in this scope — pick some up or switch to All." : "No open store orders for kitchen items — stock is ahead of demand."}</div>
                     )}
@@ -60300,7 +60332,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: CKENTITY 2026-07-25d"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: CKMAKELIST 2026-07-25e"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
