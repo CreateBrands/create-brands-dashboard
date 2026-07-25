@@ -2867,27 +2867,57 @@ export async function fetchTrainingOverview() {
   };
 }
 
-// ── HR POLICIES (manager-managed) ──
-export async function fetchHrPolicies({ includeInactive } = {}) {
-  let q = supabase.from("hr_policies").select("*").order("sort_order").order("created_at");
-  if (!includeInactive) q = q.eq("active", true);
-  const { data } = await q;
-  return (data || []).map(p => ({ key: p.key, label: p.label, docUrl: p.doc_url || "", sortOrder: p.sort_order || 0, active: p.active !== false }));
+// ── HR POLICIES (manager-managed, versioned) ──
+function dbPolicy(p) {
+  return {
+    key: p.key, label: p.label, category: p.category || "HR", body: p.body || "",
+    docUrl: p.doc_url || "", version: p.version || 1, status: p.status || "published",
+    mandatory: p.mandatory !== false, audienceRole: p.audience_role || null,
+    effectiveDate: p.effective_date || null, reviewDate: p.review_date || null,
+    sortOrder: p.sort_order || 0, createdBy: p.created_by || null, updatedAt: p.updated_at,
+  };
 }
-export async function upsertHrPolicy({ key, label, docUrl, sortOrder, active, createdBy }) {
-  const slug = key || `pol-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-  const row = { key: slug, label: label || "Untitled policy", doc_url: docUrl || null };
-  if (sortOrder !== undefined) row.sort_order = sortOrder;
-  if (active !== undefined) row.active = !!active;
-  if (createdBy) row.created_by = createdBy;
+export async function fetchHrPolicies({ status } = {}) {
+  let q = supabase.from("hr_policies").select("*").order("sort_order").order("created_at");
+  if (status) q = q.eq("status", status);
+  else q = q.neq("status", "archived");
+  const { data } = await q;
+  return (data || []).map(dbPolicy);
+}
+// Employee-facing: only published policies they must acknowledge (audience-filtered).
+export async function fetchActivePoliciesForRole(role) {
+  const { data } = await supabase.from("hr_policies").select("*").eq("status", "published").order("sort_order");
+  return (data || []).map(dbPolicy).filter(p => !p.audienceRole || p.audienceRole === role);
+}
+export async function upsertHrPolicy(p) {
+  const key = p.key || `pol-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+  const row = {
+    key, label: p.label || "Untitled policy", category: p.category || "HR",
+    body: p.body ?? null, doc_url: p.docUrl ?? null, updated_at: new Date().toISOString(),
+  };
+  if (p.status !== undefined) row.status = p.status;
+  if (p.mandatory !== undefined) row.mandatory = !!p.mandatory;
+  if (p.audienceRole !== undefined) row.audience_role = p.audienceRole || null;
+  if (p.effectiveDate !== undefined) row.effective_date = p.effectiveDate || null;
+  if (p.reviewDate !== undefined) row.review_date = p.reviewDate || null;
+  if (p.sortOrder !== undefined) row.sort_order = p.sortOrder;
+  if (p.createdBy !== undefined) row.created_by = p.createdBy;
+  if (p.bumpVersion) {
+    const { data: cur } = await supabase.from("hr_policies").select("version").eq("key", key).maybeSingle();
+    row.version = (cur?.version || 0) + 1;
+  }
   const { error } = await supabase.from("hr_policies").upsert(row, { onConflict: "key" });
   if (error) throw error;
-  return slug;
+  return key;
 }
-export async function deleteHrPolicy(key) {
-  // Soft-delete: deactivate so historic acknowledgements keep their meaning.
-  const { error } = await supabase.from("hr_policies").update({ active: false }).eq("key", key);
+export async function setPolicyStatus(key, status) {
+  const { error } = await supabase.from("hr_policies").update({ status, updated_at: new Date().toISOString() }).eq("key", key);
   if (error) throw error;
+}
+export async function reorderHrPolicies(keysInOrder) {
+  for (let i = 0; i < keysInOrder.length; i++) {
+    await supabase.from("hr_policies").update({ sort_order: i + 1 }).eq("key", keysInOrder[i]);
+  }
 }
 export async function uploadPolicyDoc(file) {
   if (!file) throw new Error("No file provided.");
@@ -2898,6 +2928,26 @@ export async function uploadPolicyDoc(file) {
   const { data } = supabase.storage.from("policy-docs").getPublicUrl(path);
   return data.publicUrl;
 }
+// Compliance dashboard: per-policy acknowledged / outstanding counts.
+export async function fetchPolicyCompliance() {
+  const [{ data: pols }, { data: acks }, { data: emps }] = await Promise.all([
+    supabase.from("hr_policies").select("key, label, status").eq("status", "published"),
+    supabase.from("policy_acknowledgements").select("employee_id, policy_key"),
+    supabase.from("ops_team").select("id, archived_at"),
+  ]);
+  const activeEmps = (emps || []).filter(e => !e.archived_at).map(e => e.id);
+  const total = activeEmps.length || 1;
+  const ackByPol = {};
+  (acks || []).forEach(a => {
+    if (!ackByPol[a.policy_key]) ackByPol[a.policy_key] = new Set();
+    if (activeEmps.includes(a.employee_id)) ackByPol[a.policy_key].add(a.employee_id);
+  });
+  return (pols || []).map(p => {
+    const done = (ackByPol[p.key] || new Set()).size;
+    return { key: p.key, label: p.label, acked: done, total, pct: Math.round((done / total) * 100), outstanding: total - done };
+  });
+}
+
 
 export async function fetchPolicyAcks() {
   const { data, error } = await supabase.from("policy_acknowledgements")
