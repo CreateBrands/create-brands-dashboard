@@ -2873,6 +2873,7 @@ function dbPolicy(p) {
     key: p.key, label: p.label, category: p.category || "HR", body: p.body || "",
     docUrl: p.doc_url || "", version: p.version || 1, status: p.status || "published",
     mandatory: p.mandatory !== false, audienceRole: p.audience_role || null,
+    audienceBrands: p.audience_brands || [], audienceStores: p.audience_stores || [],
     effectiveDate: p.effective_date || null, reviewDate: p.review_date || null,
     sortOrder: p.sort_order || 0, createdBy: p.created_by || null, updatedAt: p.updated_at,
   };
@@ -2885,9 +2886,19 @@ export async function fetchHrPolicies({ status } = {}) {
   return (data || []).map(dbPolicy);
 }
 // Employee-facing: only published policies they must acknowledge (audience-filtered).
-export async function fetchActivePoliciesForRole(role) {
+export async function fetchActivePoliciesForRole(role, { brandIds = [], storeIds = [] } = {}) {
   const { data } = await supabase.from("hr_policies").select("*").eq("status", "published").order("sort_order");
-  return (data || []).map(dbPolicy).filter(p => !p.audienceRole || p.audienceRole === role);
+  return (data || []).map(dbPolicy).filter(p => {
+    if (p.audienceRole && p.audienceRole !== role) return false;
+    // Empty audience arrays = applies everywhere. Otherwise the employee must
+    // belong to at least one listed brand or store.
+    const brandOk = !p.audienceBrands.length || p.audienceBrands.some(b => brandIds.includes(b));
+    const storeOk = !p.audienceStores.length || p.audienceStores.some(st => storeIds.includes(st));
+    // If a policy scopes BOTH brand and store, either match qualifies (union),
+    // which is the least surprising for "this brand's staff" + "plus this store".
+    if (p.audienceBrands.length && p.audienceStores.length) return brandOk || storeOk;
+    return brandOk && storeOk;
+  });
 }
 export async function upsertHrPolicy(p) {
   const key = p.key || `pol-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -2898,6 +2909,8 @@ export async function upsertHrPolicy(p) {
   if (p.status !== undefined) row.status = p.status;
   if (p.mandatory !== undefined) row.mandatory = !!p.mandatory;
   if (p.audienceRole !== undefined) row.audience_role = p.audienceRole || null;
+  if (p.audienceBrands !== undefined) row.audience_brands = p.audienceBrands || [];
+  if (p.audienceStores !== undefined) row.audience_stores = p.audienceStores || [];
   if (p.effectiveDate !== undefined) row.effective_date = p.effectiveDate || null;
   if (p.reviewDate !== undefined) row.review_date = p.reviewDate || null;
   if (p.sortOrder !== undefined) row.sort_order = p.sortOrder;

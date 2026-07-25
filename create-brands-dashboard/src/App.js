@@ -2790,7 +2790,10 @@ function LegacySteppedContent({ content }) {
 
 function EmployeeOnboardingSection({ employeeId, currentUser, employee = null }) {
   const [policies, setPolicies] = useState(ONBOARDING_POLICIES);
-  useEffect(() => { fetchActivePoliciesForRole(currentUser?.role).then(ps => setPolicies(ps.length ? ps : ONBOARDING_POLICIES)).catch(() => {}); }, [currentUser]);
+  useEffect(() => { fetchActivePoliciesForRole(currentUser?.role, {
+    brandIds: employee?.brandIds || currentUser?.brandIds || [],
+    storeIds: employee?.storeIds || currentUser?.storeIds || [],
+  }).then(ps => setPolicies(ps.length ? ps : ONBOARDING_POLICIES)).catch(() => {}); }, [currentUser, employee]);
   const [acks, setAcks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [taxStmt, setTaxStmt] = useState(employee?.taxStarterStatement || "");
@@ -13195,7 +13198,7 @@ const POLICY_CAT_ACCENT = {
   "Data": "#0ea5e9", "Finance": "#10b981", "Other": "#8b5cf6",
 };
 
-function PoliciesSetupView({ currentUser, opsTeam }) {
+function PoliciesSetupView({ currentUser, opsTeam, brands = [], stores = [] }) {
   const [policies, setPolicies] = useState([]);
   const [compliance, setCompliance] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -13316,7 +13319,7 @@ function PoliciesSetupView({ currentUser, opsTeam }) {
       )}
 
       {editing && (
-        <PolicyEditor policy={editing} currentUser={currentUser}
+        <PolicyEditor policy={editing} currentUser={currentUser} brands={brands} stores={stores}
           onClose={() => setEditing(null)}
           onSaved={() => { setEditing(null); load(); }} />
       )}
@@ -13324,14 +13327,16 @@ function PoliciesSetupView({ currentUser, opsTeam }) {
   );
 }
 
-function PolicyEditor({ policy, currentUser, onClose, onSaved }) {
+function PolicyEditor({ policy, currentUser, brands = [], stores = [], onClose, onSaved }) {
   const isNew = !policy.key;
   const [f, setF] = useState({
     label: policy.label || "", category: policy.category || "HR", body: policy.body || "",
     docUrl: policy.docUrl || "", mandatory: policy.mandatory !== false,
     audienceRole: policy.audienceRole || "", effectiveDate: policy.effectiveDate || "",
     reviewDate: policy.reviewDate || "", status: policy.status || "draft",
+    audienceBrands: policy.audienceBrands || [], audienceStores: policy.audienceStores || [],
   });
+  const toggleArr = (key, id) => setF(x => ({ ...x, [key]: x[key].includes(id) ? x[key].filter(y => y !== id) : [...x[key], id] }));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const set = (k, v) => setF(x => ({ ...x, [k]: v }));
@@ -13345,8 +13350,8 @@ function PolicyEditor({ policy, currentUser, onClose, onSaved }) {
       const contentChanged = !isNew && (f.body !== policy.body || f.docUrl !== policy.docUrl);
       await upsertHrPolicy({
         key: policy.key, ...f, status: statusOverride || f.status,
-        audienceRole: f.audienceRole || null, createdBy: currentUser?.name,
-        sortOrder: policy.sortOrder, bumpVersion: contentChanged,
+        audienceRole: f.audienceRole || null, audienceBrands: f.audienceBrands, audienceStores: f.audienceStores,
+        createdBy: currentUser?.name, sortOrder: policy.sortOrder, bumpVersion: contentChanged,
       });
       onSaved();
     } catch (e) { setErr(e.message); setBusy(false); }
@@ -13384,11 +13389,41 @@ function PolicyEditor({ policy, currentUser, onClose, onSaved }) {
               <span className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Applies to</span>
               <select value={f.audienceRole} onChange={e => set("audienceRole", e.target.value)}
                 className="mt-1 w-full px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white">
-                <option value="">All staff</option>
+                <option value="">All roles</option>
                 <option value="manager">Managers only</option>
                 <option value="staff">Staff only</option>
               </select>
             </label>
+          </div>
+
+          <div>
+            <span className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Scope</span>
+            <div className="text-[10px] text-slate-500 mb-1.5">Leave both empty for company-wide. Pick brands and/or stores to target.</div>
+            {brands.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mb-1.5">
+                {brands.filter(b => !b.archivedAt).map(b => (
+                  <button key={b.id} onClick={() => toggleArr("audienceBrands", b.id)}
+                    className="px-2.5 py-1 rounded-full text-[11px] font-semibold"
+                    style={f.audienceBrands.includes(b.id) ? { background: b.color || "#6366f1", color: "#fff" } : { background: "#1e293b", color: "#94a3b8", border: "1px solid #334155" }}>
+                    {b.name}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="flex flex-wrap gap-1.5">
+              {stores.filter(s => !s.archivedAt).map(s => (
+                <button key={s.id} onClick={() => toggleArr("audienceStores", s.id)}
+                  className="px-2.5 py-1 rounded-full text-[11px] font-medium"
+                  style={f.audienceStores.includes(s.id) ? { background: "#0ea5e9", color: "#fff" } : { background: "#0f172a", color: "#64748b", border: "1px solid #1e293b" }}>
+                  {s.name}
+                </button>
+              ))}
+            </div>
+            {(f.audienceBrands.length > 0 || f.audienceStores.length > 0) && (
+              <div className="text-[10px] text-sky-400 mt-1.5">
+                Targeted: {f.audienceBrands.length} brand{f.audienceBrands.length !== 1 ? "s" : ""}, {f.audienceStores.length} store{f.audienceStores.length !== 1 ? "s" : ""}
+              </div>
+            )}
           </div>
 
           <label className="block">
@@ -60237,7 +60272,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: POLICIES 2026-07-24l"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: POLICYSCOPE 2026-07-25a"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
@@ -62207,7 +62242,7 @@ export default function App() {
             />}
             {effectiveActiveView === "setup" && setupPanel === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
             {effectiveActiveView === "setup" && setupPanel === "store-ordering" && currentUser.role !== "staff" && <StoreOrderingSetupView currentUser={currentUser} stores={stores} opsTeam={opsTeam}/>}
-            {effectiveActiveView === "setup" && setupPanel === "hr-policies" && currentUser.role !== "staff" && <PoliciesSetupView currentUser={currentUser} opsTeam={opsTeam}/>}
+            {effectiveActiveView === "setup" && setupPanel === "hr-policies" && currentUser.role !== "staff" && <PoliciesSetupView currentUser={currentUser} opsTeam={opsTeam} brands={brands} stores={stores}/>}
             {effectiveActiveView === "setup" && setupPanel === "dist-order-setup" && currentUser.role === "owner" && <DistOrderSetupView/>}
             {effectiveActiveView === "setup" && setupPanel === "salescats" && <SalesCategoryMapView/>}
             {effectiveActiveView === "setup" && setupPanel === "dist-order-builder" && currentUser.role === "owner" && <DistOrderBuilderView stores={stores}/>}
