@@ -60300,7 +60300,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: ORDERSAVE 2026-07-25b"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: CKNAV 2026-07-25c"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
@@ -61732,7 +61732,7 @@ export default function App() {
       ]},
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["manager"] },
       { key: "google-hub", label: "Google Command", icon: Globe, roles: ["owner", "hq_staff"] },
-      { key: "central-kitchen", label: "Central Kitchen", icon: ChefHat, roles: ["owner", "hq_staff"], requiresEntity: "central-kitchen" },
+      { key: "central-kitchen", label: "Central Kitchen", icon: ChefHat, roles: ["owner", "hq_staff", "manager"], requiresEntity: "central-kitchen" },
     ]},
     { group: "OPERATIONS", items: [
       { key: "operations",     label: "Operations",      icon: Activity, badge: openIssueCount > 0 ? openIssueCount.toString() : null, children: [
