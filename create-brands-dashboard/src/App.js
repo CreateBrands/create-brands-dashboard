@@ -90,7 +90,7 @@ import {
   archiveTrainingTemplate, instantiateTemplate,
   fetchContractTemplates, createContractTemplate, updateContractTemplate, archiveContractTemplate,
   fetchEmployeeContracts, sendContract, signEmployeeContract, voidContract,
-  fetchPolicyAcknowledgements, acknowledgePolicy, fetchHrPolicies, upsertHrPolicy, deleteHrPolicy, uploadPolicyDoc,
+  fetchPolicyAcknowledgements, acknowledgePolicy, fetchHrPolicies, fetchActivePoliciesForRole, upsertHrPolicy, setPolicyStatus, reorderHrPolicies, uploadPolicyDoc, fetchPolicyCompliance,
   // Training progress (trainee consumption + manager verify)
   fetchTrainingProgress, setModuleCompletion, setModuleVerification,
   // Payroll
@@ -2790,7 +2790,7 @@ function LegacySteppedContent({ content }) {
 
 function EmployeeOnboardingSection({ employeeId, currentUser, employee = null }) {
   const [policies, setPolicies] = useState(ONBOARDING_POLICIES);
-  useEffect(() => { fetchHrPolicies().then(ps => setPolicies(ps.length ? ps : ONBOARDING_POLICIES)).catch(() => {}); }, []);
+  useEffect(() => { fetchActivePoliciesForRole(currentUser?.role).then(ps => setPolicies(ps.length ? ps : ONBOARDING_POLICIES)).catch(() => {}); }, [currentUser]);
   const [acks, setAcks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [taxStmt, setTaxStmt] = useState(employee?.taxStarterStatement || "");
@@ -13184,6 +13184,271 @@ function SalesCategoryMapView() {
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+}
+
+const POLICY_CATEGORIES = ["HR", "Food Safety", "Health & Safety", "Data", "Finance", "Other"];
+const POLICY_CAT_ACCENT = {
+  "HR": "#6366f1", "Food Safety": "#f59e0b", "Health & Safety": "#ef4444",
+  "Data": "#0ea5e9", "Finance": "#10b981", "Other": "#8b5cf6",
+};
+
+function PoliciesSetupView({ currentUser, opsTeam }) {
+  const [policies, setPolicies] = useState([]);
+  const [compliance, setCompliance] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(null);   // policy object or {} for new
+  const [filter, setFilter] = useState("all");     // all | published | draft
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const [ps, comp] = await Promise.all([fetchHrPolicies(), fetchPolicyCompliance().catch(() => [])]);
+      setPolicies(ps); setCompliance(comp);
+    } finally { setLoading(false); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const compByKey = Object.fromEntries(compliance.map(c => [c.key, c]));
+  const shown = policies.filter(p => filter === "all" || p.status === filter);
+  const byCat = {};
+  shown.forEach(p => { (byCat[p.category] = byCat[p.category] || []).push(p); });
+
+  const publishedCount = policies.filter(p => p.status === "published").length;
+  const draftCount = policies.filter(p => p.status === "draft").length;
+  const avgCompliance = compliance.length ? Math.round(compliance.reduce((s, c) => s + c.pct, 0) / compliance.length) : 0;
+  const needsReview = policies.filter(p => p.reviewDate && p.reviewDate < new Date().toISOString().slice(0, 10) && p.status === "published");
+
+  return (
+    <div className="max-w-5xl">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4 mb-5">
+        <div>
+          <h2 className="text-lg font-bold text-white">Policies</h2>
+          <p className="text-xs text-slate-500 mt-0.5">Publish company policies and track who has acknowledged them.</p>
+        </div>
+        <button onClick={() => setEditing({ category: "HR", status: "draft", mandatory: true })}
+          className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold flex items-center gap-1.5 flex-shrink-0">
+          <Plus size={15} /> New policy
+        </button>
+      </div>
+
+      {/* Compliance summary strip */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mb-5">
+        {[
+          { label: "Published", value: publishedCount, sub: `${draftCount} draft${draftCount !== 1 ? "s" : ""}`, accent: "#6366f1" },
+          { label: "Avg. acknowledged", value: `${avgCompliance}%`, sub: "across all staff", accent: avgCompliance >= 80 ? "#10b981" : avgCompliance >= 50 ? "#f59e0b" : "#ef4444" },
+          { label: "Policies", value: policies.length, sub: "total", accent: "#8b5cf6" },
+          { label: "Need review", value: needsReview.length, sub: needsReview.length ? "past review date" : "all current", accent: needsReview.length ? "#f59e0b" : "#334155" },
+        ].map(s => (
+          <div key={s.label} className="bg-slate-900 border border-slate-800 rounded-2xl p-3.5">
+            <div className="text-[10px] uppercase tracking-widest text-slate-500 font-semibold">{s.label}</div>
+            <div className="text-2xl font-black mt-1" style={{ color: s.accent }}>{s.value}</div>
+            <div className="text-[10px] text-slate-500 mt-0.5">{s.sub}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Filter tabs */}
+      <div className="flex gap-1.5 mb-3">
+        {[["all", "All"], ["published", "Published"], ["draft", "Drafts"]].map(([k, lbl]) => (
+          <button key={k} onClick={() => setFilter(k)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${filter === k ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400 hover:text-white"}`}>
+            {lbl}
+          </button>
+        ))}
+      </div>
+
+      {loading ? <div className="text-sm text-slate-500 py-10 text-center">Loading policies…</div> : (
+        <div className="space-y-5">
+          {POLICY_CATEGORIES.filter(c => byCat[c]?.length).map(cat => (
+            <div key={cat}>
+              <div className="flex items-center gap-2 mb-1.5">
+                <span className="w-2 h-2 rounded-full" style={{ background: POLICY_CAT_ACCENT[cat] }} />
+                <span className="text-[11px] uppercase tracking-widest font-bold text-slate-400">{cat}</span>
+              </div>
+              <div className="space-y-1.5">
+                {byCat[cat].map(p => {
+                  const c = compByKey[p.key];
+                  return (
+                    <button key={p.key} onClick={() => setEditing(p)}
+                      className="w-full text-left bg-slate-900 hover:bg-slate-800/80 border border-slate-800 rounded-xl px-4 py-3 flex items-center gap-3 transition-colors">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm font-semibold text-white truncate">{p.label}</span>
+                          {p.status === "draft" && <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-950/60 border border-amber-800 text-amber-300 font-bold uppercase">Draft</span>}
+                          {p.version > 1 && <span className="text-[9px] text-slate-500">v{p.version}</span>}
+                          {!p.mandatory && <span className="text-[9px] text-slate-500">optional</span>}
+                        </div>
+                        <div className="text-[11px] text-slate-500 mt-0.5 flex items-center gap-2">
+                          {p.docUrl && <span className="text-sky-400">PDF</span>}
+                          {p.audienceRole && <span>{p.audienceRole} only</span>}
+                          {p.reviewDate && <span className={p.reviewDate < new Date().toISOString().slice(0,10) ? "text-amber-400" : ""}>review {new Date(p.reviewDate).toLocaleDateString("en-GB")}</span>}
+                        </div>
+                      </div>
+                      {p.status === "published" && c && (
+                        <div className="flex-shrink-0 w-28">
+                          <div className="flex items-center justify-between text-[10px] mb-1">
+                            <span className="text-slate-400 font-semibold">{c.pct}%</span>
+                            <span className="text-slate-600">{c.acked}/{c.total}</span>
+                          </div>
+                          <div className="h-1.5 rounded-full bg-slate-800 overflow-hidden">
+                            <div className="h-full rounded-full" style={{ width: `${c.pct}%`, background: c.pct >= 80 ? "#10b981" : c.pct >= 50 ? "#f59e0b" : "#ef4444" }} />
+                          </div>
+                        </div>
+                      )}
+                      <ChevronRight size={16} className="text-slate-600 flex-shrink-0" />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+          {shown.length === 0 && (
+            <div className="text-center py-12 text-slate-500">
+              <div className="text-sm">No policies yet.</div>
+              <div className="text-xs mt-1">Create your first one to start tracking acknowledgements.</div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {editing && (
+        <PolicyEditor policy={editing} currentUser={currentUser}
+          onClose={() => setEditing(null)}
+          onSaved={() => { setEditing(null); load(); }} />
+      )}
+    </div>
+  );
+}
+
+function PolicyEditor({ policy, currentUser, onClose, onSaved }) {
+  const isNew = !policy.key;
+  const [f, setF] = useState({
+    label: policy.label || "", category: policy.category || "HR", body: policy.body || "",
+    docUrl: policy.docUrl || "", mandatory: policy.mandatory !== false,
+    audienceRole: policy.audienceRole || "", effectiveDate: policy.effectiveDate || "",
+    reviewDate: policy.reviewDate || "", status: policy.status || "draft",
+  });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const set = (k, v) => setF(x => ({ ...x, [k]: v }));
+
+  const save = async (statusOverride) => {
+    if (!f.label.trim()) { setErr("Give the policy a title."); return; }
+    setBusy(true); setErr("");
+    try {
+      // If content changed on an existing published policy, bump the version so
+      // staff must re-acknowledge.
+      const contentChanged = !isNew && (f.body !== policy.body || f.docUrl !== policy.docUrl);
+      await upsertHrPolicy({
+        key: policy.key, ...f, status: statusOverride || f.status,
+        audienceRole: f.audienceRole || null, createdBy: currentUser?.name,
+        sortOrder: policy.sortOrder, bumpVersion: contentChanged,
+      });
+      onSaved();
+    } catch (e) { setErr(e.message); setBusy(false); }
+  };
+  const uploadDoc = async (file) => {
+    if (!file) return;
+    setBusy(true);
+    try { const url = await uploadPolicyDoc(file); set("docUrl", url); }
+    catch (e) { setErr(e.message); } finally { setBusy(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end" style={{ background: "rgba(0,0,0,0.5)" }} onClick={onClose}>
+      <div className="w-full max-w-lg h-full bg-slate-950 border-l border-slate-800 overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="sticky top-0 bg-slate-950/95 backdrop-blur border-b border-slate-800 px-5 py-3.5 flex items-center justify-between">
+          <div className="text-sm font-bold text-white">{isNew ? "New policy" : "Edit policy"}</div>
+          <button onClick={onClose} className="text-slate-500 hover:text-white"><X size={18} /></button>
+        </div>
+        <div className="p-5 space-y-4">
+          <label className="block">
+            <span className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Title</span>
+            <input value={f.label} onChange={e => set("label", e.target.value)} autoFocus placeholder="e.g. Uniform & appearance policy"
+              className="mt-1 w-full px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white" />
+          </label>
+
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Category</span>
+              <select value={f.category} onChange={e => set("category", e.target.value)}
+                className="mt-1 w-full px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white">
+                {POLICY_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </label>
+            <label className="block">
+              <span className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Applies to</span>
+              <select value={f.audienceRole} onChange={e => set("audienceRole", e.target.value)}
+                className="mt-1 w-full px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white">
+                <option value="">All staff</option>
+                <option value="manager">Managers only</option>
+                <option value="staff">Staff only</option>
+              </select>
+            </label>
+          </div>
+
+          <label className="block">
+            <span className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Policy text</span>
+            <textarea value={f.body} onChange={e => set("body", e.target.value)} rows={7} placeholder="Write the policy content employees will read before acknowledging…"
+              className="mt-1 w-full px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white resize-y" />
+          </label>
+
+          <div className="flex items-center gap-3">
+            {f.docUrl
+              ? <a href={f.docUrl} target="_blank" rel="noreferrer" className="text-xs text-sky-400 font-semibold">View attached PDF</a>
+              : <span className="text-xs text-slate-500">No PDF attached</span>}
+            <label className="text-xs text-indigo-400 font-semibold cursor-pointer">
+              {f.docUrl ? "Replace PDF" : "Attach PDF"}
+              <input type="file" accept="application/pdf" className="hidden" onChange={e => uploadDoc(e.target.files[0])} />
+            </label>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <label className="block">
+              <span className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Effective date</span>
+              <input type="date" value={f.effectiveDate} onChange={e => set("effectiveDate", e.target.value)}
+                className="mt-1 w-full px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white" />
+            </label>
+            <label className="block">
+              <span className="text-[11px] uppercase tracking-wide text-slate-500 font-semibold">Review by</span>
+              <input type="date" value={f.reviewDate} onChange={e => set("reviewDate", e.target.value)}
+                className="mt-1 w-full px-3 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white" />
+            </label>
+          </div>
+
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={f.mandatory} onChange={e => set("mandatory", e.target.checked)} className="rounded" />
+            <span className="text-sm text-slate-200">Mandatory — all applicable staff must acknowledge</span>
+          </label>
+
+          {!isNew && policy.version > 1 && (
+            <div className="text-[11px] text-slate-500 bg-slate-900 rounded-lg px-3 py-2">
+              Currently version {policy.version}. Changing the text or PDF publishes a new version and re-opens acknowledgement for everyone.
+            </div>
+          )}
+          {err && <div className="text-xs text-rose-400">{err}</div>}
+        </div>
+
+        <div className="sticky bottom-0 bg-slate-950/95 backdrop-blur border-t border-slate-800 px-5 py-3.5 flex items-center gap-2">
+          {policy.status === "published"
+            ? <button disabled={busy} onClick={() => save("published")} className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold disabled:opacity-50">Save changes</button>
+            : <>
+                <button disabled={busy} onClick={() => save("draft")} className="px-4 py-2.5 rounded-xl bg-slate-800 text-slate-200 text-sm font-semibold disabled:opacity-50">Save draft</button>
+                <button disabled={busy} onClick={() => save("published")} className="flex-1 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold disabled:opacity-50">Publish</button>
+              </>}
+          {!isNew && policy.status === "published" && (
+            <button disabled={busy} onClick={async () => { if (window.confirm("Unpublish this policy? Staff will no longer see it, but past acknowledgements are kept.")) { await setPolicyStatus(policy.key, "draft"); onSaved(); } }}
+              className="px-3 py-2.5 rounded-xl bg-slate-800 text-slate-400 text-xs font-semibold">Unpublish</button>
+          )}
+          {!isNew && (
+            <button disabled={busy} onClick={async () => { if (window.confirm("Archive this policy? It's removed from the list; acknowledgements are retained.")) { await setPolicyStatus(policy.key, "archived"); onSaved(); } }}
+              className="px-3 py-2.5 rounded-xl text-rose-400 text-xs font-semibold">Archive</button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -39244,72 +39509,10 @@ function SelfFillLinkCard({ employee, onUpdateEmployee }) {
 
 // Manager/HR onboarding management for one employee: completion gate, tax,
 // bank (owner/HR only), policy acknowledgements.
-function ManagePoliciesModal({ currentUser, onClose, onChanged }) {
-  const [list, setList] = useState([]);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-  const [newLabel, setNewLabel] = useState("");
-  const load = () => fetchHrPolicies({ includeInactive: true }).then(setList).catch(() => {});
-  useEffect(() => { load(); }, []);
-  const addPolicy = async () => {
-    if (!newLabel.trim()) return;
-    setBusy(true); setErr("");
-    try {
-      await upsertHrPolicy({ label: newLabel.trim(), sortOrder: (list.length + 1), active: true, createdBy: currentUser?.name });
-      setNewLabel(""); await load(); onChanged?.();
-    } catch (e) { setErr(e.message); } finally { setBusy(false); }
-  };
-  const uploadDoc = async (key, file) => {
-    if (!file) return;
-    setBusy(true); setErr("");
-    try {
-      const url = await uploadPolicyDoc(file);
-      await upsertHrPolicy({ key, label: list.find(p => p.key === key)?.label, docUrl: url });
-      await load(); onChanged?.();
-    } catch (e) { setErr(e.message); } finally { setBusy(false); }
-  };
-  const rename = async (key, label) => { try { await upsertHrPolicy({ key, label }); onChanged?.(); } catch (e) { setErr(e.message); } };
-  const toggle = async (p) => {
-    setBusy(true);
-    try { await upsertHrPolicy({ key: p.key, label: p.label, active: !p.active }); await load(); onChanged?.(); }
-    catch (e) { setErr(e.message); } finally { setBusy(false); }
-  };
-  return (
-    <Modal title="Manage policies" onClose={onClose}>
-      <div className="space-y-2">
-        {list.map(p => (
-          <div key={p.key} className="flex items-center gap-2 bg-slate-950 border border-slate-800 rounded-lg px-2 py-1.5" style={p.active ? undefined : { opacity: 0.5 }}>
-            <input value={p.label} onChange={e => setList(x => x.map(q => q.key === p.key ? { ...q, label: e.target.value } : q))}
-              onBlur={e => rename(p.key, e.target.value)}
-              className="flex-1 min-w-0 bg-transparent text-sm text-white outline-none" />
-            {p.docUrl
-              ? <a href={p.docUrl} target="_blank" rel="noreferrer" className="text-[10px] text-sky-400 flex-shrink-0">PDF ✓</a>
-              : <label className="text-[10px] text-slate-400 cursor-pointer flex-shrink-0">+ PDF<input type="file" accept="application/pdf" className="hidden" onChange={e => uploadDoc(p.key, e.target.files[0])} /></label>}
-            <button onClick={() => toggle(p)} className="text-[10px] px-1.5 py-0.5 rounded flex-shrink-0" style={p.active ? { background: "#7f1d1d", color: "#fecaca" } : { background: "#14532d", color: "#bbf7d0" }}>
-              {p.active ? "Disable" : "Enable"}
-            </button>
-          </div>
-        ))}
-        <div className="flex items-center gap-2 pt-1">
-          <input value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder="New policy title (e.g. Uniform policy)"
-            onKeyDown={e => { if (e.key === "Enter") addPolicy(); }}
-            className="flex-1 px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white" />
-          <button onClick={addPolicy} disabled={busy || !newLabel.trim()} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-bold disabled:opacity-50">Add</button>
-        </div>
-        {err && <div className="text-xs text-rose-400">{err}</div>}
-        <div className="text-[10px] text-slate-600">Disabling keeps past acknowledgements intact; the policy just stops appearing for new sign-off.</div>
-      </div>
-    </Modal>
-  );
-}
-
 function OnboardingTab({ employee, employeeId, currentUser, onUpdateEmployee }) {
   const isHqOrOwner = currentUser?.role === "owner" || currentUser?.role === "hq_staff";
-  const canManagePolicies = isHqOrOwner || currentUser?.role === "manager";
   const [policies, setPolicies] = useState(ONBOARDING_POLICIES);
-  const [managePol, setManagePol] = useState(false);
-  const reloadPolicies = () => fetchHrPolicies().then(ps => setPolicies(ps.length ? ps : ONBOARDING_POLICIES)).catch(() => {});
-  useEffect(() => { reloadPolicies(); }, []);
+  useEffect(() => { fetchHrPolicies({ status: "published" }).then(ps => setPolicies(ps.length ? ps : ONBOARDING_POLICIES)).catch(() => {}); }, []);
   const [acks, setAcks] = useState([]);
   const [contracts, setContracts] = useState([]);
   const [docs, setDocs] = useState([]);
@@ -39494,11 +39697,7 @@ function OnboardingTab({ employee, employeeId, currentUser, onUpdateEmployee }) 
             );
           })}
         </div>
-        <div className="flex items-center justify-between mt-2">
-          <div className="text-[10px] text-slate-600">Employees can also acknowledge these themselves in their portal. Recording here is for in-person sign-off.</div>
-          {canManagePolicies && <button onClick={() => setManagePol(true)} className="text-[11px] font-semibold px-2 py-1 rounded-lg bg-slate-800 text-slate-200 flex-shrink-0">Manage policies</button>}
-        </div>
-        {managePol && <ManagePoliciesModal currentUser={currentUser} onClose={() => setManagePol(false)} onChanged={reloadPolicies} />}
+        <div className="text-[10px] text-slate-600 mt-2">Employees can also acknowledge these themselves in their portal. Manage the policy list in Setup → Compliance & Tasks → Policies.</div>
       </div>
     </div>
   );
@@ -61892,6 +62091,7 @@ export default function App() {
                   key: "compliance-tasks", label: "Compliance & Tasks", icon: CheckCircle, accent: "indigo",
                   desc: "Checklists, temperatures, and cleaning.",
                   items: [
+                    { key: "hr-policies", label: "Policies", desc: "Company policies, documents, and acknowledgement tracking.", gate: () => true },
                     { key: "ops-settings:checklists", label: "Checklists", desc: "Opening, closing, and routine checks.", gate: gOps },
                     { key: "ops-settings:tempunits", label: "Temp Units", desc: "Fridge and freezer temperature limits.", gate: gOps },
                     { key: "ops-settings:cleaning", label: "Cleaning Tasks", desc: "Scheduled cleaning duties.", gate: gOps },
@@ -62007,6 +62207,7 @@ export default function App() {
             />}
             {effectiveActiveView === "setup" && setupPanel === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
             {effectiveActiveView === "setup" && setupPanel === "store-ordering" && currentUser.role !== "staff" && <StoreOrderingSetupView currentUser={currentUser} stores={stores} opsTeam={opsTeam}/>}
+            {effectiveActiveView === "setup" && setupPanel === "hr-policies" && currentUser.role !== "staff" && <PoliciesSetupView currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "setup" && setupPanel === "dist-order-setup" && currentUser.role === "owner" && <DistOrderSetupView/>}
             {effectiveActiveView === "setup" && setupPanel === "salescats" && <SalesCategoryMapView/>}
             {effectiveActiveView === "setup" && setupPanel === "dist-order-builder" && currentUser.role === "owner" && <DistOrderBuilderView stores={stores}/>}
