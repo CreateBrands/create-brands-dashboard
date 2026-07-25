@@ -14822,6 +14822,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [cartOpen, setCartOpen] = useState(false);   // mobile cart drawer
   const [placed, setPlaced] = useState(null);
+  const [submitFailed, setSubmitFailed] = useState(null);   // blocking failure dialog
   const [detailItem, setDetailItem] = useState(null);  // item whose stock popup is open
   const [consumption, setConsumption] = useState(null); // { byDist, days } from recipe-based usage
 
@@ -15383,10 +15384,19 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
       }
       const directPlaced = Object.keys(directGroups).length
         ? await createDirectOrders(activeStoreId, directGroups, currentUser) : [];
+      // Trust nothing: a saved order must actually exist. If a Distribution
+      // write was expected but produced no id, or the basket created nothing
+      // at all, treat it as a failure — never show a false "Order placed".
+      if (distCartLines.length && !id) {
+        throw new Error("Your order did not save. Please check your connection and try again.");
+      }
+      if (!id && directPlaced.length === 0) {
+        throw new Error("Nothing was ordered — your basket produced no order. Please try again, and tell a manager if it keeps happening.");
+      }
       // If this order came from a team round, close the round.
       if (roundLoaded && round) { try { await closeOrderRound(round.id, { status: "placed", soId: id }); } catch {} setRoundLoaded(false); reloadRound(activeStoreId); }
       setPlaced({ id, count: cartCount, total: cartTotal, direct: directPlaced }); setCart({}); setLineNotes({}); setLineUoms({}); setConfirmOpen(false); setCartOpen(false); setDeliveryDate(""); setOrderNote("");
-    } catch (e) { setErr(e.message); }
+    } catch (e) { setErr(e.message); setSubmitFailed(e.message || "Your order did not save. Please try again."); }
     setPlacing(false);
   };
 
@@ -15400,6 +15410,24 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
     </div>
   );
 
+  if (submitFailed) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-6" style={{ background: "rgba(20,10,5,0.7)" }}>
+        <div className="w-full max-w-sm rounded-2xl p-6 text-center" style={{ background: "#FFFBF3" }}>
+          <div className="w-14 h-14 rounded-full mx-auto flex items-center justify-center mb-3" style={{ background: "#FEE2E2" }}>
+            <X size={28} style={{ color: "#B4241C" }} />
+          </div>
+          <div className="text-lg font-bold" style={{ color: "#3A2E26" }}>Order NOT placed</div>
+          <div className="text-sm mt-2" style={{ color: "#6B5D4F" }}>{submitFailed}</div>
+          <div className="text-xs mt-3" style={{ color: "#9A8770" }}>Nothing was sent. Your basket is still saved — please try again.</div>
+          <button onClick={() => setSubmitFailed(null)}
+            className="w-full mt-5 py-3 rounded-xl text-sm font-bold" style={{ background: "#844429", color: "#FDF2E0" }}>
+            Back to my order
+          </button>
+        </div>
+      </div>
+    );
+  }
   if (placed) {
     const directs = placed.direct || [];
     const sheetText = (d) => `Order — ${d.vendorName}\n${(d.items||[]).map(it=>`${it.qty} × ${it.name}`).join("\n")}\n(Order #D${d.orderId} · placed via Chocoberry portal)`;
@@ -60272,7 +60300,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: POLICYSCOPE 2026-07-25a"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: ORDERSAVE 2026-07-25b"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
