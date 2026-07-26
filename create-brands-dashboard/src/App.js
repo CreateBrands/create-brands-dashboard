@@ -35921,21 +35921,33 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
       ) : (
         <div className="space-y-2">
           {list.map(d => {
-            const dispatched = d.dispatched_at ? new Date(d.dispatched_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : null;
+            const fmtDay = (iso) => iso ? new Date(iso).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) : null;
+            const sentDay = fmtDay(d.dispatched_at);
+            const recvDay = fmtDay(d.received_at);
+            const storeName = (myStores.find(s => s.id === d.store_id) || {}).name || null;
+            const source = d.supplier_name || (d.dist_order_id ? "Distribution (warehouse)" : null);
             const progress = d.status === "receiving" && d.lineCount ? `${d.receivedCount}/${d.lineCount} checked` : null;
             return (
             <button key={d.id} onClick={() => openDelivery(d.id)} className="w-full text-left rounded-xl p-4" style={{ background: C.cream, border:`1px solid ${C.line}` }}>
               <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-sm font-bold" style={{ color: C.ink }}>Delivery #{d.id}</div>
-                  <div className="text-[13px] mt-0.5" style={{ color: C.ink }}>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-bold" style={{ color: C.ink }}>Delivery #{d.id}</span>
+                    {source && <span className="text-[11px] px-1.5 py-0.5 rounded" style={{ background: "#F3EADA", color: C.accent }}>{source}</span>}
+                  </div>
+                  <div className="text-[13px] mt-1" style={{ color: C.ink }}>
                     {d.lineCount ? `${d.lineCount} item${d.lineCount !== 1 ? "s" : ""}` : "No items"}
                     {d.lineValue ? <span style={{ color: C.inkFaint }}> · £{d.lineValue.toFixed(2)}</span> : null}
+                    {d.firstItem && <span style={{ color: C.inkFaint }}> · {d.firstItem}{d.lineCount > 1 ? ` +${d.lineCount - 1}` : ""}</span>}
                   </div>
-                  <div className="text-[11px] mt-0.5" style={{ color: C.inkFaint }}>
-                    {d.firstItem ? <span>{d.firstItem}{d.lineCount > 1 ? ` +${d.lineCount - 1} more` : ""}</span> : (d.dist_order_id ? `Order ${d.dist_order_id}` : "From Distribution")}
-                    {dispatched && <span> · sent {dispatched}</span>}
+                  {/* Identifying detail line: store · sent day · driver */}
+                  <div className="text-[11px] mt-1 flex flex-wrap gap-x-2 gap-y-0.5" style={{ color: C.inkFaint }}>
+                    {storeName && <span>📍 {storeName}</span>}
+                    {sentDay && <span>🚚 sent {sentDay}</span>}
+                    {d.driver && <span>👤 {d.driver}</span>}
                   </div>
+                  {/* Received line only once it's been received */}
+                  {recvDay && <div className="text-[11px] mt-0.5" style={{ color: C.green }}>✓ received {recvDay}{d.received_by ? ` by ${d.received_by}` : ""}</div>}
                   {progress && <div className="text-[11px] mt-1 font-semibold" style={{ color: C.amber }}>{progress}</div>}
                 </div>
                 <div className="px-2 py-1 rounded-full text-[10px] font-bold flex-shrink-0" style={{ background: d.status==="receiving"?C.amberBg:C.greenBg, color: d.status==="receiving"?C.amber:C.green }}>{d.status === "receiving" ? "Receiving" : "New"}</div>
@@ -60430,7 +60442,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: DELIVCARD 2026-07-25h"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: DELIVINFO 2026-07-25i"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
