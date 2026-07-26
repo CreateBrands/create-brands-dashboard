@@ -35937,21 +35937,33 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
             );
           })}
         </div>
-        {/* Shared receipt-matching view — SAME component + source of truth as
-            Finance/Expenses and Distribution. Edits here (item match, pack qty,
-            price) write to the invoice line and reflect in all three places.
-            For verifying ambiguity against the original receipt. */}
+        {/* EXACT same review view as Finance & Distribution: receipt image on the
+            left, editable InvoiceLineRow match rows on the right. Same component,
+            same source of truth — edits reflect in all three places. Does NOT
+            change this store's received quantities above. */}
         {receipt && receipt.claim && receipt.claim.invoiceId && matchLines.length > 0 && (
-          <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
+          <div className="rounded-2xl overflow-hidden border border-slate-800">
             <div className="px-4 py-3" style={{ background: "#3A2E26" }}>
-              <div className="text-sm font-bold text-white">Receipt match — verify against the original</div>
-              <div className="text-[11px] mt-0.5" style={{ color: "#C9BBA8" }}>Same review as Finance &amp; Distribution — matching a line, fixing pack qty or price here updates the purchase everywhere. Does NOT change this store's received quantities above.</div>
-              {receipt.matched && <div className="text-[11px] mt-1" style={{ color: receipt.ambiguous ? "#F0A868" : "#9FC49A" }}>{receipt.ambiguous ? "⚠ More than one receipt matched this vendor/date — showing the most recent. Verify it's the right one." : "Matched to receipt by vendor + date."}</div>}
+              <div className="text-sm font-bold text-white">Receipt review — same as Finance &amp; Distribution</div>
+              <div className="text-[11px] mt-0.5" style={{ color: "#C9BBA8" }}>Match each line to our item, fix pack qty / price. Changes update the purchase everywhere; they do not change the received quantities above.</div>
+              {receipt.matched && <div className="text-[11px] mt-1" style={{ color: receipt.ambiguous ? "#F0A868" : "#9FC49A" }}>{receipt.ambiguous ? "⚠ More than one receipt matched this vendor/date — showing the most recent. Verify it's right." : "Matched to receipt by vendor + date."}</div>}
             </div>
-            <div className="p-3 space-y-2" style={{ background: "#0F1729" }}>
-              {matchLines.map(l => (
-                <InvoiceLineRow key={l.id} line={l} domain="shop" onChanged={() => receipt.claim.invoiceId && reloadMatchLines(receipt.claim.invoiceId)} />
-              ))}
+            <div className="p-3 grid md:grid-cols-[minmax(300px,40%)_1fr] gap-3" style={{ background: "#0F1729" }}>
+              <div className="self-start">
+                {receipt.claim.receiptUrl ? (
+                  <div className="rounded-lg overflow-hidden border border-slate-800">
+                    <a href={receipt.claim.receiptUrl} target="_blank" rel="noreferrer">
+                      <img src={receipt.claim.receiptUrl} alt="receipt" className="w-full" style={{ maxWidth: "none" }}/>
+                    </a>
+                    <div className="px-2 py-1 text-[10px] text-center text-slate-500 bg-slate-900">Tap to open full size</div>
+                  </div>
+                ) : <div className="text-xs text-slate-600 border border-dashed border-slate-800 rounded-xl p-6 text-center">No receipt image on this claim.</div>}
+              </div>
+              <div className="space-y-2 self-start">
+                {matchLines.map(l => (
+                  <InvoiceLineRow key={l.id} line={l} domain="shop" onChanged={() => receipt.claim.invoiceId && reloadMatchLines(receipt.claim.invoiceId)} />
+                ))}
+              </div>
             </div>
           </div>
         )}
@@ -60516,7 +60528,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: RECVFIX 2026-07-25q"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: RECVSAME 2026-07-25r"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
