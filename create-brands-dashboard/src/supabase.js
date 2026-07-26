@@ -5572,7 +5572,30 @@ export async function getInvoiceFileUrl(path) {
 }
 
 // ── SUPPLIER ITEM ALIASES: names matched once, remembered everywhere ─────────
-export const normItemAlias = (t) => String(t || "").toLowerCase().replace(/\s+/g, " ").trim();
+// ALIASNORM: the legacy form — lowercase + collapse whitespace only. Retained
+// because the rows already in supplier_item_aliases were written this way, so
+// every lookup must still try it.
+export const normItemAliasRaw = (t) => String(t || "").toLowerCase().replace(/\s+/g, " ").trim();
+
+// ALIASNORM: the real form. Runs the description through the receipt normaliser
+// FIRST, which strips weighed-quantity parentheticals "(2.940 kg)", trailing
+// PLU codes and brand prefixes. Without this every loose-produce purchase minted
+// a brand new alias — five of the first forty-two rows were the same banana.
+export const normItemAlias = (t) => {
+  let s = String(t || "");
+  try {
+    const n = normalizeReceiptDescription(s);
+    if (n && n.clean) s = n.clean;
+  } catch { /* normaliser is best-effort; fall back to the raw text */ }
+  return normItemAliasRaw(s);
+};
+
+// Both spellings of a name, newest first, de-duplicated. Used by every lookup so
+// that pre-ALIASNORM rows keep resolving without a migration.
+export const aliasKeysFor = (name) => {
+  const a = normItemAlias(name), b = normItemAliasRaw(name);
+  return a === b ? [a] : [a, b];
+};
 
 export async function fetchItemAliases() {
   const { data } = await supabase.from("supplier_item_aliases").select("*");
@@ -5581,17 +5604,26 @@ export async function fetchItemAliases() {
   return m;
 }
 export const lookupAlias = (aliasMap, name, vendor) => {
-  const n = normItemAlias(name);
-  return aliasMap.get(`${n}|${normItemAlias(vendor)}`) || aliasMap.get(`${n}|`) || null;
+  const v = normItemAliasRaw(vendor);
+  for (const n of aliasKeysFor(name)) {
+    const hit = aliasMap.get(`${n}|${v}`) || aliasMap.get(`${n}|`);
+    if (hit) return hit;
+  }
+  return null;
 };
 export async function fetchAliasFor(name, vendor) {
-  const n = normItemAlias(name);
-  const { data } = await supabase.from("supplier_item_aliases").select("store_item_id, vendor")
-    .eq("alias_norm", n).limit(3);
+  const keys = aliasKeysFor(name);
+  const { data } = await supabase.from("supplier_item_aliases").select("store_item_id, vendor, alias_norm")
+    .in("alias_norm", keys).limit(6);
   if (!data || !data.length) return null;
-  const v = normItemAlias(vendor);
-  const hit = data.find(r => (r.vendor || "") === v) || data.find(r => !r.vendor) || data[0];
-  return hit?.store_item_id || null;
+  const v = normItemAliasRaw(vendor);
+  // Prefer the normalised key, then a vendor-specific row, then a vendor-less one.
+  for (const n of keys) {
+    const pool = data.filter(r => r.alias_norm === n);
+    const hit = pool.find(r => (r.vendor || "") === v) || pool.find(r => !r.vendor) || pool[0];
+    if (hit) return hit.store_item_id;
+  }
+  return null;
 }
 export async function fetchStoreItemName(id) {
   if (id == null) return null;
@@ -5601,8 +5633,12 @@ export async function fetchStoreItemName(id) {
 
 export async function upsertItemAlias({ name, vendor, storeItemId, by }) {
   if (!name || !storeItemId) return;
+  // ALIASNORM: the ITEM name goes through the receipt normaliser so weighed
+  // purchases collapse to one alias. The VENDOR must use the raw form — it is
+  // matched with normItemAliasRaw on every lookup, and the receipt normaliser
+  // strips supermarket prefixes, which would mangle a vendor name.
   const { error } = await supabase.from("supplier_item_aliases").upsert({
-    alias_norm: normItemAlias(name), vendor: normItemAlias(vendor), store_item_id: String(storeItemId), created_by: by || null,
+    alias_norm: normItemAlias(name), vendor: normItemAliasRaw(vendor), store_item_id: String(storeItemId), created_by: by || null,
   }, { onConflict: "alias_norm,vendor" });
   if (error) console.error("alias save failed:", error.message);
 }
@@ -7615,14 +7651,50 @@ export async function detectInvoicePriceChanges(invoiceId, { thresholdPct = 1 } 
   const invForStore = await fetchInventoryForStore(storeId);
   const costByItem = new Map(invForStore.store.map(i => [i.id, i.costPerBaseUnit]));
 
+  // UNITFIX: the old maths was `pack_price_ex_vat / pack_qty_base`, which is only
+  // correct when the pack happens to be recorded in the item's base unit. It
+  // usually is not — "Strawberries 1kg" is stored as pack_qty_base 1 with
+  // pack_unit_raw 'kg' against a gram-based item, so the old formula returned
+  // £4.49/g instead of £0.00449/g (652x). Every line now converts through
+  // receiptLineUnitCost, which returns null rather than guessing when the unit
+  // cannot be resolved.
+  const matchedIds = [...new Set((lines || []).map(l => l.matched_store_item_id).filter(v => v != null))];
+  const baseUnitByItem = new Map();
+  if (matchedIds.length) {
+    const { data: sis } = await supabase.from("cogs_store_items").select("id, base_unit").in("id", matchedIds);
+    (sis || []).forEach(r => baseUnitByItem.set(r.id, r.base_unit));
+  }
+
   let queued = 0;
   for (const ln of (lines || [])) {
     const itemId = ln.matched_store_item_id;
     if (!itemId) continue;
-    const qtyBase = Number(ln.pack_qty_base);
-    const priceEx = Number(ln.pack_price_ex_vat);
-    if (!(qtyBase > 0) || !(priceEx >= 0)) continue;
-    const newCost = priceEx / qtyBase;                 // per-base-unit from invoice
+    if ((ln.status || "") === "skipped") continue;
+    const baseUnit = baseUnitByItem.get(itemId);
+    const newCost = receiptLineUnitCost(ln, baseUnit);
+    const packBase = receiptLineBaseQty(ln, baseUnit);
+    if (newCost == null) continue;   // unresolvable unit -> a gap, never a wrong number
+
+    // PRICEHIST: one row per item / supplier / pack / date, tied back to the
+    // receipt line it came from. This is what lets the same ingredient carry a
+    // different real cost per supplier (Lidl cream and Tesco cream are both true)
+    // instead of fighting over a single pack_price field.
+    try {
+      if (packBase > 0) {
+        await supabase.from("ingredient_prices").insert({
+          id: `ip_${ln.id}`,
+          ingredient_id: String(itemId),
+          supplier_name: inv.supplier_name || inv.supplier || null,
+          pack_desc: ln.raw_description || null,
+          pack_qty_base: packBase,
+          price_ex_vat: Number(ln.pack_price_ex_vat),
+          effective_from: (inv.invoice_date || new Date().toISOString()).slice(0, 10),
+          source: "invoice",
+          invoice_line_id: ln.id,
+        });
+      }
+    } catch (e) { /* duplicate id = already recorded; non-fatal */ }
+
     const oldCost = costByItem.get(itemId);
     const pct = (oldCost != null && oldCost > 0) ? ((newCost - oldCost) / oldCost) * 100 : null;
     // skip if effectively unchanged
@@ -9297,6 +9369,150 @@ export function receiptLineQuality(line) {
   return { ok: true, reason: null, clean: nd.clean };
 }
 // ===== end RECEIPT LINE NORMALIZATION V1 ==================================
+
+// ===== BATCHMATCH V1 ======================================================
+// Two things live here that the pipeline could not work without:
+//   1. receiptLineBaseQty — converts a receipt line's pack into the item's OWN
+//      base unit. invoice_lines.pack_qty_base is misleadingly named: it holds
+//      the pack size expressed in pack_unit_raw, NOT in base units. "Strawberries
+//      1kg" is stored as pack_qty_base 1 / pack_unit_raw kg, and the item's base
+//      unit is g. Anything comparing price/pack_qty_base against
+//      cost_per_base_unit without this is out by the unit factor.
+//   2. runBatchMatchInvoiceLines — matching used to run only when a human opened
+//      a receipt, so the backlog was never processed and descriptions IDENTICAL
+//      to catalogue names sat unmatched.
+
+const UNIT_FACTORS = {
+  "g|g": 1, "kg|kg": 1, "ml|ml": 1, "l|l": 1, "ea|ea": 1,
+  "kg|g": 1000, "g|kg": 0.001,
+  "l|ml": 1000, "ltr|ml": 1000, "litre|ml": 1000, "litres|ml": 1000,
+  "ml|l": 0.001,
+  "each|ea": 1, "ea|each": 1, "pcs|ea": 1, "pc|ea": 1, "unit|ea": 1, "units|ea": 1,
+};
+
+// Convert `qty` expressed in `fromUnit` into `toUnit`. Returns null when the
+// pair is unknown — deliberately, so an unresolvable unit produces a GAP rather
+// than a confident wrong number.
+export function convertUnitQty(qty, fromUnit, toUnit) {
+  const q = Number(qty);
+  if (!Number.isFinite(q)) return null;
+  const f = String(fromUnit || "").trim().toLowerCase();
+  const t = String(toUnit || "").trim().toLowerCase();
+  if (!t) return null;
+  if (!f) return null;
+  const k = UNIT_FACTORS[`${f}|${t}`];
+  return k == null ? null : q * k;
+}
+
+// The quantity ONE pack of this receipt line represents, in the item's base unit.
+// pack_unit_raw is unreliable (bread has been seen tagged "ml"), so when it does
+// not convert cleanly we return null rather than guessing.
+export function receiptLineBaseQty(line, baseUnit) {
+  if (!line || !baseUnit) return null;
+  const packQty = line.pack_qty_base != null ? Number(line.pack_qty_base) : null;
+  if (!(packQty > 0)) return null;
+  const raw = line.pack_unit_raw;
+  // No unit recorded: assume the pack is already in the item's base unit.
+  if (!raw || !String(raw).trim()) return packQty;
+  return convertUnitQty(packQty, raw, baseUnit);
+}
+
+// Per-base-unit price implied by a receipt line, or null if it cannot be resolved.
+export function receiptLineUnitCost(line, baseUnit) {
+  const base = receiptLineBaseQty(line, baseUnit);
+  const price = line && line.pack_price_ex_vat != null ? Number(line.pack_price_ex_vat) : null;
+  if (!(base > 0) || !(price >= 0)) return null;
+  return price / base;
+}
+
+// Strip a trailing "-(N*size)" warehouse pack suffix: "Custard-(12*1L)" -> "Custard".
+export const stripPackSuffix = (s) =>
+  String(s || "").replace(/\s*[-–]\(\s*\d+(?:\.\d+)?\s*\*[^)]*\).*$/, "").trim();
+
+// Match every unmatched, non-skipped invoice line in one pass.
+// Order: alias (learned) -> exact name -> pack-suffix-stripped -> normalised name.
+// Writes match_method 'exact' and leaves status alone, so nothing is silently
+// treated as human-verified. Pass { dryRun: true } to preview.
+export async function runBatchMatchInvoiceLines({ dryRun = false, limit = 5000 } = {}) {
+  const [{ data: items, error: eI }, { data: lines, error: eL }, aliasMap] = await Promise.all([
+    supabase.from("cogs_store_items").select("id, name"),
+    supabase.from("invoice_lines")
+      .select("id, invoice_id, raw_description, matched_store_item_id, status, line_total")
+      .is("matched_store_item_id", null).limit(limit),
+    fetchItemAliases().catch(() => new Map()),
+  ]);
+  if (eI) throw eI;
+  if (eL) throw eL;
+
+  // vendor per invoice, for vendor-scoped alias hits
+  const invIds = [...new Set((lines || []).map(l => l.invoice_id).filter(Boolean))];
+  const vendorByInvoice = new Map();
+  if (invIds.length) {
+    const { data: invs } = await supabase.from("invoices").select("id, supplier_name").in("id", invIds);
+    (invs || []).forEach(i => vendorByInvoice.set(i.id, i.supplier_name || ""));
+  }
+
+  const byExact = new Map(), byStripped = new Map(), byNorm = new Map();
+  for (const it of (items || [])) {
+    const n = String(it.name || "").trim().toLowerCase();
+    if (n && !byExact.has(n)) byExact.set(n, it.id);
+    const st = stripPackSuffix(it.name).toLowerCase();
+    if (st && !byStripped.has(st)) byStripped.set(st, it.id);
+    const nm = normItemAlias(it.name);
+    if (nm && !byNorm.has(nm)) byNorm.set(nm, it.id);
+  }
+
+  const results = { scanned: 0, matched: 0, byAlias: 0, byExact: 0, byStripped: 0, byNormalised: 0,
+                    skipped: 0, unmatched: 0, matchedValue: 0, samples: [] };
+
+  for (const ln of (lines || [])) {
+    results.scanned++;
+    if ((ln.status || "") === "skipped") { results.skipped++; continue; }
+    const desc = ln.raw_description || "";
+    if (!desc.trim()) { results.unmatched++; continue; }
+
+    const q = receiptLineQuality({ raw_description: desc, order_qty: 1, pack_price_ex_vat: 0 });
+    if (q.reason === "cancelled" || q.reason === "adjustment") { results.skipped++; continue; }
+
+    const vendor = vendorByInvoice.get(ln.invoice_id) || "";
+    let itemId = lookupAlias(aliasMap, desc, vendor);
+    let how = itemId ? "alias" : null;
+
+    if (!itemId) {
+      const lower = desc.trim().toLowerCase();
+      itemId = byExact.get(lower) || null;
+      if (itemId) how = "exact";
+    }
+    if (!itemId) {
+      const st = stripPackSuffix(desc).toLowerCase();
+      itemId = byExact.get(st) || byStripped.get(st) || null;
+      if (itemId) how = "stripped";
+    }
+    if (!itemId) {
+      itemId = byNorm.get(normItemAlias(desc)) || null;
+      if (itemId) how = "normalised";
+    }
+
+    if (!itemId) { results.unmatched++; continue; }
+
+    results.matched++;
+    results.matchedValue += Number(ln.line_total) || 0;
+    if (how === "alias") results.byAlias++;
+    else if (how === "exact") results.byExact++;
+    else if (how === "stripped") results.byStripped++;
+    else results.byNormalised++;
+    if (results.samples.length < 25) results.samples.push({ desc, itemId, how });
+
+    if (!dryRun) {
+      const { error } = await supabase.from("invoice_lines")
+        .update({ matched_store_item_id: itemId, match_method: "exact", match_confidence: 1.0 })
+        .eq("id", ln.id);
+      if (error) console.error("batch match write failed:", ln.id, error.message);
+    }
+  }
+  return results;
+}
+// ===== end BATCHMATCH V1 ==================================================
 
 export async function synthesizeInvoiceFromItems({ items, storeId, vendor, receiptUrl }) {
   const clean = (items || []).filter(it => (it.desc || "").trim());

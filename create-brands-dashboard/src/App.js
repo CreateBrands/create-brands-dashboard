@@ -152,6 +152,7 @@ import {
   fetchPurchases, addPurchase, deletePurchase, computeActualCogs,
   fetchInventoryForStore, setStoreItemOverride, clearStoreItemOverride,
   searchStoreInventory, detectInvoicePriceChanges, fetchPriceChanges, applyPriceChange, dismissPriceChange,
+  runBatchMatchInvoiceLines,
   fetchDistTaxRates, fetchDistContacts, upsertDistContact,
   fetchDistItems, upsertDistItem, deleteDistItem, previewDeleteInactiveDistItems, bulkDeleteInactiveDistItems, fetchStoreItemTags, setStoreItemTag, fetchStoreItemStock, saveStoreItemStock, computeStoreItemUsage, computeStoreItemConsumption, computeStoreItemConsumptionV2, fetchDistBatches, createDistBatch,
   PACKORDER_STAGES, PACKSHIP_STAGES, fetchPackagingOrders, fetchPackagingOrderDetail, upsertPackagingOrder, deletePackagingOrder,
@@ -60544,7 +60545,18 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: FRESHNORM 2026-07-25y"); } catch {} }, []);
+  useEffect(() => {
+    try {
+      console.log("CB build: BATCHMATCH 2026-07-26a");
+      // BATCHMATCH: the first run over the backlog is deliberately operator-driven
+      // rather than automatic — it writes matched_store_item_id across hundreds of
+      // lines, so it should be previewed before it writes. From the console:
+      //   await cbBatchMatch({ dryRun: true })   -> counts + 25 sample matches
+      //   await cbBatchMatch()                   -> writes
+      window.cbBatchMatch = (opts) => runBatchMatchInvoiceLines(opts || {});
+      console.log("CB: run  await cbBatchMatch({dryRun:true})  to preview receipt matching");
+    } catch {}
+  }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
