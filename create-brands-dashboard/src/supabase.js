@@ -15623,7 +15623,30 @@ export async function fetchIncomingDeliveries(storeId) {
     .select("*").eq("store_id", storeId).in("status", ["incoming", "receiving"])
     .order("dispatched_at", { ascending: false });
   if (error) throw error;
-  return data || [];
+  const deliveries = data || [];
+  // Enrich each card with a line summary so the list is identifiable at a glance
+  // (item count, dispatched value, and the supplier/source) without opening it.
+  const ids = deliveries.map(d => d.id);
+  if (ids.length) {
+    const { data: lines } = await supabase.from("store_delivery_lines")
+      .select("delivery_id, item_name, qty_dispatched, qty_received, unit_cost, received").in("delivery_id", ids);
+    const byDelivery = {};
+    (lines || []).forEach(l => {
+      const g = byDelivery[l.delivery_id] || (byDelivery[l.delivery_id] = { count: 0, value: 0, received: 0, firstItem: null });
+      g.count += 1;
+      g.value += (Number(l.qty_dispatched) || 0) * (Number(l.unit_cost) || 0);
+      if (l.received) g.received += 1;
+      if (!g.firstItem && l.item_name) g.firstItem = l.item_name;
+    });
+    deliveries.forEach(d => {
+      const g = byDelivery[d.id];
+      d.lineCount = g ? g.count : 0;
+      d.lineValue = g ? +g.value.toFixed(2) : 0;
+      d.receivedCount = g ? g.received : 0;
+      d.firstItem = g ? g.firstItem : null;
+    });
+  }
+  return deliveries;
 }
 
 // Full detail of one delivery (header + lines).

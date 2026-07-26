@@ -35877,6 +35877,16 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
                     <input type="number" value={recv[l.id] ?? ""} onChange={e => setRecv(r => ({ ...r, [l.id]: e.target.value }))}
                       className="w-14 text-center rounded-lg py-1 text-sm font-bold" style={{ background:"#fff", border:`1px solid ${C.line}`, color: C.ink }}/>
                     <button onClick={() => setRecv(r => ({ ...r, [l.id]: got + 1 }))} className="w-7 h-7 rounded-lg text-lg font-bold" style={{ background:"#F3EADA", color: C.ink }}>+</button>
+                    {(() => {
+                      const isReceived = got > 0 && got === disp;
+                      return (
+                        <button onClick={() => setRecv(r => ({ ...r, [l.id]: isReceived ? 0 : disp }))}
+                          className="ml-1 px-3 h-7 rounded-lg text-xs font-bold flex items-center gap-1 whitespace-nowrap"
+                          style={isReceived ? { background: C.green, color: "#fff" } : { background: "#F3EADA", color: C.accent, border: `1px solid ${C.line}` }}>
+                          {isReceived ? <><CheckCircle size={13}/> Received</> : "Received"}
+                        </button>
+                      );
+                    })()}
                   </div>
                 </div>
                 {short && <div className="text-[11px] mt-1.5 font-semibold" style={{ color: C.amber }}>Short by {disp - got} — will be reported</div>}
@@ -35910,17 +35920,29 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
         </div>
       ) : (
         <div className="space-y-2">
-          {list.map(d => (
+          {list.map(d => {
+            const dispatched = d.dispatched_at ? new Date(d.dispatched_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : null;
+            const progress = d.status === "receiving" && d.lineCount ? `${d.receivedCount}/${d.lineCount} checked` : null;
+            return (
             <button key={d.id} onClick={() => openDelivery(d.id)} className="w-full text-left rounded-xl p-4" style={{ background: C.cream, border:`1px solid ${C.line}` }}>
-              <div className="flex items-center justify-between">
-                <div>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
                   <div className="text-sm font-bold" style={{ color: C.ink }}>Delivery #{d.id}</div>
-                  <div className="text-[11px]" style={{ color: C.inkFaint }}>Order {d.dist_order_id || "—"} · {d.status === "receiving" ? "in progress" : "incoming"}</div>
+                  <div className="text-[13px] mt-0.5" style={{ color: C.ink }}>
+                    {d.lineCount ? `${d.lineCount} item${d.lineCount !== 1 ? "s" : ""}` : "No items"}
+                    {d.lineValue ? <span style={{ color: C.inkFaint }}> · £{d.lineValue.toFixed(2)}</span> : null}
+                  </div>
+                  <div className="text-[11px] mt-0.5" style={{ color: C.inkFaint }}>
+                    {d.firstItem ? <span>{d.firstItem}{d.lineCount > 1 ? ` +${d.lineCount - 1} more` : ""}</span> : (d.dist_order_id ? `Order ${d.dist_order_id}` : "From Distribution")}
+                    {dispatched && <span> · sent {dispatched}</span>}
+                  </div>
+                  {progress && <div className="text-[11px] mt-1 font-semibold" style={{ color: C.amber }}>{progress}</div>}
                 </div>
-                <div className="px-2 py-1 rounded-full text-[10px] font-bold" style={{ background: d.status==="receiving"?C.amberBg:C.greenBg, color: d.status==="receiving"?C.amber:C.green }}>{d.status === "receiving" ? "Receiving" : "New"}</div>
+                <div className="px-2 py-1 rounded-full text-[10px] font-bold flex-shrink-0" style={{ background: d.status==="receiving"?C.amberBg:C.greenBg, color: d.status==="receiving"?C.amber:C.green }}>{d.status === "receiving" ? "Receiving" : "New"}</div>
               </div>
             </button>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
@@ -60408,7 +60430,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: EODBREAKDOWN 2026-07-25g"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: DELIVCARD 2026-07-25h"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
