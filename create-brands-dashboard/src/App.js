@@ -153,6 +153,7 @@ import {
   fetchInventoryForStore, setStoreItemOverride, clearStoreItemOverride,
   searchStoreInventory, detectInvoicePriceChanges, fetchPriceChanges, applyPriceChange, dismissPriceChange,
   runBatchMatchInvoiceLines, fetchStoreItemBrief, receiptLineBaseQty, receiptLineUnitCost,
+  ensureClaimInvoice, linkClaimToInvoice,
   fetchDistTaxRates, fetchDistContacts, upsertDistContact,
   fetchDistItems, upsertDistItem, deleteDistItem, previewDeleteInactiveDistItems, bulkDeleteInactiveDistItems, fetchStoreItemTags, setStoreItemTag, fetchStoreItemStock, saveStoreItemStock, computeStoreItemUsage, computeStoreItemConsumption, computeStoreItemConsumptionV2, fetchDistBatches, createDistBatch,
   PACKORDER_STAGES, PACKSHIP_STAGES, fetchPackagingOrders, fetchPackagingOrderDetail, upsertPackagingOrder, deletePackagingOrder,
@@ -21685,8 +21686,15 @@ function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
   const [saveBusy, setSaveBusy] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
   const canEdit = editable && claim.status === "submitted";
+  // CLAIMLINK: a claim's own invoice_id, or one adopted from a sibling that
+  // shares the same receipt image. Split claims only carry the link on one
+  // child; without this the others drop to a different-looking screen that
+  // reads as an extraction failure when nothing is actually wrong.
+  const [resolvedInvoiceId, setResolvedInvoiceId] = useState(claim.invoiceId || null);
+  const [linking, setLinking] = useState(false);
+  const [linkMsg, setLinkMsg] = useState("");
   const reloadRaw = async () => {
-    try { const { lines: raw } = await getInvoiceWithLines(claim.invoiceId); setRawLines(raw || []); } catch {}
+    try { const { lines: raw } = await getInvoiceWithLines(resolvedInvoiceId || claim.invoiceId); setRawLines(raw || []); } catch {}
   };
   const syncToDelivery = async () => {
     setSaveBusy(true); setSaveMsg("");
@@ -21720,9 +21728,17 @@ function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
   useEffect(() => {
     let alive = true;
     (async () => {
-      if (claim.invoiceId) {
+      // CLAIMLINK: use this claim's invoice, or adopt a sibling's if the receipt
+      // was extracted under another store's share of the same shopping trip.
+      let invId = claim.invoiceId || null;
+      if (!invId) {
+        try { invId = await ensureClaimInvoice(claim); } catch { invId = null; }
+      }
+      if (!alive) return;
+      setResolvedInvoiceId(invId);
+      if (invId) {
         try {
-          const { invoice, lines: raw } = await getInvoiceWithLines(claim.invoiceId);
+          const { invoice, lines: raw } = await getInvoiceWithLines(invId);
           if (!alive) return;
           setInvHead(invoice || null);
           setRawLines(raw || []);
@@ -21742,6 +21758,32 @@ function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
     })();
     return () => { alive = false; };
   }, [claim]);
+
+  // CLAIMLINK: read a receipt that has never been extracted, so this claim joins
+  // the same pipeline as every other. Pulls the stored image back down and puts
+  // it through the normal upload → extract path (which now also runs the intake
+  // guards and the matcher), then links the resulting invoice to the claim.
+  const extractThisReceipt = async () => {
+    if (!claim.receiptUrl) return;
+    setLinking(true); setLinkMsg("Reading the receipt…");
+    try {
+      const res = await fetch(claim.receiptUrl);
+      const blob = await res.blob();
+      const file = new File([blob], "receipt.jpg", { type: blob.type || "image/jpeg" });
+      const inv = await uploadInvoiceFile(file, "expense", null);
+      setLinkMsg("Extracting line items…");
+      try { await extractInvoice(inv.id); } catch { /* best-effort: keep the link even if extraction is partial */ }
+      await linkClaimToInvoice(claim.id, inv.id);
+      const { invoice, lines: raw } = await getInvoiceWithLines(inv.id);
+      setResolvedInvoiceId(inv.id);
+      setInvHead(invoice || null);
+      setRawLines(raw || []);
+      setLinkMsg(raw && raw.length ? "" : "The receipt was read but no line items were found.");
+      if (onSaved) onSaved();
+    } catch (e) {
+      setLinkMsg(`Couldn't read this receipt: ${e?.message || e}`);
+    } finally { setLinking(false); }
+  };
   const hasPrices = (lines || []).some(l => l.price != null);
   const lineTotal = hasPrices ? (lines || []).reduce((s2, l) => s2 + (l.qty || 0) * (l.price || 0), 0) : null;
   return (
@@ -21774,7 +21816,7 @@ function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
               </div>
             ) : <div className="text-xs text-slate-600 border border-dashed border-slate-800 rounded-xl p-6 text-center">No receipt image on this claim.</div>}
           </div>
-          {claim.invoiceId && rawLines ? (
+          {resolvedInvoiceId && rawLines ? (
             <div className="space-y-2 self-start">
               <div className="text-[11px] text-slate-500">Same review as the invoice inbox: match each line to OUR item (matches are remembered for every future receipt), fix pack qty / price, then sync to the store's delivery.</div>
               {rawLines.map(l => <InvoiceLineRow key={l.id} line={l} domain="shop" onChanged={reloadRaw}/>)}
@@ -21812,7 +21854,30 @@ function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
               {saveMsg && <div className="text-[11px] text-slate-400">{saveMsg}</div>}
             </div>
           ) : (
+          <div className="space-y-2 self-start">
+            {/* CLAIMLINK: this is not a failure state and must not look like one.
+                The receipt simply hasn't been read into lines yet, so there is
+                nothing to match. Same chrome as the reviewer, with the action
+                that gets it there. */}
+            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
+              <div className="text-sm text-slate-100 font-semibold mb-1">Not read into line items yet</div>
+              <div className="text-[11px] text-slate-500 mb-3 leading-relaxed">
+                Nothing is wrong with this receipt — it just hasn’t been extracted, so its items
+                can’t be matched to inventory or added to stock. Reading it puts this claim through
+                exactly the same review as every other receipt.
+              </div>
+              {claim.receiptUrl ? (
+                <button onClick={extractThisReceipt} disabled={linking}
+                  className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold disabled:opacity-50">
+                  {linking ? "Reading…" : "Read this receipt"}
+                </button>
+              ) : (
+                <div className="text-[11px] text-amber-400">No receipt image on this claim, so there is nothing to read. The items below are what was typed on the claim.</div>
+              )}
+              {linkMsg && <div className="text-[11px] text-slate-400 mt-2">{linkMsg}</div>}
+            </div>
           <div className="rounded-xl border border-slate-800 overflow-hidden self-start">
+            <div className="px-3 py-2 border-b border-slate-800 text-[10px] uppercase tracking-wider text-slate-500">As typed on the claim</div>
             <table className="w-full text-xs">
               <thead className="dist-th"><tr>
                 <th className="text-right px-3 py-2 w-14">Qty</th>
@@ -21850,7 +21915,7 @@ function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
             {canEdit && (
               <div className="px-3 py-2 border-t border-slate-800 flex items-center gap-2">
                 {!editing ? (
-                  <button onClick={() => { setEditing(true); setSaveMsg(""); }} className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold">Correct OCR errors</button>
+                  <button onClick={() => { setEditing(true); setSaveMsg(""); }} className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold">Edit these items</button>
                 ) : (
                   <>
                     <button onClick={saveCorrections} disabled={saveBusy} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold disabled:opacity-50">{saveBusy ? "Saving…" : "Save corrections"}</button>
@@ -21861,6 +21926,7 @@ function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
                 {saveMsg && <span className="text-[11px] text-slate-400 ml-auto">{saveMsg}</span>}
               </div>
             )}
+          </div>
           </div>
           )}
         </div>
@@ -60645,7 +60711,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: MATCHCARD 2026-07-26c");
+      console.log("CB build: CLAIMLINK 2026-07-26d");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:

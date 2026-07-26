@@ -5570,6 +5570,39 @@ export async function runIntakeGuards(invoiceId) {
 }
 // ===== end INTAKE GUARDS V1 ===============================================
 
+// ===== CLAIMLINK V1 =======================================================
+// A split claim (one shopping trip divided across stores) only carries the
+// invoice link on ONE child, so the siblings fall through to a different-looking
+// fallback screen that reads as though extraction failed. It didn't — the lines
+// live on the sibling. These two helpers let every child reach the same lines.
+
+export async function linkClaimToInvoice(claimId, invoiceId) {
+  const { error } = await supabase.from("expense_claims")
+    .update({ invoice_id: invoiceId }).eq("id", claimId);
+  if (error) throw error;
+  return invoiceId;
+}
+
+// If this claim has no invoice but a sibling sharing the same receipt image
+// does, adopt it. Returns the invoice id, or null when the receipt has genuinely
+// never been extracted (in which case the caller offers to extract it).
+export async function ensureClaimInvoice(claim) {
+  if (!claim) return null;
+  if (claim.invoiceId || claim.invoice_id) return claim.invoiceId || claim.invoice_id;
+  const url = claim.receiptUrl || claim.receipt_url;
+  if (!url) return null;
+  const { data: siblings } = await supabase.from("expense_claims")
+    .select("id, invoice_id, amount").eq("receipt_url", url).not("invoice_id", "is", null);
+  if (!siblings || !siblings.length) return null;
+  // Any sibling will do — they all point at the same extracted receipt. Prefer
+  // the largest claim, which is most likely the one the receipt was raised from.
+  siblings.sort((a, b) => (Number(b.amount) || 0) - (Number(a.amount) || 0));
+  const invoiceId = siblings[0].invoice_id;
+  try { await linkClaimToInvoice(claim.id, invoiceId); } catch { /* read-only is fine */ }
+  return invoiceId;
+}
+// ===== end CLAIMLINK V1 ===================================================
+
 export async function extractInvoice(invoiceId) {
   const headers = {};
   if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
