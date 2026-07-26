@@ -152,7 +152,7 @@ import {
   fetchPurchases, addPurchase, deletePurchase, computeActualCogs,
   fetchInventoryForStore, setStoreItemOverride, clearStoreItemOverride,
   searchStoreInventory, detectInvoicePriceChanges, fetchPriceChanges, applyPriceChange, dismissPriceChange,
-  runBatchMatchInvoiceLines,
+  runBatchMatchInvoiceLines, fetchStoreItemBrief, receiptLineBaseQty, receiptLineUnitCost,
   fetchDistTaxRates, fetchDistContacts, upsertDistContact,
   fetchDistItems, upsertDistItem, deleteDistItem, previewDeleteInactiveDistItems, bulkDeleteInactiveDistItems, fetchStoreItemTags, setStoreItemTag, fetchStoreItemStock, saveStoreItemStock, computeStoreItemUsage, computeStoreItemConsumption, computeStoreItemConsumptionV2, fetchDistBatches, createDistBatch,
   PACKORDER_STAGES, PACKSHIP_STAGES, fetchPackagingOrders, fetchPackagingOrderDetail, upsertPackagingOrder, deletePackagingOrder,
@@ -23434,22 +23434,20 @@ function InvoiceLineRow({ line, domain, onChanged }) {
   const [matchedName, setMatchedName] = useState(null);
   const [busy, setBusy] = useState(false);
 
+  const [matchedItem, setMatchedItem] = useState(null);
+
   useEffect(() => {
     let live = true;
     if (line.matched_store_item_id) {
-      supabaseLookupName(line.matched_store_item_id).then((n) => { if (live) setMatchedName(n); });
-    } else setMatchedName(null);
+      // MATCHUI: fetch the matched row directly. The old lookup pulled the first
+      // 12 catalogue items and looked for the id among them, so almost every
+      // match displayed as "(matched)" with no name.
+      fetchStoreItemBrief(line.matched_store_item_id)
+        .then((it) => { if (live) { setMatchedItem(it); setMatchedName(it?.name || "(matched)"); } })
+        .catch(() => { if (live) setMatchedName("(matched)"); });
+    } else { setMatchedName(null); setMatchedItem(null); }
     return () => { live = false; };
   }, [line.matched_store_item_id, domain]);
-
-  async function supabaseLookupName(id) {
-    try {
-      const opts = await searchStoreInventory("");
-      const hit = opts.find((o) => o.id === id);
-      if (hit) return hit.name;
-    } catch {}
-    return "(matched)";
-  }
 
   const doSearch = async (q) => {
     setSearch(q);
@@ -23504,7 +23502,13 @@ function InvoiceLineRow({ line, domain, onChanged }) {
   const pick = async (opt) => {
     setBusy(true);
     try {
-      await saveInvoiceLine(line.id, { matched_store_item_id: opt.id, match_method: "human", match_confidence: 1 });
+      // MATCHUI: opt.id null means "change" — clear the match so the reviewer can
+      // pick again. Cleared lines go back to method 'none', never 'human', so a
+      // clear can't be mistaken for a verified decision or teach a bad alias.
+      const fields = (opt && opt.id != null)
+        ? { matched_store_item_id: opt.id, match_method: "human", match_confidence: 1 }
+        : { matched_store_item_id: null, match_method: "none", match_confidence: null };
+      await saveInvoiceLine(line.id, fields);
       setOptions([]); setSearch("");
       onChanged();
     } finally { setBusy(false); }
@@ -23533,80 +23537,174 @@ function InvoiceLineRow({ line, domain, onChanged }) {
     line.status === "skipped"   ? "bg-slate-700/30 text-slate-500 border-slate-700/40" :
                                    "bg-amber-500 text-amber-950 border-amber-700/40";
 
+  // ── MATCHUI: everything needed to judge a match, computed once ────────────
+  const nz = normalizeReceiptDescription(line.raw_description);
+  const showClean = nz.clean && nz.clean.toLowerCase() !== String(line.raw_description || "").trim().toLowerCase();
+  const noQty = line.order_qty == null || Number(line.order_qty) === 0;
+  const noPrice = line.pack_price_ex_vat == null;
+  const isWeighed = /^(kg|g|l|ml)$/i.test(line.pack_unit_raw || "");
+  const baseUnit = matchedItem?.base_unit || null;
+  // What one pack on this receipt is worth, in OUR base unit. Null when the
+  // printed unit cannot be resolved — a gap, never a guess.
+  const rcptUnitCost = baseUnit ? receiptLineUnitCost(line, baseUnit) : null;
+  const rcptBaseQty  = baseUnit ? receiptLineBaseQty(line, baseUnit) : null;
+  const ourUnitCost  = matchedItem?.cost_per_base_unit != null ? Number(matchedItem.cost_per_base_unit) : null;
+  const deltaPct = (rcptUnitCost != null && ourUnitCost > 0)
+    ? ((rcptUnitCost - ourUnitCost) / ourUnitCost) * 100 : null;
+  const money = (v, dp = 2) => (v == null || Number.isNaN(v)) ? "—" : `£${Number(v).toFixed(dp)}`;
+
+  const Row = ({ label, children, strong }) => (
+    <div className="flex items-baseline gap-2 py-0.5">
+      <span className="text-[11px] text-slate-500 w-24 flex-shrink-0">{label}</span>
+      <span className={`text-xs ${strong ? "text-slate-100 font-semibold" : "text-slate-300"}`}>{children}</span>
+    </div>
+  );
+
   return (
-    <div className="border border-slate-800 rounded-xl p-3 bg-slate-900/60 space-y-2">
-      <div className="flex items-start justify-between gap-2">
+    <div className="border border-slate-800 rounded-xl bg-slate-900/60 overflow-hidden">
+      {/* ── header: what the receipt literally says ── */}
+      <div className="flex items-start justify-between gap-2 px-3 pt-2.5 pb-2 border-b border-slate-800/70">
         <div className="min-w-0">
-          <div className="text-sm text-slate-200">{line.raw_description}</div>
-          {(() => {
-            const nz = normalizeReceiptDescription(line.raw_description);
-            const showClean = nz.clean && nz.clean.toLowerCase() !== String(line.raw_description||"").trim().toLowerCase();
-            const noQty = line.order_qty == null || Number(line.order_qty) === 0;
-            const noPrice = line.pack_price_ex_vat == null;
-            return (<>
-              {showClean && !nz.drop && <div className="text-[11px] text-slate-500">→ {nz.clean}</div>}
-              {nz.drop && <div className="text-[11px] text-amber-400">⚠ looks like a {nz.reason} line — won't book to stock</div>}
-              {!nz.drop && (noQty || noPrice) && <div className="text-[11px] text-amber-400">⚠ {noQty && noPrice ? "no qty or price" : noQty ? "no quantity" : "no price"} — enter before this can add to stock</div>}
-            </>);
-          })()}
+          <div className="text-sm text-slate-100 font-semibold break-words">{line.raw_description}</div>
+          {showClean && !nz.drop && <div className="text-[11px] text-slate-500">reads as “{nz.clean}”</div>}
+          {nz.drop && <div className="text-[11px] text-amber-400">⚠ looks like a {nz.reason} line — won’t book to stock</div>}
         </div>
         <span className={`px-2 py-0.5 rounded-md border text-[10px] uppercase flex-shrink-0 ${badge}`}>{line.status}</span>
       </div>
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        <span className="text-slate-500">Maps to:</span>
-        {line.matched_store_item_id ? (
-          <span className="px-2 py-0.5 rounded-md bg-indigo-600/20 border border-indigo-700/40 text-indigo-300">
-            {matchedName || "(matched)"} {line.match_method === "fuzzy" && line.match_confidence ? `· ${Math.round(line.match_confidence * 100)}%` : ""}
-          </span>
-        ) : (
-          <span className="px-2 py-0.5 rounded-md bg-rose-600/20 border border-rose-700/40 text-rose-300">unmatched</span>
-        )}
-        {!line.matched_store_item_id && suggests.length > 0 && suggests.map(sg => (
-          <button key={sg.id} onClick={() => pick(sg)} disabled={busy}
-            className="px-2 py-0.5 rounded-md bg-emerald-600/15 border border-emerald-700/40 text-emerald-300 hover:bg-emerald-600/30 disabled:opacity-40">
-            {sg.star ? "★ " : ""}{sg.name}?
-          </button>
-        ))}
-        <input
-          value={search}
-          onChange={(e) => doSearch(e.target.value)}
-          placeholder="search catalogue…"
-          className="px-2 py-1 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-indigo-500 w-44"
-        />
-      </div>
-      {options.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
-          {options.map((o) => (
-            <button key={o.id} disabled={busy} onClick={() => pick(o)}
-              className="px-2 py-0.5 rounded-lg bg-slate-800/60 border border-slate-700/50 text-[10px] text-slate-300 hover:border-indigo-500">
-              {o.name}
-            </button>
-          ))}
+
+      {/* ── the comparison: receipt on the left, our inventory on the right ── */}
+      <div className="grid md:grid-cols-2 gap-px bg-slate-800/50">
+        {/* LEFT — what was bought */}
+        <div className="bg-slate-900/60 p-3">
+          <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-2">From the receipt</div>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 mb-2">
+            <label className="text-[11px] text-slate-500 w-24 flex-shrink-0">{isWeighed ? `Qty (${line.pack_unit_raw})` : "Qty (packs)"}</label>
+            <input value={editCount} onChange={(e) => setEditCount(e.target.value)}
+              className="px-2 py-1 bg-slate-950 border border-indigo-700/50 rounded-lg text-xs text-white font-semibold w-20 focus:outline-none focus:border-indigo-500" />
+          </div>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 mb-2">
+            <label className="text-[11px] text-slate-500 w-24 flex-shrink-0">{isWeighed ? "Unit size" : "Pack size"}</label>
+            <input value={editQty} onChange={(e) => setEditQty(e.target.value)}
+              className="px-2 py-1 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 w-20 focus:outline-none focus:border-indigo-500" />
+            <span className="text-[11px] text-slate-500">{line.pack_unit_raw || (baseUnit || "")}</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 mb-2">
+            <label className="text-[11px] text-slate-500 w-24 flex-shrink-0">Price / pack</label>
+            <input value={editPrice} onChange={(e) => setEditPrice(e.target.value)}
+              className="px-2 py-1 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 w-20 focus:outline-none focus:border-indigo-500" />
+            <span className="text-[11px] text-slate-500">ex-VAT</span>
+            <button onClick={saveNumbers} disabled={busy}
+              className="px-2.5 py-1 rounded-lg bg-slate-800/60 border border-slate-700/50 text-[10px] text-slate-300 hover:border-indigo-500 disabled:opacity-40">save</button>
+          </div>
+          <div className="border-t border-slate-800/70 mt-2 pt-1.5">
+            <Row label="Line total" strong>{line.line_total != null ? money(line.line_total) : "—"}</Row>
+            {rcptBaseQty != null && (
+              <Row label="Works out as">{`${rcptBaseQty.toLocaleString()} ${baseUnit} per pack`}</Row>
+            )}
+            {rcptUnitCost != null && (
+              <Row label="Cost / unit" strong>{`${money(rcptUnitCost, 4)} per ${baseUnit}`}</Row>
+            )}
+            {line.matched_store_item_id && rcptUnitCost == null && (
+              <Row label="Cost / unit"><span className="text-amber-400">can’t convert “{line.pack_unit_raw || "no unit"}” to {baseUnit}</span></Row>
+            )}
+          </div>
+          {!nz.drop && (noQty || noPrice) && (
+            <div className="text-[11px] text-amber-400 mt-2">⚠ {noQty && noPrice ? "no qty or price" : noQty ? "no quantity" : "no price"} — enter before this can add to stock</div>
+          )}
         </div>
-      )}
-      <div className="flex flex-wrap items-center gap-2 text-xs">
-        <label className="text-slate-500 font-semibold">{/^(kg|g|l|ml)$/i.test(line.pack_unit_raw || "") ? `Qty (${line.pack_unit_raw})` : "Qty (packs)"}</label>
-        <input value={editCount} onChange={(e) => setEditCount(e.target.value)}
-          className="px-2 py-1 bg-slate-950 border border-indigo-700/50 rounded-lg text-xs text-white font-semibold w-16 focus:outline-none focus:border-indigo-500" />
-        <label className="text-slate-500">{/^(kg|g|l|ml)$/i.test(line.pack_unit_raw || "") ? "Unit size" : "Pack qty (base units)"}</label>
-        <input value={editQty} onChange={(e) => setEditQty(e.target.value)}
-          className="px-2 py-1 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 w-24 focus:outline-none focus:border-indigo-500" />
-        <label className="text-slate-500">Pack £ ex-VAT</label>
-        <input value={editPrice} onChange={(e) => setEditPrice(e.target.value)}
-          className="px-2 py-1 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 w-24 focus:outline-none focus:border-indigo-500" />
-        <button onClick={saveNumbers} disabled={busy}
-          className="px-2.5 py-1 rounded-lg bg-slate-800/60 border border-slate-700/50 text-[10px] text-slate-300 hover:border-indigo-500 disabled:opacity-40">save</button>
-        <span className="text-slate-600">line total £{line.line_total ?? "—"} {line.pack_unit_raw ? `· printed: ${line.pack_unit_raw}` : ""}</span>
+
+        {/* RIGHT — what it maps to */}
+        <div className="bg-slate-900/60 p-3">
+          <div className="text-[10px] uppercase tracking-wider text-slate-500 mb-2">Our inventory item</div>
+          {line.matched_store_item_id ? (
+            <>
+              <div className="flex items-center gap-2 flex-wrap mb-2">
+                <span className="px-2 py-0.5 rounded-md bg-indigo-600/20 border border-indigo-700/40 text-indigo-200 text-xs font-semibold">
+                  {matchedName || "(matched)"}
+                </span>
+                <span className="text-[10px] text-slate-500 uppercase">
+                  {line.match_method === "human" ? "you matched this" : line.match_method === "exact" ? "auto-matched" : line.match_method || ""}
+                </span>
+                <button onClick={() => pick({ id: null })} disabled={busy}
+                  className="text-[10px] text-slate-500 hover:text-rose-400 underline decoration-dotted">change</button>
+              </div>
+              {matchedItem && (
+                <div className="border-t border-slate-800/70 pt-1.5">
+                  <Row label="Our pack">{matchedItem.pack_qty != null ? `${Number(matchedItem.pack_qty).toLocaleString()} ${matchedItem.base_unit}` : "—"}</Row>
+                  <Row label="Our price">{money(matchedItem.pack_price)}</Row>
+                  <Row label="Cost / unit" strong>{ourUnitCost != null ? `${money(ourUnitCost, 4)} per ${matchedItem.base_unit}` : "—"}</Row>
+                  {deltaPct != null && (
+                    <div className={`mt-1.5 text-[11px] px-2 py-1 rounded-md border ${
+                      Math.abs(deltaPct) < 5 ? "bg-emerald-600/10 border-emerald-700/40 text-emerald-300"
+                      : Math.abs(deltaPct) < 25 ? "bg-amber-500/10 border-amber-600/40 text-amber-300"
+                      : "bg-rose-600/10 border-rose-700/40 text-rose-300"}`}>
+                      {Math.abs(deltaPct) < 5
+                        ? `matches our recorded cost (${deltaPct >= 0 ? "+" : ""}${deltaPct.toFixed(0)}%)`
+                        : `${deltaPct > 0 ? "dearer" : "cheaper"} than our recorded cost by ${Math.abs(deltaPct).toFixed(0)}% — check the pack size on both sides`}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              <div className="px-2 py-0.5 rounded-md bg-rose-600/20 border border-rose-700/40 text-rose-300 text-xs inline-block mb-2">not matched yet</div>
+              {suggests.length > 0 && (
+                <div className="mb-2">
+                  <div className="text-[10px] text-slate-500 mb-1">Did you mean…</div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {suggests.map(sg => (
+                      <button key={sg.id} onClick={() => pick(sg)} disabled={busy}
+                        className="px-2 py-1 rounded-lg bg-emerald-600/15 border border-emerald-700/40 text-emerald-300 text-xs hover:bg-emerald-600/30 disabled:opacity-40">
+                        {sg.star ? "★ " : ""}{sg.name}
+                        {sg.pack_qty != null && <span className="text-emerald-500/70"> · {Number(sg.pack_qty).toLocaleString()}{sg.base_unit}</span>}
+                      </button>
+                    ))}
+                  </div>
+                  {suggests.some(s => s.star) && <div className="text-[10px] text-slate-600 mt-1">★ = matched to this before</div>}
+                </div>
+              )}
+              <input value={search} onChange={(e) => doSearch(e.target.value)}
+                placeholder="search the catalogue…"
+                className="w-full px-2 py-1.5 bg-slate-950 border border-slate-800 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-indigo-500" />
+              {options.length > 0 && (
+                <div className="mt-1.5 max-h-40 overflow-auto rounded-lg border border-slate-800 divide-y divide-slate-800/70">
+                  {options.map((o) => (
+                    <button key={o.id} disabled={busy} onClick={() => pick(o)}
+                      className="w-full text-left px-2 py-1.5 hover:bg-slate-800/60 disabled:opacity-40">
+                      <div className="text-xs text-slate-200">{o.name}</div>
+                      <div className="text-[10px] text-slate-500">
+                        {o.pack_qty != null ? `${Number(o.pack_qty).toLocaleString()} ${o.base_unit} · ${money(o.pack_price)}` : "no pack recorded"}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="text-[10px] text-slate-600 mt-1.5">Matching once teaches the system — every future receipt with this name matches itself.</div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* ── footer: what is still missing, then the actions ── */}
+      <div className="flex items-center gap-2 flex-wrap px-3 py-2 border-t border-slate-800/70">
+        {!ok && line.status !== "skipped" ? (
+          <div className="text-[11px] text-amber-400 flex items-center gap-2 flex-wrap">
+            <span>still needed:</span>
+            {!line.matched_store_item_id && <span className="px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-600/40">an inventory match</span>}
+            {!(Number(line.pack_qty_base) > 0) && <span className="px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-600/40">pack size</span>}
+            {line.pack_price_ex_vat === null && <span className="px-1.5 py-0.5 rounded bg-amber-500/15 border border-amber-600/40">price</span>}
+          </div>
+        ) : (
+          <div className="text-[11px] text-emerald-400/80">{line.status === "skipped" ? "skipped — won’t book to stock" : "ready to confirm"}</div>
+        )}
         <div className="ml-auto flex gap-1.5">
           <button onClick={() => mark("confirmed")} disabled={busy || !ok}
-            className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-[10px] font-semibold text-white">confirm</button>
+            className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-[11px] font-semibold text-white">confirm</button>
           <button onClick={() => mark("skipped")} disabled={busy}
-            className="px-2.5 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-[10px] text-slate-200">skip</button>
+            className="px-3 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-[11px] text-slate-200">skip</button>
         </div>
       </div>
-      {!ok && line.status !== "skipped" && (
-        <div className="text-[10px] text-amber-400">needs: ingredient match + pack qty + price before it can be confirmed</div>
-      )}
     </div>
   );
 }
@@ -60547,7 +60645,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: INTAKEGUARD 2026-07-26b");
+      console.log("CB build: MATCHCARD 2026-07-26c");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:

@@ -7699,10 +7699,24 @@ export async function computeActualCogs({ storeId, openCountId, closeCountId } =
 // ===== INVOICE_PRICE_SYNC_V1 ==============================================
 // Search the LIVE inventory (cogs_store_items) for invoice line matching.
 export async function searchStoreInventory(q, limit = 12) {
-  let query = supabase.from("cogs_store_items").select("id, name").order("name").limit(limit);
+  // MATCHUI: pack + cost come back too, so the match card can show OUR pack
+  // beside the receipt's and the reviewer can see whether they agree.
+  let query = supabase.from("cogs_store_items")
+    .select("id, name, base_unit, pack_qty, pack_price, cost_per_base_unit")
+    .order("name").limit(limit);
   if (q && q.trim()) query = query.ilike("name", `%${q.trim()}%`);
   const { data, error } = await query; if (error) throw error;
   return data || [];
+}
+
+// One catalogue item by id, with everything the match card needs. Replaces a
+// lookup that pulled the first 12 items and hoped the match was among them.
+export async function fetchStoreItemBrief(id) {
+  if (id == null) return null;
+  const { data } = await supabase.from("cogs_store_items")
+    .select("id, name, base_unit, pack_qty, pack_price, cost_per_base_unit")
+    .eq("id", id).maybeSingle();
+  return data || null;
 }
 
 // Detect price changes from an approved invoice. For each line matched to a
