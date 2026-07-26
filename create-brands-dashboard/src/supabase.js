@@ -9250,11 +9250,31 @@ export async function fetchExpenseClaims({ status } = {}) {
 // (with its receipt image) and its itemised lines. Correcting these updates the
 // PURCHASE record only — never the store's expected/received quantities.
 export async function fetchDeliverySourceReceipt(deliveryId) {
-  const { data: del } = await supabase.from("store_deliveries").select("expense_claim_id").eq("id", deliveryId).maybeSingle();
-  if (!del || !del.expense_claim_id) return null;
-  const { data: claim } = await supabase.from("expense_claims").select("*").eq("id", del.expense_claim_id).maybeSingle();
-  if (!claim) return null;
-  return { claim: mapExpenseClaim(claim), claimId: del.expense_claim_id };
+  const { data: del } = await supabase.from("store_deliveries")
+    .select("expense_claim_id, store_id, supplier_name, dispatched_at").eq("id", deliveryId).maybeSingle();
+  if (!del) return null;
+
+  // Fast path: a stamped link (new deliveries).
+  if (del.expense_claim_id) {
+    const { data: claim } = await supabase.from("expense_claims").select("*").eq("id", del.expense_claim_id).maybeSingle();
+    if (claim) return { claim: mapExpenseClaim(claim), claimId: del.expense_claim_id, matched: false };
+  }
+
+  // Fallback for existing/unstamped deliveries: find the source receipt by
+  // store + vendor + date. Lets the receipt-match view work on deliveries that
+  // predate the stored link, without a migration. If more than one claim
+  // matches (two same-vendor receipts that day) we don't guess — return the
+  // most recent and flag it as an inferred match.
+  if (!del.supplier_name || !del.store_id) return null;
+  const day = del.dispatched_at ? String(del.dispatched_at).slice(0, 10) : null;
+  let q = supabase.from("expense_claims").select("*")
+    .eq("store_id", del.store_id)
+    .ilike("vendor", del.supplier_name)
+    .order("created_at", { ascending: false });
+  if (day) q = q.gte("expense_date", day).lte("expense_date", day);
+  const { data: claims } = await q;
+  if (!claims || !claims.length) return null;
+  return { claim: mapExpenseClaim(claims[0]), claimId: claims[0].id, matched: true, ambiguous: claims.length > 1 };
 }
 
 // Upload an expense receipt/invoice image. Returns a public URL stored on the

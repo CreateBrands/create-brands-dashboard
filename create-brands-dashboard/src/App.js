@@ -35946,6 +35946,7 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
             <div className="px-4 py-3" style={{ background: "#3A2E26" }}>
               <div className="text-sm font-bold text-white">Receipt match — verify against the original</div>
               <div className="text-[11px] mt-0.5" style={{ color: "#C9BBA8" }}>Same review as Finance &amp; Distribution — matching a line, fixing pack qty or price here updates the purchase everywhere. Does NOT change this store's received quantities above.</div>
+              {receipt.matched && <div className="text-[11px] mt-1" style={{ color: receipt.ambiguous ? "#F0A868" : "#9FC49A" }}>{receipt.ambiguous ? "⚠ More than one receipt matched this vendor/date — showing the most recent. Verify it's the right one." : "Matched to receipt by vendor + date."}</div>}
             </div>
             <div className="p-3 space-y-2" style={{ background: "#0F1729" }}>
               {matchLines.map(l => (
@@ -60504,7 +60505,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: RECVMATCH 2026-07-25m"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: RECVMATCH2 2026-07-25n"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
