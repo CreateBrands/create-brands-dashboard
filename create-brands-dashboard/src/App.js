@@ -183,7 +183,7 @@ import {
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
-  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, fetchStoreOrderPrefs, saveStoreOrderPrefs, fetchChatGroups, createChatGroup, updateChatGroup, deleteChatGroup, deleteChatThread, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment, editPendingOrderLines, mergePendingOrders,
+  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, fetchStoreOrderPrefs, saveStoreOrderPrefs, fetchChatGroups, createChatGroup, updateChatGroup, deleteChatGroup, deleteChatThread, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment, editPendingOrderLines, mergePendingOrders, fetchDeliverySourceReceipt,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
 } from "./supabase";
@@ -35775,6 +35775,8 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
   const [costs, setCosts] = useState({});          // lineId -> unit cost
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
+  const [receipt, setReceipt] = useState(null);   // source receipt look-back (view-only)
+  const [showReceipt, setShowReceipt] = useState(false);
 
   const C = { cream:"#FBF6EC", line:"#E8DCC6", ink:"#3A2E26", inkSoft:"#6B5D4F", inkFaint:"#8A7B68",
               accent:"#844429", red:"#A23B2E", redBg:"#F6E4DF", green:"#3F6B3A", greenBg:"#E4EEDC", amber:"#8A5A12", amberBg:"#F7EBD4" };
@@ -35797,6 +35799,8 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
       const r = {}, c = {};
       (d.lines || []).forEach(l => { r[l.id] = l.qty_received != null ? l.qty_received : l.qty_dispatched; if (l.unit_cost != null) c[l.id] = l.unit_cost; });
       setRecv(r); setCosts(c);
+      setReceipt(null); setShowReceipt(false);
+      fetchDeliverySourceReceipt(id).then(setReceipt).catch(() => setReceipt(null));
     } catch (e) { setMsg({ tone:"err", text: e.message }); }
   };
 
@@ -35835,6 +35839,28 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
     const anyShort = lines.some(l => (Number(recv[l.id]) || 0) < (Number(l.qty_dispatched) || 0));
     return (
       <div className="space-y-4">
+        {showReceipt && receipt && receipt.claim && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(30,18,10,0.6)" }} onClick={() => setShowReceipt(false)}>
+            <div className="w-full max-w-md max-h-[90vh] overflow-y-auto rounded-2xl" style={{ background: C.cream }} onClick={e => e.stopPropagation()}>
+              <div className="sticky top-0 px-4 py-3 border-b flex items-center justify-between" style={{ background: C.cream, borderColor: C.line }}>
+                <div>
+                  <div className="text-sm font-bold" style={{ color: C.ink }}>Original receipt</div>
+                  <div className="text-[11px]" style={{ color: C.inkFaint }}>{receipt.claim.vendor || "Supplier"} · {receipt.claim.expenseDate} · £{(receipt.claim.amount||0).toFixed(2)}</div>
+                </div>
+                <button onClick={() => setShowReceipt(false)} style={{ color: C.inkFaint }}><X size={18}/></button>
+              </div>
+              <div className="p-4 space-y-3">
+                <div className="rounded-lg px-3 py-2 text-[11px]" style={{ background: "#FBEAD5", color: "#9A5B00" }}>
+                  This is the purchase receipt for the whole trip — it may cover more than this store. Viewing only; correct the purchase record in the expense/invoice review. Your store's received quantities are set below and aren't changed by this.
+                </div>
+                {receipt.claim.receiptUrl
+                  ? <a href={receipt.claim.receiptUrl} target="_blank" rel="noreferrer"><img src={receipt.claim.receiptUrl} alt="Receipt" className="w-full rounded-lg" style={{ border: `1px solid ${C.line}` }}/></a>
+                  : <div className="text-xs text-center py-6" style={{ color: C.inkFaint }}>No receipt image attached.</div>}
+                {receipt.claim.receiptUrl && <div className="text-[10px] text-center" style={{ color: C.inkFaint }}>Tap image to open full size</div>}
+              </div>
+            </div>
+          </div>
+        )}
         <button onClick={() => { setOpenId(null); setDetail(null); }} className="text-sm font-semibold" style={{ color: C.accent }}>← Back to incoming</button>
         <div className="rounded-2xl p-4" style={{ background: C.cream, border:`1px solid ${C.line}` }}>
           <div className="text-xs font-bold uppercase tracking-wide mb-1" style={{ color: C.inkFaint }}>Receiving delivery</div>
@@ -35850,6 +35876,11 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
                 <span className="px-2 py-1 rounded-lg font-bold" style={{ background: linked === lines.length ? "#E7F0E4" : "#FBEAD5", color: linked === lines.length ? "#3F6B3A" : "#9A5B00" }}>
                   {linked}/{lines.length} linked to stock{linked < lines.length ? " — unlinked lines book the purchase but won't move inventory. Match items in the expense/invoice review (matches are remembered)." : ""}
                 </span>
+                {receipt && receipt.claim && (
+                  <button onClick={() => setShowReceipt(true)} className="px-2 py-1 rounded-lg font-bold flex items-center gap-1" style={{ background: "#EAF0F6", color: "#185FA5" }}>
+                    <FileText size={12}/> View original receipt
+                  </button>
+                )}
               </div>
             );
           })()}
@@ -60444,7 +60475,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: RECVDETAIL 2026-07-25j"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: RECVRECEIPT 2026-07-25k"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views

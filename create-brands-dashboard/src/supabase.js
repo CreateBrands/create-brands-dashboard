@@ -9245,6 +9245,18 @@ export async function fetchExpenseClaims({ status } = {}) {
   return (data || []).map(mapExpenseClaim);
 }
 
+// The source receipt/expense claim behind a store delivery (for verification
+// look-back on the receiving screen). Read-only reference: returns the claim
+// (with its receipt image) and its itemised lines. Correcting these updates the
+// PURCHASE record only — never the store's expected/received quantities.
+export async function fetchDeliverySourceReceipt(deliveryId) {
+  const { data: del } = await supabase.from("store_deliveries").select("expense_claim_id").eq("id", deliveryId).maybeSingle();
+  if (!del || !del.expense_claim_id) return null;
+  const { data: claim } = await supabase.from("expense_claims").select("*").eq("id", del.expense_claim_id).maybeSingle();
+  if (!claim) return null;
+  return { claim: mapExpenseClaim(claim), claimId: del.expense_claim_id };
+}
+
 // Upload an expense receipt/invoice image. Returns a public URL stored on the
 // claim. Uses the existing public photo bucket pattern.
 // ── EXPENSE LINE CORRECTIONS (pre-approval) ─────────────────────────────────
@@ -9275,6 +9287,10 @@ export async function applyExpenseLineCorrections({ claimId, lines }) {
       .eq("store_id", claim.store_id).ilike("dispatch_id", `fresh:${refPrefix}%`);
     if (dErr2) throw dErr2;
     for (const d of (dels || [])) {
+      // Link this delivery back to its source receipt/expense claim so the
+      // receiving screen can show the original for verification. Header-only —
+      // does not touch any store quantity.
+      try { await supabase.from("store_deliveries").update({ expense_claim_id: claimId }).eq("id", d.id); } catch {}
       const { data: dl } = await supabase.from("store_delivery_lines").select("id, item_name, received").eq("delivery_id", d.id);
       const anyReceived = (dl || []).some(x => x.received);
       if (anyReceived) { deliverySkipped = true; continue; }
