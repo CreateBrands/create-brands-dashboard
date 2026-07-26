@@ -5502,6 +5502,74 @@ export async function uploadInvoiceFile(file, entity, userId) {
   return data;
 }
 
+// ===== INTAKE GUARDS V1 ===================================================
+// Everything here runs the moment an invoice finishes extracting, so a receipt
+// is checked and matched BEFORE a human ever opens it. Each guard exists
+// because its absence caused a real problem in the 2026-07-26 data:
+//   duplicates      - 6 of ~26 Lidl invoices were the same image re-uploaded
+//                     after a slow upload, worth GBP 383.50 of phantom spend.
+//   reconciliation  - one invoice's lines summed 90p away from its own printed
+//                     total and nothing noticed for weeks.
+//   auto-match      - 81 lines matched existing aliases perfectly but sat
+//                     unmatched because matching only ran when someone opened
+//                     the receipt.
+
+// Does an invoice with the same vendor and total already exist nearby in time?
+// Returns the existing invoice id, or null.
+export async function findDuplicateInvoice(invoiceId, { windowHours = 24 } = {}) {
+  const { data: inv } = await supabase.from("invoices")
+    .select("id, supplier_name, total_ex_vat, created_at").eq("id", invoiceId).maybeSingle();
+  if (!inv || inv.total_ex_vat == null) return null;
+  const since = new Date(Date.parse(inv.created_at || Date.now()) - windowHours * 3600e3).toISOString();
+  const { data: others } = await supabase.from("invoices")
+    .select("id, supplier_name, total_ex_vat, created_at")
+    .eq("total_ex_vat", inv.total_ex_vat).gte("created_at", since).neq("id", invoiceId);
+  const sameVendor = (others || []).filter(o =>
+    normItemAliasRaw(o.supplier_name) === normItemAliasRaw(inv.supplier_name));
+  if (!sameVendor.length) return null;
+  // keep the OLDEST — the original upload; later ones are the retries
+  sameVendor.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+  return sameVendor[0].id;
+}
+
+// Do the extracted lines sum to the total printed on the receipt?
+export async function reconcileInvoiceTotal(invoiceId, { tolerance = 0.02 } = {}) {
+  const [{ data: inv }, { data: lines }] = await Promise.all([
+    supabase.from("invoices").select("total_ex_vat").eq("id", invoiceId).maybeSingle(),
+    supabase.from("invoice_lines").select("line_total, status").eq("invoice_id", invoiceId),
+  ]);
+  const header = inv && inv.total_ex_vat != null ? Number(inv.total_ex_vat) : null;
+  const lineSum = (lines || [])
+    .filter(l => (l.status || "") !== "skipped")
+    .reduce((a, l) => a + (Number(l.line_total) || 0), 0);
+  if (header == null) return { ok: null, header: null, lineSum, diff: null };
+  const diff = Math.round((lineSum - header) * 100) / 100;
+  return { ok: Math.abs(diff) <= tolerance, header, lineSum: Math.round(lineSum * 100) / 100, diff };
+}
+
+// Run every intake guard for one invoice. Never throws — a guard failing must
+// not lose an extraction that otherwise succeeded.
+export async function runIntakeGuards(invoiceId) {
+  const out = { duplicateOf: null, totals: null, match: null, warnings: [] };
+  try {
+    out.duplicateOf = await findDuplicateInvoice(invoiceId);
+    if (out.duplicateOf) out.warnings.push(`Possible duplicate of invoice ${out.duplicateOf} — same vendor and total.`);
+  } catch (e) { out.warnings.push(`duplicate check failed: ${e.message}`); }
+  try {
+    out.totals = await reconcileInvoiceTotal(invoiceId);
+    if (out.totals && out.totals.ok === false)
+      out.warnings.push(`Lines sum to ${out.totals.lineSum} but the receipt says ${out.totals.header} (off by ${out.totals.diff}).`);
+  } catch (e) { out.warnings.push(`total reconciliation failed: ${e.message}`); }
+  // Do NOT auto-match a suspected duplicate — matching it would compound the error.
+  if (!out.duplicateOf) {
+    try { out.match = await runBatchMatchInvoiceLines({ invoiceId }); }
+    catch (e) { out.warnings.push(`auto-match failed: ${e.message}`); }
+  }
+  if (out.warnings.length) console.warn("CB intake guards:", invoiceId, out.warnings);
+  return out;
+}
+// ===== end INTAKE GUARDS V1 ===============================================
+
 export async function extractInvoice(invoiceId) {
   const headers = {};
   if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
@@ -5511,7 +5579,10 @@ export async function extractInvoice(invoiceId) {
   });
   if (error) throw error;
   if (!data?.ok) throw new Error(data?.error || "extraction failed");
-  return data;
+  // INTAKE: check and match on arrival, not when someone eventually opens it.
+  let guards = null;
+  try { guards = await runIntakeGuards(invoiceId); } catch (e) { /* non-fatal */ }
+  return { ...data, guards };
 }
 
 export async function listInvoices() {
@@ -9433,12 +9504,14 @@ export const stripPackSuffix = (s) =>
 // Order: alias (learned) -> exact name -> pack-suffix-stripped -> normalised name.
 // Writes match_method 'exact' and leaves status alone, so nothing is silently
 // treated as human-verified. Pass { dryRun: true } to preview.
-export async function runBatchMatchInvoiceLines({ dryRun = false, limit = 5000 } = {}) {
+export async function runBatchMatchInvoiceLines({ dryRun = false, limit = 5000, invoiceId = null } = {}) {
+  let lineQ = supabase.from("invoice_lines")
+    .select("id, invoice_id, raw_description, matched_store_item_id, status, line_total")
+    .is("matched_store_item_id", null).limit(limit);
+  if (invoiceId) lineQ = lineQ.eq("invoice_id", invoiceId);
   const [{ data: items, error: eI }, { data: lines, error: eL }, aliasMap] = await Promise.all([
     supabase.from("cogs_store_items").select("id, name"),
-    supabase.from("invoice_lines")
-      .select("id, invoice_id, raw_description, matched_store_item_id, status, line_total")
-      .is("matched_store_item_id", null).limit(limit),
+    lineQ,
     fetchItemAliases().catch(() => new Map()),
   ]);
   if (eI) throw eI;
@@ -16220,6 +16293,29 @@ export async function confirmStoreDelivery(deliveryId, receivedBy) {
         await supabase.from("store_delivery_lines").update({ store_item_id: storeItemId }).eq("id", l.id);
       }
     }
+    // FRESHSTOCK: a fresh-purchase line (a supermarket run) carries neither a
+    // store item nor a dist item, so both resolvers above miss it and the
+    // quantity used to vanish. Its COST is deliberately excluded further down —
+    // that sits in Finance as the driver's card expense and must not be counted
+    // twice — but excluding the cost should never have excluded the QUANTITY.
+    // Resolve it by name through the same alias mapper the receipt matcher uses.
+    let resolvedByName = false;
+    if (!storeItemId && recv > 0 && l.item_name) {
+      try {
+        const hit = await fetchAliasFor(l.item_name, head.supplier_name || "");
+        if (hit) { storeItemId = hit; resolvedByName = true; }
+        else {
+          const clean = normItemAlias(l.item_name);
+          const { data: si } = await supabase.from("cogs_store_items").select("id, name");
+          const found = (si || []).find(r => normItemAlias(r.name) === clean
+                                          || stripPackSuffix(r.name).toLowerCase() === stripPackSuffix(l.item_name).toLowerCase());
+          if (found) { storeItemId = found.id; resolvedByName = true; }
+        }
+        if (storeItemId) {
+          await supabase.from("store_delivery_lines").update({ store_item_id: storeItemId }).eq("id", l.id);
+        }
+      } catch (e) { console.error("fresh line name resolve failed:", e.message); }
+    }
     if (storeItemId && recv > 0) {
       // Movement (ledger)
       await supabase.from("store_stock_movements").insert({
@@ -16230,18 +16326,24 @@ export async function confirmStoreDelivery(deliveryId, receivedBy) {
       // ACCOUNTS: auto-record the received goods into the store's purchases
       // register (cogs_purchases) so Actual COGS (opening + purchases − closing)
       // picks them up without re-keying. Ref ties back to the delivery.
-      // Fresh-purchase lines (no store item) are deliberately EXCLUDED — their
-      // cost is already in Finance as the driver's card expense; recording them
-      // here too would double-count food cost.
+      // Fresh-purchase lines are deliberately EXCLUDED — their cost is already
+      // in Finance as the driver's card expense; recording them here too would
+      // double-count food cost. NOTE: this used to be enforced accidentally,
+      // because a fresh line resolved to no store item and fell out of the whole
+      // block. Now that FRESHSTOCK resolves it by name so the QUANTITY posts to
+      // the ledger, the cost exclusion has to be stated explicitly — the stock
+      // ledger and the purchases register answer different questions.
       try {
-        await supabase.from("cogs_purchases").insert({
-          store_id: storeId, purchase_date: new Date().toISOString().slice(0, 10),
-          item_scope: "store", item_id: storeItemId,
-          qty: recv,
-          total_cost: l.unit_cost != null ? Math.round(Number(l.unit_cost) * recv * 100) / 100 : null,
-          supplier: head.supplier_name || "Distribution", invoice_ref: `delivery-${deliveryId}`,
-          note: l.item_name || null,
-        });
+        if (!resolvedByName) {
+          await supabase.from("cogs_purchases").insert({
+            store_id: storeId, purchase_date: new Date().toISOString().slice(0, 10),
+            item_scope: "store", item_id: storeItemId,
+            qty: recv,
+            total_cost: l.unit_cost != null ? Math.round(Number(l.unit_cost) * recv * 100) / 100 : null,
+            supplier: head.supplier_name || "Distribution", invoice_ref: `delivery-${deliveryId}`,
+            note: l.item_name || null,
+          });
+        }
       } catch (e) { console.error("auto purchase record failed:", e.message); }
       // Upsert live level (qty += recv; moving cost := latest delivery cost if given)
       const { data: existing } = await supabase.from("store_stock")
