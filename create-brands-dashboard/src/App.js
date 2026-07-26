@@ -35939,7 +35939,7 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
         </div>
         {/* TEMP DEBUG — shows why the match view is/isn't rendering */}
         <div className="rounded-xl px-3 py-2 text-[11px] font-mono" style={{ background: "#2A1F17", color: "#E8B" }}>
-          debug: receipt={receipt ? "yes" : "null"} · claim={receipt?.claim ? "yes" : "no"} · invoiceId={String(receipt?.claim?.invoiceId || "none")} · matchLines={matchLines.length} · matched={String(receipt?.matched)} · ambiguous={String(receipt?.ambiguous)}
+          debug: receipt={receipt ? "yes" : "null"} · claim={receipt?.claim ? "yes" : "no"} · invoiceId={String(receipt?.claim?.invoiceId || "none")} · matchLines={matchLines.length} · matched={String(receipt?.matched)} · synthError={String(receipt?.synthError || "none")}
         </div>
         {/* EXACT same review view as Finance & Distribution: receipt image on the
             left, editable InvoiceLineRow match rows on the right. Same component,
@@ -44953,10 +44953,11 @@ function ExpenseSplitFlow({ stores = [], categories = [], expenseTypes = [], acc
         const itemList = s.items.map(it => `${it.units}× ${it.desc} @ ${money(it.price)}`).join("; ");
         let invoiceId = null;
         try {
-          invoiceId = await synthesizeInvoiceFromItems({
+          const _r = await synthesizeInvoiceFromItems({
             items: s.items.map(it => ({ desc: it.desc, units: it.units, price: it.price, storeItemId: it.storeItemId })),
             storeId: sid, vendor: vendor || null, receiptUrl,
           });
+          invoiceId = _r && _r.invId ? _r.invId : null;
         } catch (e) { console.error("invoice synthesis failed:", e?.message); }
         claims.push({
           description: `Split: ${vendor||"expense"} — ${storeName(sid)}`,
@@ -60532,7 +60533,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: RECVDEBUG 2026-07-25s"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: RECVDEBUG2 2026-07-25t"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views

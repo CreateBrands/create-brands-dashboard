@@ -9256,13 +9256,14 @@ export async function fetchExpenseClaims({ status } = {}) {
 // invoice id. items: [{ desc, units, price, storeItemId? }].
 export async function synthesizeInvoiceFromItems({ items, storeId, vendor, receiptUrl }) {
   const clean = (items || []).filter(it => (it.desc || "").trim());
-  if (!clean.length) return null;
-  const invId = `inv-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
-  const { error: iErr } = await supabase.from("invoices").insert({
-    id: invId, entity: "shop", entity_id: storeId || null,
+  if (!clean.length) return { error: "no items" };
+  // Let the DB generate the invoice id (matches how real invoices are created).
+  const { data: invRow, error: iErr } = await supabase.from("invoices").insert({
+    entity: "shop", entity_id: storeId || null,
     image_path: receiptUrl || null, status: "extracted",
-  });
-  if (iErr) { console.error("synthesize invoice header failed:", iErr.message); return null; }
+  }).select().single();
+  if (iErr || !invRow) return { error: "header: " + (iErr ? iErr.message : "no row") };
+  const invId = invRow.id;
   const rows = clean.map((it, idx) => {
     const units = Number(it.units) || 0;
     const price = it.price != null ? Number(it.price) : null;
@@ -9273,14 +9274,12 @@ export async function synthesizeInvoiceFromItems({ items, storeId, vendor, recei
       order_qty: units, pack_qty_base: 1,
       pack_price_ex_vat: price,
       line_total: price != null ? +(units * price).toFixed(2) : null,
-      matched_store_item_id: it.storeItemId != null ? it.storeItemId : null,
-      match_method: it.storeItemId != null ? "human" : null,
       status: "pending",
     };
   });
   const { error: lErr } = await supabase.from("invoice_lines").insert(rows);
-  if (lErr) { console.error("synthesize invoice lines failed:", lErr.message); return null; }
-  return invId;
+  if (lErr) return { error: "lines: " + lErr.message };
+  return { invId };
 }
 
 export async function fetchDeliverySourceReceipt(deliveryId) {
@@ -9314,18 +9313,23 @@ export async function fetchDeliverySourceReceipt(deliveryId) {
   // If the claim has no structured invoice (manual/split purchases), synthesize
   // one NOW from its reference text so the rich editable match view can render.
   // Format: "3× JS GRK SYLE YOG 1KG @ £1.70; 2× F/GERALD SRDGH BAGEL @ £2.10".
+  let synthError = null;
   if (!claim.invoice_id && claim.reference) {
     const items = parseReferenceToItems(claim.reference);
     if (items.length) {
-      const invId = await synthesizeInvoiceFromItems({ items, storeId: claim.store_id, vendor: claim.vendor, receiptUrl: claim.receipt_url });
-      if (invId) {
-        await supabase.from("expense_claims").update({ invoice_id: invId }).eq("id", claim.id);
-        claim.invoice_id = invId;
+      const res = await synthesizeInvoiceFromItems({ items, storeId: claim.store_id, vendor: claim.vendor, receiptUrl: claim.receipt_url });
+      if (res && res.invId) {
+        await supabase.from("expense_claims").update({ invoice_id: res.invId }).eq("id", claim.id);
+        claim.invoice_id = res.invId;
+      } else {
+        synthError = (res && res.error) || "unknown";
       }
+    } else {
+      synthError = "reference not parseable";
     }
   }
 
-  return { claim: mapExpenseClaim(claim), claimId: claim.id, matched, ambiguous };
+  return { claim: mapExpenseClaim(claim), claimId: claim.id, matched, ambiguous, synthError };
 }
 
 // Parse a claim reference summary back into structured items. Handles both
