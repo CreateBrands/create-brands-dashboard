@@ -35778,6 +35778,12 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
   const [msg, setMsg] = useState(null);
   const [receipt, setReceipt] = useState(null);   // source receipt look-back (view-only)
   const [showReceipt, setShowReceipt] = useState(false);
+  const [matchLines, setMatchLines] = useState([]);   // shared InvoiceLineRow data (same source of truth as Finance/Distribution)
+  const reloadMatchLines = async (invoiceId) => {
+    if (!invoiceId) { setMatchLines([]); return; }
+    try { const { lines } = await getInvoiceWithLines(invoiceId); setMatchLines(lines || []); }
+    catch { setMatchLines([]); }
+  };
 
   const C = { cream:"#FBF6EC", line:"#E8DCC6", ink:"#3A2E26", inkSoft:"#6B5D4F", inkFaint:"#8A7B68",
               accent:"#844429", red:"#A23B2E", redBg:"#F6E4DF", green:"#3F6B3A", greenBg:"#E4EEDC", amber:"#8A5A12", amberBg:"#F7EBD4" };
@@ -35800,8 +35806,11 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
       const r = {}, c = {};
       (d.lines || []).forEach(l => { r[l.id] = l.qty_received != null ? l.qty_received : l.qty_dispatched; if (l.unit_cost != null) c[l.id] = l.unit_cost; });
       setRecv(r); setCosts(c);
-      setReceipt(null); setShowReceipt(false);
-      fetchDeliverySourceReceipt(id).then(setReceipt).catch(() => setReceipt(null));
+      setReceipt(null); setShowReceipt(false); setMatchLines([]);
+      fetchDeliverySourceReceipt(id).then(r => {
+        setReceipt(r);
+        if (r && r.claim && r.claim.invoiceId) reloadMatchLines(r.claim.invoiceId);
+      }).catch(() => setReceipt(null));
     } catch (e) { setMsg({ tone:"err", text: e.message }); }
   };
 
@@ -35928,6 +35937,23 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
             );
           })}
         </div>
+        {/* Shared receipt-matching view — SAME component + source of truth as
+            Finance/Expenses and Distribution. Edits here (item match, pack qty,
+            price) write to the invoice line and reflect in all three places.
+            For verifying ambiguity against the original receipt. */}
+        {receipt && receipt.claim && receipt.claim.invoiceId && matchLines.length > 0 && (
+          <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${C.line}` }}>
+            <div className="px-4 py-3" style={{ background: "#3A2E26" }}>
+              <div className="text-sm font-bold text-white">Receipt match — verify against the original</div>
+              <div className="text-[11px] mt-0.5" style={{ color: "#C9BBA8" }}>Same review as Finance &amp; Distribution — matching a line, fixing pack qty or price here updates the purchase everywhere. Does NOT change this store's received quantities above.</div>
+            </div>
+            <div className="p-3 space-y-2" style={{ background: "#0F1729" }}>
+              {matchLines.map(l => (
+                <InvoiceLineRow key={l.id} line={l} domain="shop" onChanged={() => receipt.claim.invoiceId && reloadMatchLines(receipt.claim.invoiceId)} />
+              ))}
+            </div>
+          </div>
+        )}
         {anyShort && <div className="rounded-xl px-3 py-2 text-[12px]" style={{ background: C.amberBg, color: C.amber }}>Some items are short. Confirming will report the shortfall to Distribution.</div>}
         <div className="flex gap-2">
           <button onClick={saveProgress} disabled={busy} className="flex-1 rounded-xl py-2.5 text-sm font-bold" style={{ background:"#F3EADA", color: C.ink }}>Save progress</button>
@@ -60478,7 +60504,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: RECVLINK 2026-07-25l"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: RECVMATCH 2026-07-25m"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
