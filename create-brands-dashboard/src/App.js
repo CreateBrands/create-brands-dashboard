@@ -31536,11 +31536,29 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
                   const eodCash    = Number(selected.physicalCash) || 0;
                   const eodUnrep   = Number(selected.unreportedExpense) || 0;
                   const flipGross  = flipAgg.revenueGross;
-                  const isCardLine = (m) => { const s = String(m || "").toLowerCase(); return s && !s.includes("cash"); };
                   const isCashLine = (m) => String(m || "").toLowerCase().includes("cash");
                   const hasFlipPayments = (flipPayments || []).length > 0;
-                  const flipCard = (flipPayments || []).filter(p => isCardLine(p.paymentMethod)).reduce((a,p) => a + p.amount, 0);
-                  const flipCash = (flipPayments || []).filter(p => isCashLine(p.paymentMethod)).reduce((a,p) => a + p.amount, 0);
+                  // Classify each Flipdish payment by its real source. Delivery
+                  // partners (Uber, Deliveroo, Just Eat) settle separately and must
+                  // NOT be lumped into the card-terminal figure the EOD reports —
+                  // that mismatch is exactly what made this un-reconcilable.
+                  const sourceOf = (p) => {
+                    const c = String(p.channel || "").toLowerCase();
+                    const m = String(p.paymentMethod || "").toLowerCase();
+                    const hay = c + " " + m;
+                    if (hay.includes("uber")) return "Uber Eats";
+                    if (hay.includes("deliveroo")) return "Deliveroo";
+                    if (hay.includes("just") && hay.includes("eat")) return "Just Eat";
+                    if (hay.includes("justeat")) return "Just Eat";
+                    if (m.includes("cash")) return "Cash";
+                    return "Card terminal";   // Flipdish/POS card payments
+                  };
+                  const flipBySource = {};
+                  (flipPayments || []).forEach(p => { const k = sourceOf(p); flipBySource[k] = (flipBySource[k] || 0) + p.amount; });
+                  const flipCard = flipBySource["Card terminal"] || 0;
+                  const flipCash = flipBySource["Cash"] || 0;
+                  const deliverySources = ["Uber Eats", "Deliveroo", "Just Eat"].filter(k => flipBySource[k]);
+                  const flipDelivery = deliverySources.reduce((s, k) => s + flipBySource[k], 0);
                   const eq = (a,b) => Math.round((Number(a)||0)*100) === Math.round((Number(b)||0)*100);
                   const grossMatch = eq(eodGross, flipGross);
                   const tenderSum = eodFlipCard + eodLopay + eodCash;
@@ -31550,7 +31568,8 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
                   // status: "auto" (Flipdish can verify), "review" (vs bank), "info" (context only)
                   const rows = [
                     { label: "Gross sales", eod: eodGross, flip: flipGross, status: "auto" },
-                    { label: "Flipdish (card)", eod: eodFlipCard, flip: hasFlipPayments ? flipCard : null, status: hasFlipPayments ? "auto" : "review" },
+                    { label: "Card terminal", eod: eodFlipCard, flip: hasFlipPayments ? flipCard : null, status: hasFlipPayments ? "auto" : "review" },
+                    ...deliverySources.map(k => ({ label: k, eod: null, flip: flipBySource[k], status: "info", indent: true })),
                     { label: "Lopay (card)", eod: eodLopay, flip: null, status: "review" },
                     { label: "Cash", eod: eodCash, flip: hasFlipPayments ? flipCash : null, status: hasFlipPayments ? "auto" : "review" },
                   ];
@@ -31593,9 +31612,11 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
                           const diff = (r.eod != null && r.flip != null) ? (r.eod - r.flip) : null;
                           return (
                             <div key={i} className="grid grid-cols-[1.4fr_1fr_1fr_auto] gap-2 px-3 py-1.5 border-b border-slate-800/30 last:border-0 items-center">
-                              <span className="text-xs text-slate-300">
+                              <span className={`text-xs ${r.indent ? "text-slate-400 pl-3" : "text-slate-300"}`}>
+                                {r.indent && <span className="text-slate-600 mr-1">└</span>}
                                 {r.label}
                                 {r.status === "review" && <span className="text-[9px] text-slate-500 ml-1">vs bank</span>}
+                                {r.indent && <span className="text-[9px] text-slate-500 ml-1">settles separately</span>}
                               </span>
                               <span className="text-xs text-slate-200 tabular-nums text-right">{r.eod == null ? "—" : fmtMoney(r.eod)}</span>
                               <span className="text-xs text-slate-200 tabular-nums text-right">{r.flip == null ? "—" : fmtMoney(r.flip)}</span>
@@ -60387,7 +60408,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: COGSALLIN 2026-07-25f"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: EODBREAKDOWN 2026-07-25g"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
