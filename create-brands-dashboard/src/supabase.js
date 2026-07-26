@@ -9254,6 +9254,50 @@ export async function fetchExpenseClaims({ status } = {}) {
 // purchases the SAME structured, editable lines the scanned ones have, so the
 // shared InvoiceLineRow match view works for them everywhere. Returns the new
 // invoice id. items: [{ desc, units, price, storeItemId? }].
+// ===== RECEIPT LINE NORMALIZATION V1 ======================================
+// Cleans messy supermarket descriptions to a canonical form so the SAME product
+// from different receipts/vendors consolidates instead of fragmenting into
+// phantom SKUs. Deterministic text cleanup only — no unit/inventory decisions
+// (those stay a per-catalogue-item policy). Used before matching, in all views.
+export function normalizeReceiptDescription(raw) {
+  if (!raw) return { clean: "", drop: false, reason: null };
+  let s = String(raw).trim();
+
+  // Drop pure adjustment / cancelled lines (they are not products). A real
+  // product that merely had a price cut applied is KEPT and cleaned.
+  if (/\bcancelled\b/i.test(s)) return { clean: s, drop: true, reason: "cancelled" };
+  const bare = s.replace(/\([^)]*\)/g, "");
+  if (/(discount|price cut|% off)/i.test(s) && !/\b(loose|pack|\d+\s*(kg|g|ml))/i.test(bare))
+    return { clean: s, drop: true, reason: "adjustment" };
+
+  // Strip parenthetical notes the extractor already captured elsewhere.
+  s = s.replace(/\s*\((?:price cut[^)]*|[\d.]+\s*kg[^)]*|x\d+|single|minimum[^)]*|[^)]*discount[^)]*)\)\s*/gi, " ");
+  // Strip trailing supermarket PLU/SKU codes (0080008, 0082, 00835).
+  s = s.replace(/\s+0\d{3,}\b/g, "");
+  // Strip leading brand prefixes.
+  s = s.replace(/^(Tesco|JS|Fyffes|Nightingale Farms|Suntrail Farms|Florette|Alpro)\s+/i, "");
+  // Expand common abbreviations.
+  s = s.replace(/\bSML\b/gi, "Small").replace(/\bFT\b/g, "Fairtrade").replace(/\b(\d+)\s*pk\b/gi, "$1 Pack");
+  // Collapse whitespace + Title Case so UPPERCASE duplicates merge.
+  s = s.replace(/\s+/g, " ").trim();
+  s = s.replace(/\w\S*/g, w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
+  return { clean: s, drop: false, reason: null };
+}
+
+// Whether an invoice line is safe to book into stock. Fresh lines with no qty
+// or no price must NOT silently receive (guaranteed spoilage) — flag instead.
+export function receiptLineQuality(line) {
+  const desc = (line && (line.raw_description || line.desc)) || "";
+  const nd = normalizeReceiptDescription(desc);
+  if (nd.drop) return { ok: false, reason: nd.reason, clean: nd.clean };
+  const qty = line && (line.order_qty != null ? Number(line.order_qty) : (line.qty != null ? Number(line.qty) : null));
+  const price = line && (line.pack_price_ex_vat != null ? Number(line.pack_price_ex_vat) : (line.price != null ? Number(line.price) : null));
+  if (qty == null || qty === 0) return { ok: false, reason: "missing quantity", clean: nd.clean };
+  if (price == null) return { ok: false, reason: "missing price", clean: nd.clean };
+  return { ok: true, reason: null, clean: nd.clean };
+}
+// ===== end RECEIPT LINE NORMALIZATION V1 ==================================
+
 export async function synthesizeInvoiceFromItems({ items, storeId, vendor, receiptUrl }) {
   const clean = (items || []).filter(it => (it.desc || "").trim());
   if (!clean.length) return { error: "no items" };

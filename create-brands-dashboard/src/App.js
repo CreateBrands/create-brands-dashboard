@@ -183,7 +183,7 @@ import {
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
-  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, fetchStoreOrderPrefs, saveStoreOrderPrefs, fetchChatGroups, createChatGroup, updateChatGroup, deleteChatGroup, deleteChatThread, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment, editPendingOrderLines, mergePendingOrders, fetchDeliverySourceReceipt, synthesizeInvoiceFromItems,
+  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, fetchStoreOrderPrefs, saveStoreOrderPrefs, fetchChatGroups, createChatGroup, updateChatGroup, deleteChatGroup, deleteChatThread, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment, editPendingOrderLines, mergePendingOrders, fetchDeliverySourceReceipt, synthesizeInvoiceFromItems, normalizeReceiptDescription,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
 } from "./supabase";
@@ -23464,7 +23464,9 @@ function InvoiceLineRow({ line, domain, onChanged }) {
     (async () => {
       const found = [];
       try {
-        const aliasId = await fetchAliasFor(line.raw_description, "");
+        const _nz = normalizeReceiptDescription(line.raw_description);
+        const _lookupDesc = _nz.clean || line.raw_description;
+        const aliasId = await fetchAliasFor(line.raw_description, "") || await fetchAliasFor(_lookupDesc, "");
         if (aliasId) {
           const nm = await fetchStoreItemName(aliasId).catch(() => null);
           found.push({ id: aliasId, name: nm, star: true });
@@ -23472,7 +23474,7 @@ function InvoiceLineRow({ line, domain, onChanged }) {
       } catch {}
       try {
         const stop = new Set(["pack", "packs", "loose", "finest", "twin", "ready", "strong", "each", "with", "style", "fresh", "large", "small"]);
-        const tokens = String(line.raw_description || "")
+        const tokens = String((normalizeReceiptDescription(line.raw_description).clean) || line.raw_description || "")
           .replace(/\d+(?:\.\d+)?\s?(?:g|kg|ml|l|pcs?|pack)\b/gi, " ")
           .split(/[^a-zA-Z]+/).filter(w => w.length >= 4 && !stop.has(w.toLowerCase()));
         const seen = new Map();
@@ -23533,8 +23535,21 @@ function InvoiceLineRow({ line, domain, onChanged }) {
   return (
     <div className="border border-slate-800 rounded-xl p-3 bg-slate-900/60 space-y-2">
       <div className="flex items-start justify-between gap-2">
-        <div className="text-sm text-slate-200">{line.raw_description}</div>
-        <span className={`px-2 py-0.5 rounded-md border text-[10px] uppercase ${badge}`}>{line.status}</span>
+        <div className="min-w-0">
+          <div className="text-sm text-slate-200">{line.raw_description}</div>
+          {(() => {
+            const nz = normalizeReceiptDescription(line.raw_description);
+            const showClean = nz.clean && nz.clean.toLowerCase() !== String(line.raw_description||"").trim().toLowerCase();
+            const noQty = line.order_qty == null || Number(line.order_qty) === 0;
+            const noPrice = line.pack_price_ex_vat == null;
+            return (<>
+              {showClean && !nz.drop && <div className="text-[11px] text-slate-500">→ {nz.clean}</div>}
+              {nz.drop && <div className="text-[11px] text-amber-400">⚠ looks like a {nz.reason} line — won't book to stock</div>}
+              {!nz.drop && (noQty || noPrice) && <div className="text-[11px] text-amber-400">⚠ {noQty && noPrice ? "no qty or price" : noQty ? "no quantity" : "no price"} — enter before this can add to stock</div>}
+            </>);
+          })()}
+        </div>
+        <span className={`px-2 py-0.5 rounded-md border text-[10px] uppercase flex-shrink-0 ${badge}`}>{line.status}</span>
       </div>
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="text-slate-500">Maps to:</span>
@@ -60529,7 +60544,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: RECVCLEAN 2026-07-25x"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: FRESHNORM 2026-07-25y"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
