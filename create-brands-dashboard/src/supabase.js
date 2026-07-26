@@ -9257,10 +9257,17 @@ export async function fetchExpenseClaims({ status } = {}) {
 export async function synthesizeInvoiceFromItems({ items, storeId, vendor, receiptUrl }) {
   const clean = (items || []).filter(it => (it.desc || "").trim());
   if (!clean.length) return { error: "no items" };
-  // invoices.id is text with no default — we must supply it.
+  // invoices.id is text with no default — we must supply it. entity_id is a FK
+  // to the entity/brand (NOT the store id) — resolve it from the store's brand,
+  // and fall back to null (nullable) rather than passing an invalid store id.
+  let entityId = null;
+  if (storeId) {
+    const { data: st } = await supabase.from("stores").select("brand_id").eq("id", storeId).maybeSingle();
+    entityId = st?.brand_id || null;
+  }
   const invId = `inv-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   const { error: iErr } = await supabase.from("invoices").insert({
-    id: invId, entity: "shop", entity_id: storeId || null,
+    id: invId, entity: "shop", entity_id: entityId,
     supplier_name: vendor || null,
     image_path: receiptUrl || null, status: "uploaded",
   });
