@@ -45440,8 +45440,74 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
     return <span className={`text-[10px] px-1.5 py-0.5 rounded uppercase font-bold ${cls}`}>{lab}</span>;
   };
 
-  const Row = ({ c }) => (
-    <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+  // SPLITCARD: claims created by splitting one shopping trip share a receipt
+  // image but land as separate rows, so the same purchase appeared as three or
+  // four unrelated cards with no indication they belonged together. Group them
+  // back under one card and show which stores the money went to.
+  const groupClaims = (list) => {
+    const byReceipt = new Map();
+    const out = [];
+    (list || []).forEach(c => {
+      const key = c.receiptUrl || null;
+      if (!key) { out.push({ single: c }); return; }
+      if (!byReceipt.has(key)) { const g = { key, children: [] }; byReceipt.set(key, g); out.push(g); }
+      byReceipt.get(key).children.push(c);
+    });
+    // A "group" of one is just a normal claim.
+    return out.map(g => (g.single ? g : (g.children.length === 1 ? { single: g.children[0] } : g)));
+  };
+
+  const SplitGroup = ({ g }) => {
+    const kids = g.children;
+    const total = kids.reduce((a, c) => a + (Number(c.amount) || 0), 0);
+    const first = kids[0];
+    const [open, setOpen] = useState(true);
+    return (
+      <div className="bg-slate-900 border border-slate-800 rounded-xl p-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-white flex items-center gap-2 flex-wrap">
+              One purchase split across {kids.length} store{kids.length !== 1 ? "s" : ""}
+              <span className="text-[10px] px-1.5 py-0.5 rounded uppercase font-bold bg-indigo-600/25 text-indigo-300 border border-indigo-700/40">split</span>
+            </div>
+            <div className="text-[11px] text-slate-500 flex gap-2 flex-wrap mt-0.5">
+              <span>{first.expenseDate}</span>
+              {first.vendor && <span>· {first.vendor}</span>}
+              {first.submittedBy && <span>· by {first.submittedBy}</span>}
+            </div>
+            <div className="flex gap-1.5 flex-wrap mt-1.5">
+              {kids.map(c => (
+                <span key={c.id} className="text-[10px] px-1.5 py-0.5 rounded-md bg-slate-800/70 border border-slate-700/50 text-slate-300">
+                  {c.storeId ? storeName(c.storeId) : "unassigned"} · {money(c.amount)}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div className="text-right flex-shrink-0">
+            <div className="text-sm font-bold text-white">{money(total)}</div>
+            <div className="text-[10px] text-slate-500">receipt total</div>
+            {first.receiptUrl && (
+              <button onClick={() => setDetailClaim(first)} title="Open expense detail" className="inline-block mt-1.5">
+                <img src={first.receiptUrl} alt="receipt" className="h-12 w-12 object-cover rounded-md border border-slate-700 ml-auto"/>
+              </button>
+            )}
+          </div>
+        </div>
+        <button onClick={() => setOpen(o => !o)}
+          className="mt-2 text-[11px] text-slate-500 hover:text-slate-300 underline decoration-dotted">
+          {open ? "hide the individual store claims" : `show the ${kids.length} store claims`}
+        </button>
+        {open && (
+          <div className="mt-2 space-y-2 pl-3 border-l-2 border-slate-800">
+            {kids.map(c => <Row key={c.id} c={c} nested />)}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const Row = ({ c, nested = false }) => (
+    <div className={nested ? "bg-slate-950/40 border border-slate-800/70 rounded-lg p-2.5" : "bg-slate-900 border border-slate-800 rounded-xl p-3"}>
       <div onClick={() => setDetailClaim(c)} className="flex items-start justify-between gap-3 cursor-pointer" title="Open expense detail">
         <div className="min-w-0">
           <div className="text-sm font-semibold text-white flex items-center gap-2 flex-wrap">{c.description} <StatusBadge s={c.status}/></div>
@@ -45450,15 +45516,28 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
             {c.vendor && <span>· {c.vendor}</span>}
             {c.expenseTypeId && <span>· {expName(c.expenseTypeId)}</span>}
             {c.categoryId && <span>· {catName(c.categoryId)}</span>}
-            {c.storeId && <span>· {storeName(c.storeId)}</span>}
             {c.submittedBy && <span>· by {c.submittedBy}</span>}
+          </div>
+          {/* SPLITCARD: the store this money is for, stated plainly rather than
+              buried among the other metadata — it is the first thing anyone
+              approving an expense needs to know. */}
+          <div className="mt-1">
+            {c.storeId ? (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-emerald-600/15 border border-emerald-700/40 text-emerald-300 font-semibold">
+                for {storeName(c.storeId)}
+              </span>
+            ) : (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-amber-500/15 border border-amber-600/40 text-amber-400 font-semibold">
+                no store assigned
+              </span>
+            )}
           </div>
           {c.status==="reconciled" && <div className="text-[11px] text-emerald-400/80 mt-1">{c.reconcileType==="cash" ? `Paid from ${acctName(c.cashAccountId)} (cash)` : "Matched to bank transaction"}{c.reconciledBy?` · ${c.reconciledBy}`:""}</div>}
           {c.status==="rejected" && c.rejectedReason && <div className="text-[11px] text-red-400/80 mt-1">Reason: {c.rejectedReason}</div>}
         </div>
         <div className="text-right flex-shrink-0">
           <div className="text-sm font-bold text-white">{money(c.amount)}</div>
-          {c.receiptUrl && (
+          {c.receiptUrl && !nested && (
             <button onClick={() => setDetailClaim(c)} title="Open expense detail" className="inline-block mt-1.5">
               <img src={c.receiptUrl} alt="receipt" className="h-12 w-12 object-cover rounded-md border border-slate-700 ml-auto"/>
             </button>
@@ -45559,7 +45638,9 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
         <ExpenseManage expenseTypes={expenseTypes} categories={categories} payees={payees} cashAccounts={cashAccounts} bankAccounts={bankAccounts} stores={stores} opsTeam={opsTeam} typeAccounts={typeAccounts} memberAccounts={memberAccounts} excludedStores={excludedStores} memberTypes={memberTypes} memberCategories={memberCategories} memberStores={memberStores} handlers={handlers} money={money}/>
       ) : (
         <div className="space-y-2">
-          {byStatus(tab).length===0 ? <div className="text-center py-10 text-sm text-slate-500">Nothing here.</div> : byStatus(tab).map(c => <Row key={c.id} c={c}/>)}
+          {byStatus(tab).length===0 ? <div className="text-center py-10 text-sm text-slate-500">Nothing here.</div> : groupClaims(byStatus(tab)).map((g, i) => (
+            g.single ? <Row key={g.single.id} c={g.single}/> : <SplitGroup key={g.key || `g${i}`} g={g}/>
+          ))}
         </div>
       )}
 
@@ -60711,7 +60792,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: CLAIMLINK 2026-07-26d");
+      console.log("CB build: SPLITCARD 2026-07-26e");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
