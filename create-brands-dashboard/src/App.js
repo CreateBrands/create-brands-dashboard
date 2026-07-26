@@ -60516,7 +60516,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: INVSYNTH 2026-07-25p"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: RECVFIX 2026-07-25q"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views

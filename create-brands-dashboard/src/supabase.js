@@ -9285,34 +9285,61 @@ export async function synthesizeInvoiceFromItems({ items, storeId, vendor, recei
 
 export async function fetchDeliverySourceReceipt(deliveryId) {
   const { data: del } = await supabase.from("store_deliveries")
-    .select("expense_claim_id, store_id, supplier_name, dispatched_at").eq("id", deliveryId).maybeSingle();
+    .select("expense_claim_id, store_id, supplier_name, dispatch_id, dispatched_at").eq("id", deliveryId).maybeSingle();
   if (!del) return null;
 
-  // Fast path: a stamped link (new deliveries).
+  // Resolve the source claim: stamped link first (new deliveries), else match
+  // by vendor+date parsed from dispatch_id ("fresh:<date>-<vendor>") since
+  // supplier_name is null on fresh purchases.
+  let claim = null, matched = false, ambiguous = false;
   if (del.expense_claim_id) {
-    const { data: claim } = await supabase.from("expense_claims").select("*").eq("id", del.expense_claim_id).maybeSingle();
-    if (claim) return { claim: mapExpenseClaim(claim), claimId: del.expense_claim_id, matched: false };
+    const { data: c } = await supabase.from("expense_claims").select("*").eq("id", del.expense_claim_id).maybeSingle();
+    if (c) claim = c;
+  }
+  if (!claim) {
+    if (!del.store_id || !del.dispatch_id) return null;
+    const m = /^fresh:(\d{4}-\d{2}-\d{2})-(.+)$/.exec(del.dispatch_id || "");
+    const day = m ? m[1] : (del.dispatched_at ? String(del.dispatched_at).slice(0, 10) : null);
+    const vendor = m ? m[2] : (del.supplier_name || "");
+    if (!vendor) return null;
+    let q = supabase.from("expense_claims").select("*")
+      .eq("store_id", del.store_id).ilike("vendor", `${vendor}%`)
+      .order("created_at", { ascending: false });
+    if (day) q = q.gte("expense_date", day).lte("expense_date", day);
+    const { data: claims } = await q;
+    if (!claims || !claims.length) return null;
+    claim = claims[0]; matched = true; ambiguous = claims.length > 1;
   }
 
-  // Fallback for existing/unstamped deliveries: the vendor+date live in the
-  // dispatch_id ("fresh:<date>-<vendor>"), NOT in supplier_name (which is null
-  // for fresh purchases). Parse them out and match the source claim on
-  // store + vendor + date. Lets the receipt-match view work on deliveries that
-  // predate the stored link, with no migration. If more than one claim matches,
-  // return the most recent and flag it as inferred rather than guessing.
-  if (!del.store_id || !del.dispatch_id) return null;
-  const m = /^fresh:(\d{4}-\d{2}-\d{2})-(.+)$/.exec(del.dispatch_id || "");
-  const day = m ? m[1] : (del.dispatched_at ? String(del.dispatched_at).slice(0, 10) : null);
-  const vendor = m ? m[2] : (del.supplier_name || "");
-  if (!vendor) return null;
-  let q = supabase.from("expense_claims").select("*")
-    .eq("store_id", del.store_id)
-    .ilike("vendor", `${vendor}%`)
-    .order("created_at", { ascending: false });
-  if (day) q = q.gte("expense_date", day).lte("expense_date", day);
-  const { data: claims } = await q;
-  if (!claims || !claims.length) return null;
-  return { claim: mapExpenseClaim(claims[0]), claimId: claims[0].id, matched: true, ambiguous: claims.length > 1 };
+  // If the claim has no structured invoice (manual/split purchases), synthesize
+  // one NOW from its reference text so the rich editable match view can render.
+  // Format: "3× JS GRK SYLE YOG 1KG @ £1.70; 2× F/GERALD SRDGH BAGEL @ £2.10".
+  if (!claim.invoice_id && claim.reference) {
+    const items = parseReferenceToItems(claim.reference);
+    if (items.length) {
+      const invId = await synthesizeInvoiceFromItems({ items, storeId: claim.store_id, vendor: claim.vendor, receiptUrl: claim.receipt_url });
+      if (invId) {
+        await supabase.from("expense_claims").update({ invoice_id: invId }).eq("id", claim.id);
+        claim.invoice_id = invId;
+      }
+    }
+  }
+
+  return { claim: mapExpenseClaim(claim), claimId: claim.id, matched, ambiguous };
+}
+
+// Parse a claim reference summary back into structured items. Handles both
+// "3× Desc @ £1.70" (with price) and "3× Desc" (no price) forms.
+function parseReferenceToItems(reference) {
+  const out = [];
+  for (const part of String(reference || "").split(";")) {
+    const seg = part.replace(/^\s*\[[^\]]*\]\s*/, "").trim();  // strip leading [Account] tag
+    if (!seg) continue;
+    const m = /^(\d+(?:\.\d+)?)\s*[×x]\s*(.+?)(?:\s*@\s*£?\s*(\d+(?:\.\d+)?))?$/.exec(seg);
+    if (!m) continue;
+    out.push({ units: Number(m[1]) || 0, desc: m[2].trim(), price: m[3] != null ? Number(m[3]) : null });
+  }
+  return out;
 }
 
 // Upload an expense receipt/invoice image. Returns a public URL stored on the
