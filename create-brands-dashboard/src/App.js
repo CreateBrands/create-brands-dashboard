@@ -35866,8 +35866,10 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
                     <div className="text-sm font-bold truncate" style={{ color: C.ink }}>{l.item_name}</div>
                     {l.line_note && <div className="text-[11px] italic font-semibold" style={{ color: "#9A5B00" }}>📝 {l.line_note}</div>}
                     <div className="text-[11px]" style={{ color: C.inkFaint }}>
-                      Dispatched: {disp}
-                      {l.unit_cost != null && <span> · £{Number(l.unit_cost).toFixed(2)} ea · <b style={{ color: short ? "#9A5B00" : C.inkSoft }}>£{(got * (Number(l.unit_cost) || 0)).toFixed(2)}</b></span>}
+                      Expected: {disp}
+                      {(l.pack_count > 1 || l.pack_size) && <span> · {l.pack_count > 1 ? `${l.pack_count} × ` : ""}{l.pack_size ? `${l.pack_size}${l.pack_unit || ""}` : `${l.pack_unit || "unit"}`}/pack</span>}
+                      {l.unit_cost != null && <span> · £{Number(l.unit_cost).toFixed(2)} ea</span>}
+                      {l.unit_cost != null && <span> · line <b style={{ color: short ? "#9A5B00" : C.inkSoft }}>£{(got * (Number(l.unit_cost) || 0)).toFixed(2)}</b></span>}
                       {short && <span style={{ color: "#9A5B00" }}> · SHORT {disp - got}</span>}
                       {unlinked && <span style={{ color: C.inkFaint }}> · ⚠ not linked</span>}
                     </div>
@@ -60442,7 +60444,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: DELIVINFO 2026-07-25i"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: RECVDETAIL 2026-07-25j"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views

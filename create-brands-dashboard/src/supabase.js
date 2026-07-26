@@ -15655,7 +15655,20 @@ export async function fetchStoreDeliveryDetail(deliveryId) {
     supabase.from("store_deliveries").select("*").eq("id", deliveryId).maybeSingle(),
     supabase.from("store_delivery_lines").select("*").eq("delivery_id", deliveryId).order("id"),
   ]);
-  return { head, lines: lines || [] };
+  const rows = lines || [];
+  // Enrich each line with pack/case info from its dist_item (delivery lines
+  // don't store pack size themselves). Purely additive — for display only.
+  const distIds = [...new Set(rows.map(l => l.dist_item_id).filter(Boolean))];
+  if (distIds.length) {
+    const { data: di } = await supabase.from("dist_items")
+      .select("id, pack_count, pack_size, pack_unit").in("id", distIds);
+    const packById = new Map((di || []).map(d => [d.id, d]));
+    rows.forEach(l => {
+      const p = packById.get(l.dist_item_id);
+      if (p) { l.pack_count = p.pack_count; l.pack_size = p.pack_size; l.pack_unit = p.pack_unit; }
+    });
+  }
+  return { head, lines: rows };
 }
 
 // Save received quantities as staff enter them (before final confirm).
