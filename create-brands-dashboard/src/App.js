@@ -21929,14 +21929,15 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
     setBusy(true);
     try {
       const itemised = scanLines.length ? scanLines.map(it=>`${it.units}× ${it.desc}`).join("; ").slice(0,500) : "";
-      await onSubmit?.({ ...form, amount: Number(form.amount), receiptUrl, invoiceId: scanInvoiceId,
+      const submittedClaim = await onSubmit?.({ ...form, amount: Number(form.amount), receiptUrl, invoiceId: scanInvoiceId,
         reference: form.reference || itemised });
       // If the purchase is for a store and we have line items, raise the
-      // incoming delivery so the store can receive it item by item.
+      // incoming delivery so the store can receive it item by item. Stamp the
+      // source claim id so the receiving screen can show the original receipt.
       if (form.storeId && scanLines.length) {
         try { await createFreshPurchaseDeliveries(
           { [form.storeId]: { items: scanLines } },
-          { vendor: form.vendor, ref: `${form.expenseDate}-${(form.vendor||"purchase").slice(0,20)}` }
+          { vendor: form.vendor, ref: `${form.expenseDate}-${(form.vendor||"purchase").slice(0,20)}`, claimId: submittedClaim?.id || null }
         ); } catch (e2) { console.error("delivery create failed:", e2.message); }
       }
       setForm({ vendor:"", expenseTypeId:"", categoryId:"", storeId:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), reference:"", description:"" });
@@ -44912,11 +44913,13 @@ function ExpenseSplitFlow({ stores = [], categories = [], expenseTypes = [], acc
           receiptUrl,
         };
       });
-      await handlers.submitMany?.(claims);
+      const claimByStore = await handlers.submitMany?.(claims);
       // Mirror the purchase into store deliveries: each store sees exactly what
       // the driver is bringing, receives it item by item, shortfalls flagged —
-      // the same principle as Distribution dispatches.
-      try { await createFreshPurchaseDeliveries(perStore, { vendor, ref: `${expenseDate}-${(vendor||"purchase").slice(0,20)}` }); } catch (e) { console.error("fresh deliveries failed:", e.message); }
+      // the same principle as Distribution dispatches. Each store's delivery is
+      // stamped with ITS OWN split-claim id so the receiving screen can show the
+      // original receipt; correcting the receipt never touches store quantities.
+      try { await createFreshPurchaseDeliveries(perStore, { vendor, ref: `${expenseDate}-${(vendor||"purchase").slice(0,20)}`, claimByStore: claimByStore || {} }); } catch (e) { console.error("fresh deliveries failed:", e.message); }
       onDone?.();
     } catch (e) { setErr(e?.message || "Could not submit the split."); }
     finally { setBusy(false); }
@@ -60475,7 +60478,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: RECVRECEIPT 2026-07-25k"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: RECVLINK 2026-07-25l"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
@@ -61132,8 +61135,10 @@ export default function App() {
     submit: async (c) => { await submitExpenseClaim({ ...c, submittedBy: c.submittedBy || currentUser?.name || null, submittedById: currentUser?.opsTeamMemberId || currentUser?.id || null }); await reloadExpenses(); },
     submitMany: async (claims) => {
       const by = currentUser?.name || null; const byId = currentUser?.opsTeamMemberId || currentUser?.id || null;
-      for (const c of claims) { await submitExpenseClaim({ ...c, submittedBy: by, submittedById: byId }); }
+      const claimByStore = {};
+      for (const c of claims) { const saved = await submitExpenseClaim({ ...c, submittedBy: by, submittedById: byId }); if (saved && c.storeId) claimByStore[c.storeId] = saved.id; }
       await reloadExpenses();
+      return claimByStore;
     },
     approve: async (id) => { await approveExpenseClaim(id, currentUser?.name || null); await reloadExpenses(); },
     reject: async (id, reason) => { await rejectExpenseClaim(id, reason, currentUser?.name || null); await reloadExpenses(); },

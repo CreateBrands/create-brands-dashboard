@@ -15813,9 +15813,14 @@ export async function createFreshPurchaseDeliveries(perStore, meta = {}) {
   for (const [storeId, s] of Object.entries(perStore || {})) {
     const items = (s && s.items) || [];
     if (!storeId || !items.length) continue;
+    // Link this store's delivery to its source receipt/expense claim so the
+    // receiving screen can show the original for verification. Single-store
+    // purchases use meta.claimId; splits use the per-store map.
+    const claimId = (meta.claimByStore && meta.claimByStore[storeId]) || meta.claimId || null;
     const { data: deliv, error: hErr } = await supabase.from("store_deliveries")
       .insert({ store_id: storeId, dist_order_id: null,
                 dispatch_id: meta.ref ? `fresh:${meta.ref}` : "fresh-purchase",
+                expense_claim_id: claimId,
                 status: "incoming", dispatched_at: new Date().toISOString() })
       .select().single();
     if (hErr) { console.error("fresh delivery header failed:", hErr.message); continue; }
