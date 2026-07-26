@@ -9257,13 +9257,14 @@ export async function fetchExpenseClaims({ status } = {}) {
 export async function synthesizeInvoiceFromItems({ items, storeId, vendor, receiptUrl }) {
   const clean = (items || []).filter(it => (it.desc || "").trim());
   if (!clean.length) return { error: "no items" };
-  // Let the DB generate the invoice id (matches how real invoices are created).
-  const { data: invRow, error: iErr } = await supabase.from("invoices").insert({
-    entity: "shop", entity_id: storeId || null,
+  // invoices.id is text with no default — we must supply it.
+  const invId = `inv-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const { error: iErr } = await supabase.from("invoices").insert({
+    id: invId, entity: "shop", entity_id: storeId || null,
+    supplier_name: vendor || null,
     image_path: receiptUrl || null, status: "extracted",
-  }).select().single();
-  if (iErr || !invRow) return { error: "header: " + (iErr ? iErr.message : "no row") };
-  const invId = invRow.id;
+  });
+  if (iErr) return { error: "header: " + iErr.message };
   const rows = clean.map((it, idx) => {
     const units = Number(it.units) || 0;
     const price = it.price != null ? Number(it.price) : null;
