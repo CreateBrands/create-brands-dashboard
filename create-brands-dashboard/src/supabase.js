@@ -9249,6 +9249,40 @@ export async function fetchExpenseClaims({ status } = {}) {
 // look-back on the receiving screen). Read-only reference: returns the claim
 // (with its receipt image) and its itemised lines. Correcting these updates the
 // PURCHASE record only — never the store's expected/received quantities.
+// Build a real invoice + invoice_lines from manually-entered purchase items
+// (e.g. a split supermarket receipt with no OCR extraction). Gives these
+// purchases the SAME structured, editable lines the scanned ones have, so the
+// shared InvoiceLineRow match view works for them everywhere. Returns the new
+// invoice id. items: [{ desc, units, price, storeItemId? }].
+export async function synthesizeInvoiceFromItems({ items, storeId, vendor, receiptUrl }) {
+  const clean = (items || []).filter(it => (it.desc || "").trim());
+  if (!clean.length) return null;
+  const invId = `inv-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  const { error: iErr } = await supabase.from("invoices").insert({
+    id: invId, entity: "shop", entity_id: storeId || null,
+    image_path: receiptUrl || null, status: "extracted",
+  });
+  if (iErr) { console.error("synthesize invoice header failed:", iErr.message); return null; }
+  const rows = clean.map((it, idx) => {
+    const units = Number(it.units) || 0;
+    const price = it.price != null ? Number(it.price) : null;
+    return {
+      id: `invl-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 5)}`,
+      invoice_id: invId, line_no: idx + 1,
+      raw_description: it.desc.trim(),
+      order_qty: units, pack_qty_base: 1,
+      pack_price_ex_vat: price,
+      line_total: price != null ? +(units * price).toFixed(2) : null,
+      matched_store_item_id: it.storeItemId != null ? it.storeItemId : null,
+      match_method: it.storeItemId != null ? "human" : null,
+      status: "pending",
+    };
+  });
+  const { error: lErr } = await supabase.from("invoice_lines").insert(rows);
+  if (lErr) { console.error("synthesize invoice lines failed:", lErr.message); return null; }
+  return invId;
+}
+
 export async function fetchDeliverySourceReceipt(deliveryId) {
   const { data: del } = await supabase.from("store_deliveries")
     .select("expense_claim_id, store_id, supplier_name, dispatched_at").eq("id", deliveryId).maybeSingle();
@@ -9260,16 +9294,20 @@ export async function fetchDeliverySourceReceipt(deliveryId) {
     if (claim) return { claim: mapExpenseClaim(claim), claimId: del.expense_claim_id, matched: false };
   }
 
-  // Fallback for existing/unstamped deliveries: find the source receipt by
+  // Fallback for existing/unstamped deliveries: the vendor+date live in the
+  // dispatch_id ("fresh:<date>-<vendor>"), NOT in supplier_name (which is null
+  // for fresh purchases). Parse them out and match the source claim on
   // store + vendor + date. Lets the receipt-match view work on deliveries that
-  // predate the stored link, without a migration. If more than one claim
-  // matches (two same-vendor receipts that day) we don't guess — return the
-  // most recent and flag it as an inferred match.
-  if (!del.supplier_name || !del.store_id) return null;
-  const day = del.dispatched_at ? String(del.dispatched_at).slice(0, 10) : null;
+  // predate the stored link, with no migration. If more than one claim matches,
+  // return the most recent and flag it as inferred rather than guessing.
+  if (!del.store_id || !del.dispatch_id) return null;
+  const m = /^fresh:(\d{4}-\d{2}-\d{2})-(.+)$/.exec(del.dispatch_id || "");
+  const day = m ? m[1] : (del.dispatched_at ? String(del.dispatched_at).slice(0, 10) : null);
+  const vendor = m ? m[2] : (del.supplier_name || "");
+  if (!vendor) return null;
   let q = supabase.from("expense_claims").select("*")
     .eq("store_id", del.store_id)
-    .ilike("vendor", del.supplier_name)
+    .ilike("vendor", `${vendor}%`)
     .order("created_at", { ascending: false });
   if (day) q = q.gte("expense_date", day).lte("expense_date", day);
   const { data: claims } = await q;

@@ -183,7 +183,7 @@ import {
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
-  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, fetchStoreOrderPrefs, saveStoreOrderPrefs, fetchChatGroups, createChatGroup, updateChatGroup, deleteChatGroup, deleteChatThread, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment, editPendingOrderLines, mergePendingOrders, fetchDeliverySourceReceipt,
+  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, fetchStoreOrderPrefs, saveStoreOrderPrefs, fetchChatGroups, createChatGroup, updateChatGroup, deleteChatGroup, deleteChatThread, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment, editPendingOrderLines, mergePendingOrders, fetchDeliverySourceReceipt, synthesizeInvoiceFromItems,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
 } from "./supabase";
@@ -44928,18 +44928,29 @@ function ExpenseSplitFlow({ stores = [], categories = [], expenseTypes = [], acc
     setBusy(true); setErr("");
     try {
       const chosen = accountOptions.find(o => o.key === accountKey);
-      const claims = assignedStoreIds.map(sid => {
+      // Give each store's split its own structured invoice, so the shared
+      // receipt-match view (Finance / Distribution / incoming delivery) works
+      // for these purchases just like scanned ones.
+      const claims = [];
+      for (const sid of assignedStoreIds) {
         const s = perStore[sid];
         const itemList = s.items.map(it => `${it.units}× ${it.desc} @ ${money(it.price)}`).join("; ");
-        return {
+        let invoiceId = null;
+        try {
+          invoiceId = await synthesizeInvoiceFromItems({
+            items: s.items.map(it => ({ desc: it.desc, units: it.units, price: it.price, storeItemId: it.storeItemId })),
+            storeId: sid, vendor: vendor || null, receiptUrl,
+          });
+        } catch (e) { console.error("invoice synthesis failed:", e?.message); }
+        claims.push({
           description: `Split: ${vendor||"expense"} — ${storeName(sid)}`,
           amount: Math.round(s.amount*100)/100,
           expenseDate, expenseTypeId: expenseTypeId||null, categoryId: categoryId||null,
           storeId: sid, vendor: vendor||null,
           reference: `${chosen?`[${chosen.label}] `:""}${itemList}`.slice(0,500),
-          receiptUrl,
-        };
-      });
+          receiptUrl, invoiceId,
+        });
+      }
       const claimByStore = await handlers.submitMany?.(claims);
       // Mirror the purchase into store deliveries: each store sees exactly what
       // the driver is bringing, receives it item by item, shortfalls flagged —
@@ -60505,7 +60516,7 @@ export default function App() {
       } catch {}
     })();
   }, []);
-  useEffect(() => { try { console.log("CB build: RECVMATCH2 2026-07-25n"); } catch {} }, []);
+  useEffect(() => { try { console.log("CB build: INVSYNTH 2026-07-25p"); } catch {} }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
   const [distSearchOpen, setDistSearchOpen] = useState(false); // Distribution global search modal
   // Dashboard sub-tabs: the old top-level "chain" and "store-analytics" views
