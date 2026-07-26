@@ -9262,7 +9262,7 @@ export async function synthesizeInvoiceFromItems({ items, storeId, vendor, recei
   const { error: iErr } = await supabase.from("invoices").insert({
     id: invId, entity: "shop", entity_id: storeId || null,
     supplier_name: vendor || null,
-    image_path: receiptUrl || null, status: "extracted",
+    image_path: receiptUrl || null, status: "uploaded",
   });
   if (iErr) return { error: "header: " + iErr.message };
   const rows = clean.map((it, idx) => {
