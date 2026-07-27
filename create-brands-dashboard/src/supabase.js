@@ -16168,12 +16168,17 @@ export async function fetchStoreDeliveryDetail(deliveryId) {
 // lines = [{ id, qtyReceived, unitCost? }]
 export async function saveDeliveryReceipt(deliveryId, lines) {
   for (const l of (lines || [])) {
-    const patch = { qty_received: l.qtyReceived != null ? Number(l.qtyReceived) : null,
-                    received: l.qtyReceived != null && Number(l.qtyReceived) > 0 };
+    const patch = { qty_received: l.qtyReceived != null && l.qtyReceived !== "" ? Number(l.qtyReceived) : null,
+                    received: l.qtyReceived != null && l.qtyReceived !== "" && Number(l.qtyReceived) > 0 };
     if (l.unitCost != null && l.unitCost !== "") patch.unit_cost = Number(l.unitCost);
-    await supabase.from("store_delivery_lines").update(patch).eq("id", l.id);
+    // RECVFIX: this used to ignore the result, so a failed write looked
+    // identical to a successful one. Receiving is the moment stock enters the
+    // ledger — a silent failure here loses the quantity permanently.
+    const { error } = await supabase.from("store_delivery_lines").update(patch).eq("id", l.id);
+    if (error) throw new Error(`Couldn't save "${l.id}": ${error.message}`);
   }
-  await supabase.from("store_deliveries").update({ status: "receiving" }).eq("id", deliveryId);
+  const { error: hErr } = await supabase.from("store_deliveries").update({ status: "receiving" }).eq("id", deliveryId);
+  if (hErr) throw new Error(`Couldn't update the delivery: ${hErr.message}`);
   return true;
 }
 
