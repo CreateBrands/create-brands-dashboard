@@ -35952,9 +35952,7 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
   const [loading, setLoading] = useState(false);
   const [openId, setOpenId] = useState(null);
   const [detail, setDetail] = useState(null);
-  const [recv, setRecv] = useState({});           // lineId -> qty typed in the box (working value)
-  const [recorded, setRecorded] = useState({});    // lineId -> is that quantity actually SAVED in the db?
-  const [savingLine, setSavingLine] = useState({});// lineId -> write in flight
+  const [recv, setRecv] = useState({});           // lineId -> qty received
   const [costs, setCosts] = useState({});          // lineId -> unit cost
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState(null);
@@ -35984,41 +35982,16 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
     try {
       const d = await fetchStoreDeliveryDetail(id);
       setDetail(d);
-      // RECVFIX: `recv` is the working value in the box; `recorded` is what the
-      // database actually holds. These were conflated, and because the box is
-      // prefilled with the dispatched quantity, every untouched line rendered as
-      // already Received the moment the screen opened. The tick must mean
-      // "saved", never "prefilled".
-      const r = {}, c = {}, rec = {};
-      (d.lines || []).forEach(l => {
-        r[l.id] = l.qty_received != null ? l.qty_received : l.qty_dispatched;
-        rec[l.id] = l.qty_received != null;
-        if (l.unit_cost != null) c[l.id] = l.unit_cost;
-      });
-      setRecv(r); setCosts(c); setRecorded(rec);
+      // default received qty = dispatched (staff adjust down for shortfalls)
+      const r = {}, c = {};
+      (d.lines || []).forEach(l => { r[l.id] = l.qty_received != null ? l.qty_received : l.qty_dispatched; if (l.unit_cost != null) c[l.id] = l.unit_cost; });
+      setRecv(r); setCosts(c);
       setReceipt(null); setShowReceipt(false); setMatchLines([]);
       fetchDeliverySourceReceipt(id).then(r => {
         setReceipt(r);
         if (r && r.claim && r.claim.invoiceId) reloadMatchLines(r.claim.invoiceId);
       }).catch(() => setReceipt(null));
     } catch (e) { setMsg({ tone:"err", text: e.message }); }
-  };
-
-  // RECVFIX: write one line straight through. The per-item Received button used
-  // to change local state only, so staff marked a whole delivery, closed the
-  // screen, and nothing had been saved — 411 delivery lines with 1 recorded.
-  const persistLine = async (lineId, qty) => {
-    setSavingLine(s => ({ ...s, [lineId]: true }));
-    try {
-      await saveDeliveryReceipt(openId, [{ id: lineId, qtyReceived: qty, unitCost: costs[lineId] }]);
-      setRecorded(r => ({ ...r, [lineId]: qty != null && qty !== "" }));
-      setMsg(null);
-    } catch (e) {
-      setRecorded(r => ({ ...r, [lineId]: false }));
-      setMsg({ tone:"err", text: `Not saved — ${e.message}` });
-    } finally {
-      setSavingLine(s => { const n = { ...s }; delete n[lineId]; return n; });
-    }
   };
 
   const saveProgress = async () => {
@@ -36123,34 +36096,22 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <button onClick={() => { const v = Math.max(0, got - 1); setRecv(r => ({ ...r, [l.id]: v })); persistLine(l.id, v); }}
-                      className="w-7 h-7 rounded-lg text-lg font-bold" style={{ background:"#F3EADA", color: C.ink }}>−</button>
-                    <input type="number" value={recv[l.id] ?? ""}
-                      onChange={e => { setRecv(r => ({ ...r, [l.id]: e.target.value })); setRecorded(r => ({ ...r, [l.id]: false })); }}
-                      onBlur={e => persistLine(l.id, e.target.value)}
+                    <button onClick={() => setRecv(r => ({ ...r, [l.id]: Math.max(0, got - 1) }))} className="w-7 h-7 rounded-lg text-lg font-bold" style={{ background:"#F3EADA", color: C.ink }}>−</button>
+                    <input type="number" value={recv[l.id] ?? ""} onChange={e => setRecv(r => ({ ...r, [l.id]: e.target.value }))}
                       className="w-14 text-center rounded-lg py-1 text-sm font-bold" style={{ background:"#fff", border:`1px solid ${C.line}`, color: C.ink }}/>
-                    <button onClick={() => { const v = got + 1; setRecv(r => ({ ...r, [l.id]: v })); persistLine(l.id, v); }}
-                      className="w-7 h-7 rounded-lg text-lg font-bold" style={{ background:"#F3EADA", color: C.ink }}>+</button>
+                    <button onClick={() => setRecv(r => ({ ...r, [l.id]: got + 1 }))} className="w-7 h-7 rounded-lg text-lg font-bold" style={{ background:"#F3EADA", color: C.ink }}>+</button>
                     {(() => {
-                      // RECVFIX: green means SAVED, not "the box happens to hold
-                      // the dispatched number". Prefilling made every untouched
-                      // line look received before anyone tapped anything.
-                      const isSaved = !!recorded[l.id] && got > 0;
-                      const saving = !!savingLine[l.id];
+                      const isReceived = got > 0 && got === disp;
                       return (
-                        <button disabled={saving}
-                          onClick={() => { const v = isSaved ? 0 : disp; setRecv(r => ({ ...r, [l.id]: v })); persistLine(l.id, isSaved ? null : v); }}
-                          className="ml-1 px-3 h-7 rounded-lg text-xs font-bold flex items-center gap-1 whitespace-nowrap disabled:opacity-60"
-                          style={isSaved ? { background: C.green, color: "#fff" } : { background: "#F3EADA", color: C.accent, border: `1px solid ${C.line}` }}>
-                          {saving ? "saving…" : isSaved ? <><CheckCircle size={13}/> Received</> : "Mark received"}
+                        <button onClick={() => setRecv(r => ({ ...r, [l.id]: isReceived ? 0 : disp }))}
+                          className="ml-1 px-3 h-7 rounded-lg text-xs font-bold flex items-center gap-1 whitespace-nowrap"
+                          style={isReceived ? { background: C.green, color: "#fff" } : { background: "#F3EADA", color: C.accent, border: `1px solid ${C.line}` }}>
+                          {isReceived ? <><CheckCircle size={13}/> Received</> : "Received"}
                         </button>
                       );
                     })()}
                   </div>
                 </div>
-                {!recorded[l.id] && !savingLine[l.id] && (
-                  <div className="text-[11px] mt-1" style={{ color: C.inkFaint }}>not recorded yet</div>
-                )}
                 {short && <div className="text-[11px] mt-1.5 font-semibold" style={{ color: C.amber }}>Short by {disp - got} — will be reported</div>}
               </div>
             );
@@ -60831,7 +60792,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: RECVFIX 2026-07-26f");
+      console.log("CB build: SPLITCARD 2026-07-26e");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
