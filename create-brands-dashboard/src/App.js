@@ -153,6 +153,7 @@ import {
   fetchInventoryForStore, setStoreItemOverride, clearStoreItemOverride,
   searchStoreInventory, detectInvoicePriceChanges, fetchPriceChanges, applyPriceChange, dismissPriceChange,
   runBatchMatchInvoiceLines, fetchStoreItemBrief, receiptLineBaseQty, receiptLineUnitCost,
+  receiptLineNeedsPackSize, parsedPackBaseQty, fetchAliasRow, setAliasPackSize,
   ensureClaimInvoice, linkClaimToInvoice,
   fetchDistTaxRates, fetchDistContacts, upsertDistContact,
   fetchDistItems, upsertDistItem, deleteDistItem, previewDeleteInactiveDistItems, bulkDeleteInactiveDistItems, fetchStoreItemTags, setStoreItemTag, fetchStoreItemStock, saveStoreItemStock, computeStoreItemUsage, computeStoreItemConsumption, computeStoreItemConsumptionV2, fetchDistBatches, createDistBatch,
@@ -21819,7 +21820,7 @@ function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
           {resolvedInvoiceId && rawLines ? (
             <div className="space-y-2 self-start">
               <div className="text-[11px] text-slate-500">Same review as the invoice inbox: match each line to OUR item (matches are remembered for every future receipt), fix pack qty / price, then sync to the store's delivery.</div>
-              {rawLines.map(l => <InvoiceLineRow key={l.id} line={l} domain="shop" onChanged={reloadRaw}/>)}
+              {rawLines.map(l => <InvoiceLineRow key={l.id} line={l} domain="shop" vendor={claim.vendor || ""} onChanged={reloadRaw}/>)}
               {rawLines.length === 0 && <div className="text-xs text-slate-500 border border-dashed border-slate-800 rounded-xl p-6 text-center">No extracted lines on this receipt.</div>}
               {/* TOTALS — what the extractor read vs what the lines add to vs
                   what was claimed. Savings/discounts appear as the difference
@@ -23488,7 +23489,7 @@ function ItemRankTable({ title, subtitle, rows, fmtMoney, accent = "text-emerald
 // v1: one question, one answer, no conversation memory. The Edge Function
 // sends AGGREGATES ONLY to the Claude API. Owner/HQ only.
 // ===== INVOICES_VIEW_V1: upload → extract → side-by-side review → approve =====
-function InvoiceLineRow({ line, domain, onChanged }) {
+function InvoiceLineRow({ line, domain, onChanged, vendor = "" }) {
   // pack_qty_base is healed to per-pack at fetch (getInvoiceWithLines) using
   // the extractor JSON's own pack_size — display it verbatim. (A client-side
   // divide here double-divided healed values: 600g / 20 packs showed 30.)
@@ -23501,6 +23502,36 @@ function InvoiceLineRow({ line, domain, onChanged }) {
   const [busy, setBusy] = useState(false);
 
   const [matchedItem, setMatchedItem] = useState(null);
+  // PACKLEARN: a pack size someone entered before for this vendor's version of
+  // the product, read off the alias row.
+  const [learnedPack, setLearnedPack] = useState(null);
+  const [packInput, setPackInput] = useState("");
+  const [packBusy, setPackBusy] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    if (!line.raw_description) { setLearnedPack(null); return; }
+    fetchAliasRow(line.raw_description, vendor)
+      .then(r => { if (live) setLearnedPack(r && r.pack_qty_base != null ? Number(r.pack_qty_base) : null); })
+      .catch(() => { if (live) setLearnedPack(null); });
+    return () => { live = false; };
+  }, [line.raw_description, vendor]);
+
+  const savePackSize = async () => {
+    const v = Number(packInput);
+    if (!(v > 0)) return;
+    setPackBusy(true);
+    try {
+      await setAliasPackSize({
+        name: line.raw_description, vendor,
+        storeItemId: line.matched_store_item_id, packQtyBase: v,
+      });
+      setLearnedPack(v); setPackInput("");
+      onChanged();
+    } catch (e) {
+      console.error("pack size save failed:", e.message);
+    } finally { setPackBusy(false); }
+  };
 
   useEffect(() => {
     let live = true;
@@ -23610,10 +23641,18 @@ function InvoiceLineRow({ line, domain, onChanged }) {
   const noPrice = line.pack_price_ex_vat == null;
   const isWeighed = /^(kg|g|l|ml)$/i.test(line.pack_unit_raw || "");
   const baseUnit = matchedItem?.base_unit || null;
-  // What one pack on this receipt is worth, in OUR base unit. Null when the
-  // printed unit cannot be resolved — a gap, never a guess.
-  const rcptUnitCost = baseUnit ? receiptLineUnitCost(line, baseUnit) : null;
-  const rcptBaseQty  = baseUnit ? receiptLineBaseQty(line, baseUnit) : null;
+  // PACKLEARN: where the pack size comes from, in order of authority —
+  //   1. printed on the receipt line itself (reading)
+  //   2. entered once by a person and stored on the alias (stated)
+  // Never the catalogue's own pack, which would assume this shop sells the same
+  // size we happen to have recorded.
+  const printedPack = baseUnit ? parsedPackBaseQty(line.raw_description, baseUnit) : null;
+  const knownPack = printedPack != null ? printedPack : (learnedPack != null ? learnedPack : null);
+  const packSource = printedPack != null ? "printed on the receipt"
+                   : learnedPack != null ? "entered previously for this supplier" : null;
+  const needsPack = baseUnit ? receiptLineNeedsPackSize(line, baseUnit) : false;
+  const rcptUnitCost = baseUnit ? receiptLineUnitCost(line, baseUnit, knownPack) : null;
+  const rcptBaseQty  = baseUnit ? receiptLineBaseQty(line, baseUnit, knownPack) : null;
   const ourUnitCost  = matchedItem?.cost_per_base_unit != null ? Number(matchedItem.cost_per_base_unit) : null;
   const deltaPct = (rcptUnitCost != null && ourUnitCost > 0)
     ? ((rcptUnitCost - ourUnitCost) / ourUnitCost) * 100 : null;
@@ -23665,10 +23704,41 @@ function InvoiceLineRow({ line, domain, onChanged }) {
           <div className="border-t border-slate-800/70 mt-2 pt-1.5">
             <Row label="Line total" strong>{line.line_total != null ? money(line.line_total) : "—"}</Row>
             {rcptBaseQty != null && (
-              <Row label="Works out as">{`${rcptBaseQty.toLocaleString()} ${baseUnit} per pack`}</Row>
+              <Row label="Works out as">
+                {`${rcptBaseQty.toLocaleString()} ${baseUnit} per pack`}
+                {packSource && <span className="text-slate-500"> · {packSource}</span>}
+              </Row>
             )}
             {rcptUnitCost != null && (
               <Row label="Cost / unit" strong>{`${money(rcptUnitCost, 4)} per ${baseUnit}`}</Row>
+            )}
+            {/* PACKLEARN: the receipt counts packs, we measure in g/ml, and
+                nothing has told us what one pack holds. Ask once — the answer is
+                stored against this supplier's name for the product, so it is
+                never asked again. Nothing is assumed in the meantime. */}
+            {needsPack && knownPack == null && line.matched_store_item_id && (
+              <div className="mt-2 p-2 rounded-lg bg-amber-500/10 border border-amber-600/40">
+                <div className="text-[11px] text-amber-300 mb-1.5">
+                  How much is in one pack? The receipt counts packs but we measure
+                  this in {baseUnit}, and we won’t guess.
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <input value={packInput} onChange={e => setPackInput(e.target.value)}
+                    placeholder={`e.g. 750`} inputMode="decimal"
+                    className="w-24 px-2 py-1 bg-slate-950 border border-amber-700/50 rounded-lg text-xs text-white"/>
+                  <span className="text-[11px] text-slate-400">{baseUnit} per pack</span>
+                  <button onClick={savePackSize} disabled={packBusy || !(Number(packInput) > 0)}
+                    className="px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-white text-[11px] font-bold disabled:opacity-40">
+                    {packBusy ? "saving…" : "save"}
+                  </button>
+                </div>
+                <div className="text-[10px] text-slate-500 mt-1">
+                  Saved against “{line.raw_description}”{vendor ? ` at ${vendor}` : ""} — asked once, then remembered.
+                </div>
+              </div>
+            )}
+            {needsPack && knownPack == null && !line.matched_store_item_id && (
+              <Row label="Cost / unit"><span className="text-slate-500">match the item first, then we’ll ask what one pack holds</span></Row>
             )}
             {line.matched_store_item_id && rcptUnitCost == null && (
               <Row label="Cost / unit"><span className="text-amber-400">can’t convert “{line.pack_unit_raw || "no unit"}” to {baseUnit}</span></Row>
@@ -36180,7 +36250,7 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
               </div>
               <div className="space-y-2 self-start">
                 {matchLines.map(l => (
-                  <InvoiceLineRow key={l.id} line={l} domain="shop" onChanged={() => receipt.claim.invoiceId && reloadMatchLines(receipt.claim.invoiceId)} />
+                  <InvoiceLineRow key={l.id} line={l} domain="shop" vendor={(receipt && receipt.claim && receipt.claim.vendor) || ""} onChanged={() => receipt.claim.invoiceId && reloadMatchLines(receipt.claim.invoiceId)} />
                 ))}
               </div>
             </div>
@@ -60852,7 +60922,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: DELIVMETA 2026-07-27b");
+      console.log("CB build: PACKLEARN 2026-07-27d");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:

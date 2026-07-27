@@ -5716,16 +5716,24 @@ export const lookupAlias = (aliasMap, name, vendor) => {
   return null;
 };
 export async function fetchAliasFor(name, vendor) {
+  const row = await fetchAliasRow(name, vendor);
+  return row ? row.store_item_id : null;
+}
+
+// PACKLEARN: the whole alias row, so callers can also read the pack size a
+// person entered once for this vendor's version of the product. The alias
+// carries identity AND, where someone has told us, what one pack contains.
+export async function fetchAliasRow(name, vendor) {
   const keys = aliasKeysFor(name);
-  const { data } = await supabase.from("supplier_item_aliases").select("store_item_id, vendor, alias_norm")
+  const { data } = await supabase.from("supplier_item_aliases")
+    .select("store_item_id, vendor, alias_norm, pack_qty_base")
     .in("alias_norm", keys).limit(6);
   if (!data || !data.length) return null;
   const v = normItemAliasRaw(vendor);
-  // Prefer the normalised key, then a vendor-specific row, then a vendor-less one.
   for (const n of keys) {
     const pool = data.filter(r => r.alias_norm === n);
     const hit = pool.find(r => (r.vendor || "") === v) || pool.find(r => !r.vendor) || pool[0];
-    if (hit) return hit.store_item_id;
+    if (hit) return hit;
   }
   return null;
 }
@@ -5735,16 +5743,37 @@ export async function fetchStoreItemName(id) {
   return data?.name || null;
 }
 
-export async function upsertItemAlias({ name, vendor, storeItemId, by }) {
+export async function upsertItemAlias({ name, vendor, storeItemId, by, packQtyBase }) {
   if (!name || !storeItemId) return;
   // ALIASNORM: the ITEM name goes through the receipt normaliser so weighed
   // purchases collapse to one alias. The VENDOR must use the raw form — it is
   // matched with normItemAliasRaw on every lookup, and the receipt normaliser
   // strips supermarket prefixes, which would mangle a vendor name.
-  const { error } = await supabase.from("supplier_item_aliases").upsert({
-    alias_norm: normItemAlias(name), vendor: normItemAliasRaw(vendor), store_item_id: String(storeItemId), created_by: by || null,
-  }, { onConflict: "alias_norm,vendor" });
+  const row = {
+    alias_norm: normItemAlias(name), vendor: normItemAliasRaw(vendor),
+    store_item_id: String(storeItemId), created_by: by || null,
+  };
+  // PACKLEARN: only written when someone actually supplied it. Undefined leaves
+  // any previously learned value alone rather than wiping it.
+  if (packQtyBase != null && packQtyBase !== "" && Number(packQtyBase) > 0) {
+    row.pack_qty_base = Number(packQtyBase);
+  }
+  const { error } = await supabase.from("supplier_item_aliases").upsert(row, { onConflict: "alias_norm,vendor" });
   if (error) console.error("alias save failed:", error.message);
+}
+
+// PACKLEARN: record what one pack of this vendor's version contains, without
+// touching the identity mapping. Used when a person answers "how much is in one
+// pack?" on the match card.
+export async function setAliasPackSize({ name, vendor, storeItemId, packQtyBase, by }) {
+  if (!name || !(Number(packQtyBase) > 0)) return false;
+  const { error } = await supabase.from("supplier_item_aliases").upsert({
+    alias_norm: normItemAlias(name), vendor: normItemAliasRaw(vendor),
+    store_item_id: storeItemId != null ? String(storeItemId) : null,
+    pack_qty_base: Number(packQtyBase), created_by: by || null,
+  }, { onConflict: "alias_norm,vendor" });
+  if (error) throw new Error(error.message);
+  return true;
 }
 
 export async function saveInvoiceLine(lineId, fields) {
@@ -9522,22 +9551,79 @@ export function convertUnitQty(qty, fromUnit, toUnit) {
   return k == null ? null : q * k;
 }
 
+const COUNTABLE_UNITS = new Set(["ea", "each", "pcs", "pc", "unit", "units", "pack", "packs"]);
+const MEASURE_UNITS = new Set(["g", "kg", "ml", "l"]);
+
+// PACKPARSE: read a pack size that is already printed on the line —
+// "JS STRAWBS 400G", "Tesco Coriander 100g", "Custard-(12*1L)". This is READING,
+// not assuming: if the text does not state a size we return null and the caller
+// asks a human instead of inventing one.
+// Parse from the CLEANED description so a weighed total in brackets
+// ("Tesco Bananas Loose (3.025kg)") is not mistaken for a pack size.
+export function parsePackSizeFromText(text) {
+  const raw = String(text || "");
+  let s = raw;
+  try { const n = normalizeReceiptDescription(raw); if (n && n.clean) s = n.clean; } catch {}
+
+  // "12*1L" / "6 x 2.3kg" — a count multiplied by a size
+  const multi = /(\d+(?:\.\d+)?)\s*[*x×]\s*(\d+(?:\.\d+)?)\s*(kg|g|ml|l|ltr|litres?)\b/i.exec(s);
+  if (multi) {
+    return { qty: Number(multi[1]) * Number(multi[2]), unit: multi[3].toLowerCase(), from: "text" };
+  }
+  // otherwise the last bare size token wins — "…Sourdough Loaf 450g"
+  const re = /(\d+(?:\.\d+)?)\s*(kg|g|ml|l|ltr|litres?)\b/gi;
+  let m, last = null;
+  while ((m = re.exec(s))) last = m;
+  if (!last) return null;
+  return { qty: Number(last[1]), unit: last[2].toLowerCase(), from: "text" };
+}
+
+// The printed pack size expressed in the item's base unit, or null.
+export function parsedPackBaseQty(text, baseUnit) {
+  const p = parsePackSizeFromText(text);
+  if (!p || !baseUnit) return null;
+  return convertUnitQty(p.qty, p.unit, baseUnit);
+}
+
 // The quantity ONE pack of this receipt line represents, in the item's base unit.
 // pack_unit_raw is unreliable (bread has been seen tagged "ml"), so when it does
 // not convert cleanly we return null rather than guessing.
-export function receiptLineBaseQty(line, baseUnit) {
+//
+// UNITBRIDGE: when the receipt COUNTS packs ("1 each") but the item is WEIGHED
+// (base_unit g), there is no arithmetic bridge. `knownPackBase` supplies one —
+// but ONLY from a fact: a size printed on the receipt, or one a person entered
+// once and stored on the alias. Never from the catalogue's own pack, which would
+// assume this shop sells the same size we happen to have recorded.
+export function receiptLineBaseQty(line, baseUnit, knownPackBase = null) {
   if (!line || !baseUnit) return null;
   const packQty = line.pack_qty_base != null ? Number(line.pack_qty_base) : null;
   if (!(packQty > 0)) return null;
   const raw = line.pack_unit_raw;
   // No unit recorded: assume the pack is already in the item's base unit.
   if (!raw || !String(raw).trim()) return packQty;
-  return convertUnitQty(packQty, raw, baseUnit);
+  const direct = convertUnitQty(packQty, raw, baseUnit);
+  if (direct != null) return direct;
+  const f = String(raw).trim().toLowerCase();
+  const t = String(baseUnit).trim().toLowerCase();
+  if (COUNTABLE_UNITS.has(f) && MEASURE_UNITS.has(t) && Number(knownPackBase) > 0) {
+    return packQty * Number(knownPackBase);
+  }
+  return null;
+}
+
+// True when this line counts packs against a weighed item, so it NEEDS a pack
+// size before it can be costed. The card uses this to decide whether to ask.
+export function receiptLineNeedsPackSize(line, baseUnit) {
+  if (!line || !baseUnit) return false;
+  const raw = String(line.pack_unit_raw || "").trim().toLowerCase();
+  if (!raw) return false;
+  if (convertUnitQty(1, raw, baseUnit) != null) return false;
+  return COUNTABLE_UNITS.has(raw) && MEASURE_UNITS.has(String(baseUnit).trim().toLowerCase());
 }
 
 // Per-base-unit price implied by a receipt line, or null if it cannot be resolved.
-export function receiptLineUnitCost(line, baseUnit) {
-  const base = receiptLineBaseQty(line, baseUnit);
+export function receiptLineUnitCost(line, baseUnit, knownPackBase = null) {
+  const base = receiptLineBaseQty(line, baseUnit, knownPackBase);
   const price = line && line.pack_price_ex_vat != null ? Number(line.pack_price_ex_vat) : null;
   if (!(base > 0) || !(price >= 0)) return null;
   return price / base;
