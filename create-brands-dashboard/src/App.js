@@ -45384,12 +45384,7 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
   const storeName = (id) => stores.find(s=>s.id===id)?.shortName || stores.find(s=>s.id===id)?.name || "";
   const acctName = (id) => cashAccounts.find(a=>a.id===id)?.name || "";
 
-  // SORTFIX: this used to filter only, so the order was whatever the fetch
-  // happened to return — and grouping split claims could pull a recent claim
-  // down to wherever its receipt-mates first appeared. Newest first, always.
-  const claimTime = (c) => `${c.expenseDate || ""} ${c.createdAt || ""}`;
-  const byStatus = (st) => claims.filter(c => c.status === st)
-    .slice().sort((a, b) => claimTime(b).localeCompare(claimTime(a)));
+  const byStatus = (st) => claims.filter(c => c.status === st);
   const counts = { submitted: byStatus("submitted").length, approved: byStatus("approved").length, reconciled: byStatus("reconciled").length, rejected: byStatus("rejected").length };
 
   const openNew = () => { setErr(""); setForm({ description:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), expenseTypeId:"", accountKey:"", categoryId:"", payeeId:"", storeId:"", vendor:"", reference:"", receiptUrl:null }); setTab("new"); };
@@ -45497,13 +45492,8 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
       if (!byReceipt.has(key)) { const g = { key, children: [] }; byReceipt.set(key, g); out.push(g); }
       byReceipt.get(key).children.push(c);
     });
-    // SORTFIX: a group takes the date of its NEWEST member, so a split claim
-    // never sinks to wherever its earliest receipt-mate happened to sit.
-    const rank = (g) => g.single ? claimTime(g.single)
-      : g.children.map(claimTime).sort().reverse()[0] || "";
-    return out
-      .map(g => (g.single ? g : (g.children.length === 1 ? { single: g.children[0] } : g)))
-      .sort((a, b) => rank(b).localeCompare(rank(a)));
+    // A "group" of one is just a normal claim.
+    return out.map(g => (g.single ? g : (g.children.length === 1 ? { single: g.children[0] } : g)));
   };
 
   const SplitGroup = ({ g }) => {
@@ -60841,7 +60831,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: SORTFIX 2026-07-27a");
+      console.log("CB build: RECVFIX 2026-07-26f");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
