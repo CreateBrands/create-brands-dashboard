@@ -36216,6 +36216,12 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
             const fmtDay = (iso) => iso ? new Date(iso).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) : null;
             const sentDay = fmtDay(d.dispatched_at);
             const recvDay = fmtDay(d.received_at);
+            // DELIVMETA: when the order was actually placed, from the originating
+            // sales order — the card previously showed only the dispatch date, so
+            // there was no way to see how long something had been outstanding.
+            const orderedDay = fmtDay(d.orderedAt);
+            const daysWaiting = d.dispatched_at && !d.received_at
+              ? Math.floor((Date.now() - Date.parse(d.dispatched_at)) / 86400000) : null;
             const storeName = (myStores.find(s => s.id === d.store_id) || {}).name || null;
             const source = d.supplier_name || (d.dist_order_id ? "Distribution (warehouse)" : null);
             const progress = d.status === "receiving" && d.lineCount ? `${d.receivedCount}/${d.lineCount} checked` : null;
@@ -36232,14 +36238,19 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
                     {d.lineValue ? <span style={{ color: C.inkFaint }}> · £{d.lineValue.toFixed(2)}</span> : null}
                     {d.firstItem && <span style={{ color: C.inkFaint }}> · {d.firstItem}{d.lineCount > 1 ? ` +${d.lineCount - 1}` : ""}</span>}
                   </div>
-                  {/* Identifying detail line: store · sent day · driver */}
+                  {/* Identifying detail line: store · ordered · sent · driver */}
                   <div className="text-[11px] mt-1 flex flex-wrap gap-x-2 gap-y-0.5" style={{ color: C.inkFaint }}>
                     {storeName && <span>📍 {storeName}</span>}
+                    {orderedDay && <span>📝 ordered {orderedDay}</span>}
                     {sentDay && <span>🚚 sent {sentDay}</span>}
                     {d.driver && <span>👤 {d.driver}</span>}
                   </div>
                   {/* Received line only once it's been received */}
-                  {recvDay && <div className="text-[11px] mt-0.5" style={{ color: C.green }}>✓ received {recvDay}{d.received_by ? ` by ${d.received_by}` : ""}</div>}
+                  {recvDay
+                    ? <div className="text-[11px] mt-0.5" style={{ color: C.green }}>✓ received {recvDay}{d.received_by ? ` by ${d.received_by}` : ""}</div>
+                    : daysWaiting != null && daysWaiting >= 1
+                      ? <div className="text-[11px] mt-0.5 font-semibold" style={{ color: C.amber }}>⏳ not received — waiting {daysWaiting} day{daysWaiting !== 1 ? "s" : ""}</div>
+                      : null}
                   {progress && <div className="text-[11px] mt-1 font-semibold" style={{ color: C.amber }}>{progress}</div>}
                 </div>
                 <div className="px-2 py-1 rounded-full text-[10px] font-bold flex-shrink-0" style={{ background: d.status==="receiving"?C.amberBg:C.greenBg, color: d.status==="receiving"?C.amber:C.green }}>{d.status === "receiving" ? "Receiving" : "New"}</div>
@@ -45384,7 +45395,12 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
   const storeName = (id) => stores.find(s=>s.id===id)?.shortName || stores.find(s=>s.id===id)?.name || "";
   const acctName = (id) => cashAccounts.find(a=>a.id===id)?.name || "";
 
-  const byStatus = (st) => claims.filter(c => c.status === st);
+  // SORTFIX: this used to filter only, so the order was whatever the fetch
+  // happened to return — and grouping split claims could pull a recent claim
+  // down to wherever its receipt-mates first appeared. Newest first, always.
+  const claimTime = (c) => `${c.expenseDate || ""} ${c.createdAt || ""}`;
+  const byStatus = (st) => claims.filter(c => c.status === st)
+    .slice().sort((a, b) => claimTime(b).localeCompare(claimTime(a)));
   const counts = { submitted: byStatus("submitted").length, approved: byStatus("approved").length, reconciled: byStatus("reconciled").length, rejected: byStatus("rejected").length };
 
   const openNew = () => { setErr(""); setForm({ description:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), expenseTypeId:"", accountKey:"", categoryId:"", payeeId:"", storeId:"", vendor:"", reference:"", receiptUrl:null }); setTab("new"); };
@@ -45492,8 +45508,13 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
       if (!byReceipt.has(key)) { const g = { key, children: [] }; byReceipt.set(key, g); out.push(g); }
       byReceipt.get(key).children.push(c);
     });
-    // A "group" of one is just a normal claim.
-    return out.map(g => (g.single ? g : (g.children.length === 1 ? { single: g.children[0] } : g)));
+    // SORTFIX: a group takes the date of its NEWEST member, so a split claim
+    // never sinks to wherever its earliest receipt-mate happened to sit.
+    const rank = (g) => g.single ? claimTime(g.single)
+      : g.children.map(claimTime).sort().reverse()[0] || "";
+    return out
+      .map(g => (g.single ? g : (g.children.length === 1 ? { single: g.children[0] } : g)))
+      .sort((a, b) => rank(b).localeCompare(rank(a)));
   };
 
   const SplitGroup = ({ g }) => {
@@ -60831,7 +60852,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: RECVFIX 2026-07-26f");
+      console.log("CB build: DELIVMETA 2026-07-27b");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:

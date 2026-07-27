@@ -16139,6 +16139,22 @@ export async function fetchIncomingDeliveries(storeId) {
       d.firstItem = g ? g.firstItem : null;
     });
   }
+  // DELIVMETA: the card showed only the dispatch date, so nobody could tell how
+  // long an order had been waiting or when it actually landed. `store_deliveries`
+  // has dispatched_at / received_at / received_by, but the ORDER date lives on
+  // the originating sales order, reached via dist_order_id.
+  const orderIds = [...new Set(deliveries.map(d => d.dist_order_id).filter(Boolean))];
+  if (orderIds.length) {
+    const { data: sos } = await supabase.from("dist_sales_orders")
+      .select("id, created_at, order_date, reference").in("id", orderIds);
+    const byOrder = {};
+    (sos || []).forEach(o => { byOrder[o.id] = o; });
+    deliveries.forEach(d => {
+      const o = d.dist_order_id ? byOrder[d.dist_order_id] : null;
+      d.orderedAt = o ? (o.order_date || o.created_at || null) : null;
+      d.orderRef = o ? (o.reference || null) : null;
+    });
+  }
   return deliveries;
 }
 
