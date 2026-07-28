@@ -210,7 +210,7 @@ import {
   LifeBuoy, Inbox, Send, Paperclip, Bell, ChevronUp, ChevronDown as ChevronDownIcon, UserPlus, AtSign, Briefcase,
   Globe, FileText, FolderOpen, Megaphone, ChefHat, PoundSterling, Search, GraduationCap, Maximize2, Minimize2, Wallet, Receipt, Save, ShoppingCart, Printer, Package,
   Video, Quote, Table as TableIcon, Lightbulb, Bold as BoldIcon, ListOrdered, Heading as HeadingIcon, Image, Type,
-  Ship, Plane
+  Ship, Plane, Archive
 } from "lucide-react";
 
 // ─── Lazy-load cache for Flipdish sales ───────────────────────────────────────
@@ -60957,7 +60957,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: ARCHIVETEAM 2026-07-27e");
+      console.log("CB build: ARCHIVETEAM 2026-07-27f");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
