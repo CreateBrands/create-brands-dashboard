@@ -56258,6 +56258,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
 
       {amendModal && (
         <AmendPunchModal record={amendModal}
+          employee={(opsTeam || []).find(m => m.id === amendModal.employeeId) || null}
           onSave={updated => { onUpdate(updated); setAmendModal(null); }}
           onDelete={id => { onDelete(id); setAmendModal(null); }}
           onClose={() => setAmendModal(null)}
@@ -56665,7 +56666,7 @@ function PayBreakdown({ r, member }) {
   );
 }
 
-function AmendPunchModal({ record, onSave, onDelete, onClose }) {
+function AmendPunchModal({ record, employee, onSave, onDelete, onClose }) {
   const toTimeStr = (iso) => iso ? new Date(iso).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) : "";
   const [punchInTime,  setPunchInTime]  = useState(toTimeStr(record.punchIn));
   const [punchOutTime, setPunchOutTime] = useState(toTimeStr(record.punchOut));
@@ -56721,7 +56722,13 @@ function AmendPunchModal({ record, onSave, onDelete, onClose }) {
       return;
     }
     const hoursWorked = newPunchOut ? computePunchHours({ punchIn: newPunchIn, punchOut: newPunchOut, breakMinutes: newBreakMins, breakStart: newBreakStart, breakEnd: newBreakEnd, breakPaid }).hours : null;
-    const grossPay    = hoursWorked && record.hourlyRate ? Math.round(hoursWorked*record.hourlyRate*100)/100 : null;
+    // SALARYGUARD: every other pricing path checks isSalaried() before
+    // multiplying — this one did not. For salaried staff `hourly_rate` holds an
+    // ANNUAL amount (the column is reused as amount-in-unit), so amending one
+    // shift computed hours x GBP 30,600 and wrote GBP 287,640 of gross pay.
+    // Salaried people are paid a fixed amount; their punches record hours only.
+    const grossPay    = (hoursWorked && record.hourlyRate && !isSalaried(employee))
+      ? Math.round(hoursWorked*record.hourlyRate*100)/100 : null;
     const fmtT = (iso) => iso ? new Date(iso).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) : "—";
     const _audit = [];
     if (record.punchIn !== newPunchIn) _audit.push({ field: "punch_in", oldValue: fmtT(record.punchIn), newValue: fmtT(newPunchIn) });
@@ -60957,7 +60964,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: ARCHIVETEAM 2026-07-27f");
+      console.log("CB build: SALARYGUARD 2026-07-28a");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
