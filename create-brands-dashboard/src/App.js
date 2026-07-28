@@ -56342,7 +56342,11 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
               if (r.status === "open") pill = <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-amber-950 border border-amber-500/30">Clocked in</span>;
               else if (needsApproval || needsOTApproval) pill = <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-amber-950 border border-amber-500/30">Needs approval</span>;
               else if (isRejected) pill = <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-600 text-white border border-red-500/30">OT rejected</span>;
-              else pill = <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-600 text-white border border-emerald-500/30">✓ Approved</span>;
+              // PAYPERIOD 2026-07-28e — "Approved" now means punch_records.approved
+              // is actually true. A settled punch nobody has signed off reads
+              // "No issues": nothing needs a manager, but it is not approved.
+              else if (r.approved) pill = <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-600 text-white border border-emerald-500/30">✓ Approved</span>;
+              else pill = <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-700 text-slate-200 border border-slate-600">No issues</span>;
               const attention = needsApproval || needsOTApproval || r.status === "open";
               return (
                 <div key={r.id} className={`p-3 ${attention ? "bg-amber-950/10" : ""}`}>
@@ -56448,7 +56452,8 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
             if (r.status === "open") statusPill = <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-amber-950 border border-amber-500/30">Clocked in</span>;
             else if (needsApproval || needsOTApproval) statusPill = <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-amber-950 border border-amber-500/30">Needs approval</span>;
             else if (isRejected) statusPill = <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-600 text-white border border-red-500/30">OT rejected</span>;
-            else if (r.approved || isSettled) statusPill = <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-600 text-white border border-emerald-500/30">✓ Approved</span>;
+            else if (r.approved) statusPill = <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-600 text-white border border-emerald-500/30">✓ Approved</span>;
+            else if (isSettled) statusPill = <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-700 text-slate-200 border border-slate-600">No issues</span>;
 
             return (
               <Fragment key={r.id}>
@@ -61538,7 +61543,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: PAYPERIOD 2026-07-28d");
+      console.log("CB build: PAYPERIOD 2026-07-28e");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
