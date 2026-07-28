@@ -1186,6 +1186,31 @@ export async function insertPunchIn(record) {
 // Minimum unpaid break (minutes) required by raw shift length:
 //   4h or less → 0 (paid in full, too short to enforce a break)
 //   over 4h, under 6h → 15 · 6–10h → 30 · over 10h → 45
+// BREAKSTART: the unpaid-break rule was live in the calculation from 2026-06-11
+// but staff were only told on 2026-06-29, so 18 days of shifts were reduced
+// before anyone was informed. The rule now applies ONLY to punches on or after
+// the date it was announced. Anything earlier is paid on the hours actually
+// clocked, with only a break the employee genuinely punched deducted.
+// Payroll is being taken from 2026-06-21, so every punch in that window must
+// come through with no enforced deduction at all.
+export const BREAK_RULE_EFFECTIVE_FROM = "2026-06-29";
+
+// Was the enforced-break rule in force for a punch that started at `punchIn`?
+// Undated calls default to TRUE so live clock-outs (which always pass a date)
+// and any future caller keep the rule.
+export function breakRuleAppliesOn(punchIn) {
+  if (!punchIn) return true;
+  const d = new Date(punchIn);
+  if (isNaN(d.getTime())) return true;
+  // Compare calendar dates, not instants — a shift is judged by the day it
+  // started, so an overnight punch is not split across the boundary.
+  const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return day >= BREAK_RULE_EFFECTIVE_FROM;
+}
+
+// Minimum unpaid break (minutes) required by raw shift length:
+//   4h or less → 0 (paid in full, too short to enforce a break)
+//   over 4h, under 6h → 15 · 6–10h → 30 · over 10h → 45
 export function requiredBreakMins(rawHours) {
   if (!(rawHours > 0)) return 0;
   if (rawHours <= 4) return 0;     // shifts of 4h or less: no enforced break
@@ -1220,6 +1245,9 @@ export function computePunchHours({ punchIn, punchOut, breakMinutes = 0, breakSt
   if (outMs < inMs) { outMs += 86400000; overnight = true; }
   const rawHours = (outMs - inMs) / 3600000;
 
+  // BREAKSTART: the enforced minimum only applies from the date staff were told.
+  const ruleOn = applyBreakRule && breakRuleAppliesOn(punchIn);
+
   // Total punched break (including a break still open at the reference moment).
   let punchedBreakMins = Number(breakMinutes) || 0;
   if (breakStart && !breakEnd) {
@@ -1228,13 +1256,14 @@ export function computePunchHours({ punchIn, punchOut, breakMinutes = 0, breakSt
     // Cap an OPEN break so a forgotten "end break" tap can't count hours of work
     // as break. Same rule as the clock-out fold: never let the total exceed the
     // required statutory break for the shift (or what was already punched).
-    const reqForShift = applyBreakRule ? requiredBreakMins(rawHours) : 0;
+    const reqForShift = ruleOn ? requiredBreakMins(rawHours) : 0;
     const cap = Math.max(reqForShift, punchedBreakMins);
     punchedBreakMins = Math.min(punchedBreakMins + openMins, cap);
   }
 
   // Apply the unpaid-break rule: deduct the greater of punched vs the minimum.
-  const reqMins = applyBreakRule ? requiredBreakMins(rawHours) : 0;
+  // BREAKSTART: no enforced break before the rule was announced.
+  const reqMins = ruleOn ? requiredBreakMins(rawHours) : 0;
   let breakMins = Math.max(punchedBreakMins, reqMins);
   const breakEnforced = breakMins > punchedBreakMins;   // true when we bumped up to the minimum
 
