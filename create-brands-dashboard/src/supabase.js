@@ -355,6 +355,21 @@ export async function updateOpsTeamMember(id, patch) {
   if (!fresh) throw new Error(`Employee ${id} updated but could not be retrieved.`);
   return dbOpsTeamToApp(fresh);
 }
+// ARCHIVETEAM: the safe alternative to deleting a person. Five tables cascade
+// off ops_team (notes, pay history, certifications, documents, training
+// progress), so a hard delete silently destroys someone's employment record —
+// which you are generally required to retain. Archiving keeps every row and
+// simply removes them from active lists; the whole app already filters on
+// `archivedAt`, so nothing else needs to change.
+export async function archiveOpsTeamMember(id) {
+  if (!id) throw new Error("id required");
+  return updateOpsTeamMember(id, { archivedAt: new Date().toISOString() });
+}
+export async function unarchiveOpsTeamMember(id) {
+  if (!id) throw new Error("id required");
+  return updateOpsTeamMember(id, { archivedAt: null });
+}
+
 export async function removeOpsTeamMember(id) {
   const { error } = await supabase.from("ops_team").delete().eq("id", id);
   if (error) throw error;

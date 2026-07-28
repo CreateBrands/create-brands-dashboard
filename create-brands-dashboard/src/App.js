@@ -11,6 +11,7 @@ import {
   fetchCleaningTasks, upsertCleaningTask, removeCleaningTask,
   fetchAssignments, upsertAssignment, removeAssignment,
   fetchOpsTeam, upsertOpsTeamMember, removeOpsTeamMember, updateOpsTeamMember,
+  archiveOpsTeamMember, unarchiveOpsTeamMember,
   fetchAccessPermissions, setAccessPermission, setAccessPermissionsBulk,
   fetchEntityOverrides, setEntityOverride,
   fetchCustomRoles, upsertCustomRole, archiveCustomRole, setMemberCustomRole,
@@ -34806,17 +34807,20 @@ function Modal({ title, onClose, children, footer, maxW = "max-w-lg", fullScreen
   );
 }
 
-function OpsConfirmModal({ message, onConfirm, onClose }) {
+function OpsConfirmModal({ message, onConfirm, onClose, confirmLabel = "Delete" }) {
+  // ARCHIVETEAM: archiving is reversible, so it should not be dressed in the
+  // same red as a permanent delete — the colour is part of the warning.
+  const destructive = /delete/i.test(confirmLabel);
   return (
     <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center sm:p-4">
-      <div className="bg-slate-900 border border-red-500/30 w-full max-w-sm p-6 space-y-4 rounded-t-3xl sm:rounded-2xl" style={{ paddingBottom: "max(1.5rem, env(safe-area-inset-bottom))" }}>
+      <div className={`bg-slate-900 border w-full max-w-sm p-6 space-y-4 rounded-t-3xl sm:rounded-2xl ${destructive ? "border-red-500/30" : "border-amber-500/30"}`} style={{ paddingBottom: "max(1.5rem, env(safe-area-inset-bottom))" }}>
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-red-500/25 flex items-center justify-center flex-shrink-0"><AlertTriangle size={18} className="text-red-400"/></div>
+          <div className={`w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 ${destructive ? "bg-red-500/25" : "bg-amber-500/25"}`}><AlertTriangle size={18} className={destructive ? "text-red-400" : "text-amber-400"}/></div>
           <div className="text-sm text-slate-700">{message}</div>
         </div>
         <div className="flex gap-3">
           <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
-          <button onClick={() => { onConfirm(); onClose(); }} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-sm font-semibold hover:bg-red-500">Delete</button>
+          <button onClick={() => { onConfirm(); onClose(); }} className={`flex-1 py-2.5 rounded-xl text-white text-sm font-semibold ${destructive ? "bg-red-600 hover:bg-red-500" : "bg-amber-600 hover:bg-amber-500"}`}>{confirmLabel}</button>
         </div>
       </div>
     </div>
@@ -44336,10 +44340,13 @@ function OpsTeamView({
   opsTeam = [], users = [],
   customRoles = [],
   onAddOpsTeam, onUpdateOpsTeam, onDeleteOpsTeam,
+  onArchiveOpsTeam, onRestoreOpsTeam,
   onOpenEmployeeProfile, currentUser,
 }) {
   const [tmModal, setTmModal] = useState(null);
   const [delTarget, setDelTarget] = useState(null);
+  // ARCHIVETEAM: archived people are hidden by default but never destroyed.
+  const [showArchived, setShowArchived] = useState(false);
   const [search, setSearch] = useState("");
   const [filterStore, setFilterStore] = useState("");
   const [filterDept, setFilterDept] = useState("");
@@ -44362,14 +44369,16 @@ function OpsTeamView({
   // Active employees (not archived). Non-HQ users (managers, incl. JV/franchise)
   // only see members assigned to a store they can see; HQ/owner see everyone.
   const base = useMemo(() => {
-    const all = [...opsTeam.filter(m => !m.archivedAt), ...managersAsRoster(users, opsTeam)];
+    const all = showArchived
+      ? [...opsTeam.filter(m => m.archivedAt)]
+      : [...opsTeam.filter(m => !m.archivedAt), ...managersAsRoster(users, opsTeam)];
     // Everyone — including HQ/owner — is scoped to the visible stores so the
     // grouped list matches the rest of the dashboard. visibleStoreIds already
     // reflects the role's default store scope.
     const visible = new Set(visibleStoreIds || []);
     if (visible.size === 0) return isHq ? all : [];
     return all.filter(m => (m.storeIds || []).some(sid => visible.has(sid)));
-  }, [opsTeam, users, isHq, visibleStoreIds]);
+  }, [opsTeam, users, isHq, visibleStoreIds, showArchived]);
 
   const pendingCount = useMemo(() => base.filter(m => {
     if (m.status !== "pending_setup") return false;
@@ -44421,6 +44430,7 @@ function OpsTeamView({
 
   const selCls = "px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
   const anyFilter = search || filterStore || filterDept || filterRole || showOnlyPending || showNoPhoto;
+  const archivedCount = (opsTeam || []).filter(m => m.archivedAt).length;
   const noPhotoCount = useMemo(() => (base || []).filter(m => !m.photoUrl).length, [base]);
 
   return (
@@ -44450,6 +44460,8 @@ function OpsTeamView({
         </select>
         <button onClick={() => setShowOnlyPending(v => !v)} className={`px-3 py-2 rounded-xl text-sm font-semibold transition-colors ${showOnlyPending ? "bg-amber-500 text-amber-950" : "bg-slate-900 text-amber-300 border border-amber-900/60 hover:bg-amber-950/40"}`}>{showOnlyPending ? "Showing pending" : "Pending only"}</button>
         <button onClick={() => setShowNoPhoto(v => !v)} className={`px-3 py-2 rounded-xl text-sm font-semibold transition-colors ${showNoPhoto ? "bg-indigo-600 text-white" : "bg-slate-900 text-indigo-300 border border-indigo-900/60 hover:bg-indigo-950/40"}`}>{showNoPhoto ? "Showing no photo" : `No photo${noPhotoCount?` (${noPhotoCount})`:""}`}</button>
+        {/* ARCHIVETEAM: archived people are still here, just out of the way. */}
+        <button onClick={() => setShowArchived(v => !v)} className={`px-3 py-2 rounded-xl text-sm font-semibold transition-colors ${showArchived ? "bg-amber-600 text-white" : "bg-slate-900 text-amber-300 border border-amber-900/60 hover:bg-amber-950/40"}`}>{showArchived ? "← Back to active team" : `Archived${archivedCount ? ` (${archivedCount})` : ""}`}</button>
         {anyFilter && <button onClick={() => { setSearch(""); setFilterStore(""); setFilterDept(""); setFilterRole(""); setShowOnlyPending(false); }} className="px-3 py-2 rounded-xl text-sm font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700">Clear</button>}
       </div>
 
@@ -44487,7 +44499,30 @@ function OpsTeamView({
                           role: "", department: "", pin: "",
                         })} className="px-2.5 py-2 rounded-xl bg-indigo-600/80 text-white hover:bg-indigo-600 text-[11px] font-semibold whitespace-nowrap">+ Create profile</button>}
                         {!m.isManager && <button onClick={() => setTmModal(m)} className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button>}
-                        {!m.isManager && <button onClick={() => setDelTarget({ msg: `Delete "${m.firstName} ${m.lastName}"? This removes the team member.`, fn: () => onDeleteOpsTeam(m.id) })} className="p-2 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20"><Trash2 size={13}/></button>}
+                        {/* ARCHIVETEAM: archiving is the normal action and is open to
+                            managers. Deleting cascades away notes, pay history,
+                            certifications, documents and training progress, so it stays
+                            owner-only and warns about exactly what it destroys. */}
+                        {!m.isManager && !m.archivedAt && isManagerOrAbove(currentUser?.role) && (
+                          <button onClick={() => setDelTarget({
+                            msg: `Archive "${m.firstName} ${m.lastName}"? They come off the active team, rotas and lists. Their punches, pay history, documents and training records are all kept, and you can restore them any time.`,
+                            confirmLabel: "Archive",
+                            fn: () => onArchiveOpsTeam?.(m.id),
+                          })} title="Archive — keeps all their records"
+                            className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-amber-300 hover:bg-amber-950/20"><Archive size={13}/></button>
+                        )}
+                        {!m.isManager && m.archivedAt && isManagerOrAbove(currentUser?.role) && (
+                          <button onClick={() => onRestoreOpsTeam?.(m.id)} title="Restore to the active team"
+                            className="px-2.5 py-2 rounded-xl bg-emerald-600/80 text-white hover:bg-emerald-600 text-[11px] font-semibold whitespace-nowrap">Restore</button>
+                        )}
+                        {!m.isManager && isHq && (
+                          <button onClick={() => setDelTarget({
+                            msg: `Permanently delete "${m.firstName} ${m.lastName}"? This also destroys their notes, pay history, certifications, documents and training progress. Punch records survive but are left orphaned. This cannot be undone — archive instead unless you are certain.`,
+                            confirmLabel: "Delete permanently",
+                            fn: () => onDeleteOpsTeam(m.id),
+                          })} title="Delete permanently (owner only)"
+                            className="p-2 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20"><Trash2 size={13}/></button>
+                        )}
                       </div>
                     </div>
                   );
@@ -44515,7 +44550,7 @@ function OpsTeamView({
           onClose={() => setTmModal(null)}
         />
       )}
-      {delTarget && <OpsConfirmModal message={delTarget.msg} onConfirm={delTarget.fn} onClose={() => setDelTarget(null)}/>}
+      {delTarget && <OpsConfirmModal message={delTarget.msg} confirmLabel={delTarget.confirmLabel} onConfirm={delTarget.fn} onClose={() => setDelTarget(null)}/>}
     </div>
   );
 }
@@ -48056,7 +48091,7 @@ function OpsSettingsView({
           onClose={() => setCtModal(null)}
         />
       )}
-      {delTarget && <OpsConfirmModal message={delTarget.msg} onConfirm={delTarget.fn} onClose={() => setDelTarget(null)}/>}
+      {delTarget && <OpsConfirmModal message={delTarget.msg} confirmLabel={delTarget.confirmLabel} onConfirm={delTarget.fn} onClose={() => setDelTarget(null)}/>}
     </div>
   );
 }
@@ -60922,7 +60957,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: PACKLEARN 2026-07-27d");
+      console.log("CB build: ARCHIVETEAM 2026-07-27e");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -62057,6 +62092,31 @@ export default function App() {
     showToast("Updated");
     return s;
   }, [showToast]);
+  // ARCHIVETEAM: the normal way to remove someone. Keeps notes, pay history,
+  // certifications, documents and training progress — all of which a hard
+  // delete cascades away — and keeps punch records attached to a live person.
+  const archiveOpsTeam = useCallback(async id => {
+    try {
+      const s = await archiveOpsTeamMember(id);
+      setOpsTeam(ts => ts.map(x => x.id === s.id ? s : x));
+      showToast("Archived — their records are kept");
+      return s;
+    } catch (err) {
+      showToast(`Archive failed: ${err?.message || err}`, "error");
+      throw err;
+    }
+  }, [showToast]);
+  const restoreOpsTeam = useCallback(async id => {
+    try {
+      const s = await unarchiveOpsTeamMember(id);
+      setOpsTeam(ts => ts.map(x => x.id === s.id ? s : x));
+      showToast("Restored to the active team");
+      return s;
+    } catch (err) {
+      showToast(`Restore failed: ${err?.message || err}`, "error");
+      throw err;
+    }
+  }, [showToast]);
   const deleteOpsTeam = useCallback(async id=>{
     try {
       await removeOpsTeamMember(id);
@@ -62726,7 +62786,7 @@ export default function App() {
                     storeDepartments={storeDepartments} storeRoles={storeRoles}
                     opsTeam={opsTeam} users={users}
                     customRoles={customRoles}
-                    onAddOpsTeam={addOpsTeam} onUpdateOpsTeam={updateOpsTeam} onDeleteOpsTeam={deleteOpsTeam}
+                    onAddOpsTeam={addOpsTeam} onUpdateOpsTeam={updateOpsTeam} onDeleteOpsTeam={deleteOpsTeam} onArchiveOpsTeam={archiveOpsTeam} onRestoreOpsTeam={restoreOpsTeam}
                     onOpenEmployeeProfile={openEmployeeProfile}
                     currentUser={currentUser}
                   />}
@@ -62882,7 +62942,7 @@ export default function App() {
               onAddChecklist={addChecklist} onUpdateChecklist={updateChecklist} onDeleteChecklist={deleteChecklist}
               onAddTempUnit={addTempUnit} onUpdateTempUnit={updateTempUnit} onDeleteTempUnit={deleteTempUnit}
               onAddCleanTask={addCleanTask} onUpdateCleanTask={updateCleanTask} onDeleteCleanTask={deleteCleanTask}
-              onAddOpsTeam={addOpsTeam} onUpdateOpsTeam={updateOpsTeam} onDeleteOpsTeam={deleteOpsTeam}
+              onAddOpsTeam={addOpsTeam} onUpdateOpsTeam={updateOpsTeam} onDeleteOpsTeam={deleteOpsTeam} onArchiveOpsTeam={archiveOpsTeam} onRestoreOpsTeam={restoreOpsTeam}
               onOpenEmployeeProfile={openEmployeeProfile}
               onAddShiftPreset={addShiftPreset} onUpdateShiftPreset={updateShiftPreset} onDeleteShiftPreset={deleteShiftPreset}
               onAddStoreDepartment={addStoreDepartment} onUpdateStoreDepartment={updateStoreDepartmentRow}
