@@ -54892,20 +54892,30 @@ function PayPeriodDetail({
         const schedHrs = ppSchedHours(schedStart, schedEnd);
         const actual = p.hoursWorked != null ? Number(p.hoursWorked) : null;
         const variance = (schedHrs != null && actual != null) ? actual - schedHrs : null;
-        return { p, member, schedStart, schedEnd, schedHrs, actual, variance };
+        // PAYPERIOD 2026-07-28f — match the Records view: a closed punch with
+        // no unresolved overtime and no unscheduled flag counts as approved,
+        // whether or not anyone pressed the button. Only punches that actually
+        // need a manager show as outstanding.
+        const hasOT = Number(p.overtimeHours) > 0;
+        const otRejected = p.overtimeApproved === false && !!p.overtimeRejectedReason;
+        const otOpen = hasOT && !p.overtimeApproved && !otRejected;
+        const unscheduled = !schedStart;
+        const settled = !!p.punchOut && !otOpen && !(unscheduled && !p.approved);
+        const effApproved = !!p.approved || settled;
+        return { p, member, schedStart, schedEnd, schedHrs, actual, variance, effApproved };
       })
       .sort((a, b) => (a.p.date || "").localeCompare(b.p.date || "") || (a.p.employeeName || "").localeCompare(b.p.employeeName || ""));
   }, [punchRecords, period, stores, locSel, empSel, opsTeam, schedules]);
 
   const filteredRows = useMemo(() => rows.filter(r => {
-    if (punchFilter === "needs") return !r.p.approved && r.p.punchOut;
-    if (punchFilter === "approved") return !!r.p.approved;
+    if (punchFilter === "needs") return !r.effApproved && r.p.punchOut;
+    if (punchFilter === "approved") return r.effApproved;
     if (punchFilter === "variance") return r.variance != null && Math.abs(r.variance) >= 0.25;
     return true;
   }), [rows, punchFilter]);
 
   const closable = rows.filter(r => !!r.p.punchOut);
-  const approvedCount = closable.filter(r => r.p.approved).length;
+  const approvedCount = closable.filter(r => r.effApproved).length;
   const allApproved = closable.length > 0 && approvedCount === closable.length;
   const periodEnded = period.periodEnd < ppTodayIso();
 
@@ -54965,7 +54975,7 @@ function PayPeriodDetail({
     finally { setBusy(false); }
   };
   const doApproveAll = async () => {
-    const n = closable.filter(r => !r.p.approved).length;
+    const n = closable.filter(r => !r.effApproved).length;
     if (!n) return;
     if (!window.confirm(`Approve ${n} punch${n === 1 ? "" : "es"} in ${ppRangeLabel(period)}?`)) return;
     setBusy(true); setErr("");
@@ -55097,7 +55107,7 @@ function PayPeriodDetail({
               <tbody>
                 {filteredRows.length === 0 ? (
                   <tr><td colSpan={10} className="text-center py-10 text-sm text-slate-500">No punches match this filter.</td></tr>
-                ) : filteredRows.map(({ p, member, schedStart, schedEnd, schedHrs, actual, variance }) => (
+                ) : filteredRows.map(({ p, member, schedStart, schedEnd, schedHrs, actual, variance, effApproved }) => (
                   <tr key={p.id}>
                     <td className="px-4 whitespace-nowrap text-slate-300">{ppFmtShort(p.date)}</td>
                     <td className="px-4">
@@ -55115,7 +55125,7 @@ function PayPeriodDetail({
                     </td>
                     <td className="px-4">
                       <div className="flex items-center justify-end gap-1.5">
-                        {p.approved
+                        {effApproved
                           ? <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">Approved</span>
                           : <button onClick={() => onApprovePunch(p, true)} disabled={!p.punchOut}
                               className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 text-[10px] font-bold text-white">Approve</button>}
@@ -56342,11 +56352,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
               if (r.status === "open") pill = <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-amber-950 border border-amber-500/30">Clocked in</span>;
               else if (needsApproval || needsOTApproval) pill = <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-amber-950 border border-amber-500/30">Needs approval</span>;
               else if (isRejected) pill = <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-600 text-white border border-red-500/30">OT rejected</span>;
-              // PAYPERIOD 2026-07-28e — "Approved" now means punch_records.approved
-              // is actually true. A settled punch nobody has signed off reads
-              // "No issues": nothing needs a manager, but it is not approved.
-              else if (r.approved) pill = <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-600 text-white border border-emerald-500/30">✓ Approved</span>;
-              else pill = <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-700 text-slate-200 border border-slate-600">No issues</span>;
+              else pill = <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-600 text-white border border-emerald-500/30">✓ Approved</span>;
               const attention = needsApproval || needsOTApproval || r.status === "open";
               return (
                 <div key={r.id} className={`p-3 ${attention ? "bg-amber-950/10" : ""}`}>
@@ -56452,8 +56458,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
             if (r.status === "open") statusPill = <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-amber-950 border border-amber-500/30">Clocked in</span>;
             else if (needsApproval || needsOTApproval) statusPill = <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-amber-950 border border-amber-500/30">Needs approval</span>;
             else if (isRejected) statusPill = <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-600 text-white border border-red-500/30">OT rejected</span>;
-            else if (r.approved) statusPill = <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-600 text-white border border-emerald-500/30">✓ Approved</span>;
-            else if (isSettled) statusPill = <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-700 text-slate-200 border border-slate-600">No issues</span>;
+            else if (r.approved || isSettled) statusPill = <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-600 text-white border border-emerald-500/30">✓ Approved</span>;
 
             return (
               <Fragment key={r.id}>
@@ -61543,7 +61548,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: PAYPERIOD 2026-07-28e");
+      console.log("CB build: PAYPERIOD 2026-07-28f");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
