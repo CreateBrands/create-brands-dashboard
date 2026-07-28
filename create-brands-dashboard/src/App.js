@@ -190,6 +190,7 @@ import {
   fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, fetchStoreOrderPrefs, saveStoreOrderPrefs, fetchChatGroups, createChatGroup, updateChatGroup, deleteChatGroup, deleteChatThread, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment, editPendingOrderLines, mergePendingOrders, fetchDeliverySourceReceipt, synthesizeInvoiceFromItems, normalizeReceiptDescription,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
+  fetchFreshOrderCustomers, saveFreshOrderCustomers, freshAccessActive,
   fetchPaySchedule, savePaySchedule, generatePayPeriods, payPeriodStatus, fetchPayPeriodLocations,
   closePayPeriodStore, reopenPayPeriodStore, overridePayPeriodDates, setPunchApproved, approvePunchesInPeriod,
 } from "./supabase";
@@ -13547,8 +13548,22 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // FRESHACCESS — who may see and order fresh produce. Customer-scoped, so it
+  // ignores the store picker above.
+  const [freshAllowed, setFreshAllowed] = useState([]);
+  const [freshCusts, setFreshCusts] = useState([]);
 
   useEffect(() => { if (!storeId && myStores.length) setStoreId(myStores[0].id); }, [myStores, storeId]);
+  useEffect(() => {
+    (async () => {
+      const [a, c] = await Promise.all([
+        fetchFreshOrderCustomers().catch(() => []),
+        fetchDistCustomers().catch(() => []),
+      ]);
+      setFreshAllowed(a || []);
+      setFreshCusts((c || []).filter(x => x.active !== false));
+    })();
+  }, []);
   useEffect(() => {
     (async () => {
       try {
@@ -13636,15 +13651,50 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
         <select value={storeId} onChange={e => setStoreId(e.target.value)} className={ec}>
           {myStores.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
-        {["items", "round", "approvals"].map(k => (
+        {["items", "round", "approvals", "fresh"].map(k => (
           <button key={k} onClick={() => setTab(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${tab === k ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-300"}`}>
-            {k === "items" ? "Items · supplier / location / frequency" : k === "round" ? "Team order round" : "Order approvals"}
+            {k === "items" ? "Items · supplier / location / frequency" : k === "round" ? "Team order round" : k === "approvals" ? "Order approvals" : "Fresh access"}
           </button>
         ))}
       </div>
       {err && <div className="text-xs text-rose-400">{err}</div>}
 
       {(supOpen || locOpen) && <div className="fixed inset-0 z-10" onClick={closePopovers} />}
+      {tab === "fresh" && (() => {
+        const active = freshAccessActive(freshAllowed);
+        const toggle = async (id) => {
+          const next = freshAllowed.includes(id) ? freshAllowed.filter(x => x !== id) : [...freshAllowed, id];
+          setFreshAllowed(next);
+          setBusy(true); setErr("");
+          try { await saveFreshOrderCustomers(next); }
+          catch (e) { setErr(e.message); setFreshAllowed(freshAllowed); }
+          finally { setBusy(false); }
+        };
+        return (
+          <div className="space-y-3">
+            <div className={`rounded-xl border p-3 text-xs ${active ? "border-emerald-500/30 bg-emerald-950/20 text-emerald-300" : "border-amber-500/30 bg-amber-950/20 text-amber-300"}`}>
+              {active
+                ? `Fresh produce is restricted. ${freshAllowed.length} customer${freshAllowed.length === 1 ? "" : "s"} ticked below can see and order it — everyone else cannot see fresh items at all.`
+                : "Nothing ticked yet, so fresh produce is currently visible to every customer. Ticking the first one switches restriction on."}
+            </div>
+            <div className="text-[11px] text-slate-500">Central Kitchen is always allowed and does not need ticking.</div>
+            <div className="border border-slate-800 rounded-xl overflow-hidden">
+              {freshCusts.length === 0 ? (
+                <div className="px-3 py-6 text-center text-xs text-slate-500">No customers found.</div>
+              ) : freshCusts.map(c => (
+                <label key={c.id} className="flex items-center gap-2.5 px-3 py-2 border-t border-slate-800/60 first:border-t-0 cursor-pointer hover:bg-slate-800/40">
+                  <input type="checkbox" disabled={busy || c.isCentralKitchen}
+                    checked={c.isCentralKitchen || freshAllowed.includes(c.id)}
+                    onChange={() => toggle(c.id)} />
+                  <span className="text-xs text-white">{c.displayName || c.companyName || c.id}</span>
+                  {c.isCentralKitchen && <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">Central Kitchen — always allowed</span>}
+                </label>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+
       {tab === "items" && (
         <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-2">
@@ -61548,7 +61598,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: PAYPERIOD 2026-07-28f");
+      console.log("CB build: FRESHACCESS 2026-07-28g");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:

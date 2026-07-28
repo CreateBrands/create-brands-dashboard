@@ -12769,18 +12769,23 @@ export async function fetchDistCustomersForStores(storeIds = []) {
 // price (price-list entry, else item default). One round-trip for the portal.
 // Deliberately returns NO stock figures — stores order blind (SoW principle).
 export async function fetchDistPortalCatalogue(customerId) {
-  const [itemsAll, priceList, collLinks, collections, custRow] = await Promise.all([
+  const [itemsAll, priceList, collLinks, collections, custRow, freshAllowed] = await Promise.all([
     fetchDistItems(),
     customerId ? fetchDistPriceList(customerId) : Promise.resolve([]),
     supabase.from("dist_collection_items").select("collection_id, item_id").then(r => r.data || []),
     fetchDistCollections().catch(() => []),
     customerId ? supabase.from("dist_contacts").select("is_central_kitchen").eq("id", customerId).maybeSingle().then(r => r.data) : Promise.resolve(null),
+    fetchFreshOrderCustomers().catch(() => []),
   ]);
   // Directional visibility. Central Kitchen sees its own ck-type items; stores
   // see everything EXCEPT items flagged hidden_from_stores (the CK ingredients).
   const orderingIsCK = !!(custRow && custRow.is_central_kitchen);
+  // FRESHACCESS — fresh produce is hidden outright from customers not on the
+  // allowlist. An empty allowlist means unconfigured, so fresh stays visible.
+  const allowFresh = !freshAccessActive(freshAllowed) || orderingIsCK || (freshAllowed || []).includes(customerId);
   const items = (itemsAll || []).filter(i =>
-    orderingIsCK ? (i.itemType === "ck" || !i.hiddenFromStores) : !i.hiddenFromStores
+    (allowFresh || i.itemType !== "fresh") &&
+    (orderingIsCK ? (i.itemType === "ck" || !i.hiddenFromStores) : !i.hiddenFromStores)
   );
   const priceByItem = new Map((priceList || []).map(p => [p.itemId, p.sellPrice]));
   // Manual membership from the link table.
@@ -12914,7 +12919,64 @@ export async function fetchDistSalesOrders({ customerId, status } = {}) {
   if (error) throw error;
   return (data || []).map(mapDistSO);
 }
+// ── FRESH ORDERING ACCESS (FRESHACCESS 2026-07-28g) ──────────────────────────
+// Fresh produce is bought on a supermarket run by a driver, not picked from the
+// warehouse, so only a named set of customers may see or order it. The
+// allowlist lives in app_settings.fresh_order_customers (JSON array of
+// dist_contacts ids).
+//
+// An EMPTY list means "not configured yet" and leaves fresh open to everyone,
+// so deploying this changes nothing until the first customer is ticked. From
+// that moment the list is live and every customer not on it loses fresh
+// entirely. Central Kitchen is always allowed and never needs ticking.
+
+export function freshAccessActive(allowed) {
+  return Array.isArray(allowed) && allowed.length > 0;
+}
+
+export async function fetchFreshOrderCustomers() {
+  const { data, error } = await supabase.from("app_settings")
+    .select("value").eq("key", "fresh_order_customers").maybeSingle();
+  if (error) throw error;
+  try {
+    const v = JSON.parse(data?.value || "[]");
+    return Array.isArray(v) ? v.filter(Boolean) : [];
+  } catch { return []; }
+}
+
+export async function saveFreshOrderCustomers(ids) {
+  const clean = [...new Set((ids || []).filter(Boolean))];
+  await upsertAppSetting("fresh_order_customers", JSON.stringify(clean));
+  return clean;
+}
+
+export async function customerCanOrderFresh(customerId) {
+  const allowed = await fetchFreshOrderCustomers().catch(() => []);
+  if (!freshAccessActive(allowed)) return true;          // not configured
+  if (!customerId) return false;
+  if (allowed.includes(customerId)) return true;
+  const { data } = await supabase.from("dist_contacts")
+    .select("is_central_kitchen").eq("id", customerId).maybeSingle();
+  return !!(data && data.is_central_kitchen);
+}
+
+// Refuses rather than silently dropping the line. A silent strip means a store
+// believes it ordered tomatoes and nothing turns up; an error tells someone.
+async function assertFreshAllowed(customerId, lines) {
+  const ids = [...new Set((lines || []).map(l => l.itemId).filter(Boolean))];
+  if (!ids.length) return;
+  const { data: fresh } = await supabase.from("dist_items")
+    .select("id, name").in("id", ids).eq("item_type", "fresh");
+  if (!fresh || !fresh.length) return;
+  if (await customerCanOrderFresh(customerId)) return;
+  throw new Error(
+    "This store isn't set up to order fresh produce. Remove: " +
+    fresh.map(f => f.name).join(", ")
+  );
+}
+
 export async function createDistSalesOrder(so, lines = []) {
+  await assertFreshAllowed(so.customerId, lines);   // FRESHACCESS
   const id = so.id || distId("dso");
   const row = {
     id, so_number: so.soNumber || `SO-${Date.now().toString().slice(-6)}`, customer_id: so.customerId || null,
@@ -12940,6 +13002,7 @@ export async function createDistSalesOrder(so, lines = []) {
 // because committed stock is derived from open SO lines (no movement cleanup).
 export async function updateDistSalesOrder(so, lines = []) {
   if (!so.id) throw new Error("Sales order id required for update.");
+  await assertFreshAllowed(so.customerId, lines);   // FRESHACCESS
   const row = {
     customer_id: so.customerId || null, status: so.status || "draft",
     order_date: so.orderDate || new Date().toISOString().slice(0, 10),
