@@ -190,6 +190,8 @@ import {
   fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, fetchStoreOrderPrefs, saveStoreOrderPrefs, fetchChatGroups, createChatGroup, updateChatGroup, deleteChatGroup, deleteChatThread, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment, editPendingOrderLines, mergePendingOrders, fetchDeliverySourceReceipt, synthesizeInvoiceFromItems, normalizeReceiptDescription,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
+  fetchPaySchedule, savePaySchedule, generatePayPeriods, payPeriodStatus, fetchPayPeriodLocations,
+  closePayPeriodStore, reopenPayPeriodStore, overridePayPeriodDates, setPunchApproved, approvePunchesInPeriod,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -54691,83 +54693,644 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
 // TIME & ATTENDANCE — Manager view with approval + overtime comparison
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function PayPeriodsPanel({ payPeriods = [], stores = [], isHQ, onApprove, onReopen }) {
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
-  const [storeSel, setStoreSel] = useState("all");
-  const [busy, setBusy] = useState(false);
-  const storeName = (id) => stores.find(s => s.id === id)?.shortName || stores.find(s => s.id === id)?.name || "All stores";
+// ── PAY PERIODS (PAYPERIOD 2026-07-28d) ─────────────────────────────────────
+// Rebuilt to match 7shifts. Periods are auto-generated from the pay schedule
+// (Create Brands: monthly, 21st → 20th) instead of being typed in by hand.
+// Status derives from the calendar plus per-store closure:
+//     upcoming → In Progress → Ready for review → closed
+// Each period opens a detail screen with punches, warnings and a labour
+// summary. Closing is PER STORE, so one site can be signed off while another
+// is still being chased. A period only reads "closed" once every site is.
 
-  const close = async () => {
-    if (!from || !to) { window.alert("Pick a start and end date."); return; }
-    if (to < from) { window.alert("End date must be on or after the start date."); return; }
-    const storeId = storeSel === "all" ? null : storeSel;
-    if (!window.confirm(`Close and lock ${from} → ${to}${storeId ? ` · ${storeName(storeId)}` : " (all stores)"}? Punches in this period become read-only until re-opened.`)) return;
-    setBusy(true);
+const PP_STATUS_META = {
+  upcoming:         { label: "Upcoming",         cls: "bg-slate-800 text-slate-300 border-slate-700" },
+  in_progress:      { label: "In Progress",      cls: "bg-amber-500/20 text-amber-300 border-amber-500/40" },
+  ready_for_review: { label: "Ready for review", cls: "bg-emerald-500/20 text-emerald-300 border-emerald-500/40" },
+  closed:           { label: "Closed",           cls: "bg-slate-700 text-slate-200 border-slate-600" },
+};
+
+function ppTodayIso() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function ppFmtLong(iso) {
+  if (!iso) return "";
+  const [y, m, d] = String(iso).split("-").map(Number);
+  return new Date(y, (m || 1) - 1, d || 1).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+}
+function ppFmtShort(iso) {
+  if (!iso) return "";
+  const [y, m, d] = String(iso).split("-").map(Number);
+  return new Date(y, (m || 1) - 1, d || 1).toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
+}
+function ppRangeLabel(p) { return `${ppFmtLong(p.periodStart)} – ${ppFmtLong(p.periodEnd)}`; }
+// Minutes since midnight from "HH:MM"; null when unparseable.
+function ppMins(hm) {
+  if (!hm || typeof hm !== "string") return null;
+  const m = hm.match(/^(\d{1,2}):(\d{2})/);
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+}
+// Scheduled hours, tolerating an overnight shift (end before start).
+function ppSchedHours(startHm, endHm) {
+  const a = ppMins(startHm), b = ppMins(endHm);
+  if (a == null || b == null) return null;
+  return ((b - a + 1440) % 1440) / 60;
+}
+function ppClockHm(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+// ── Change pay schedule ─────────────────────────────────────────────────────
+function PayScheduleModal({ schedule, onSave, onClose }) {
+  const [freq, setFreq] = useState(schedule?.frequency || "monthly");
+  const [anchorDay, setAnchorDay] = useState(schedule?.anchorDay ?? 21);
+  const [anchorStart, setAnchorStart] = useState(schedule?.anchorStart || "2026-05-21");
+  const [offset, setOffset] = useState(schedule?.payDayOffset ?? 5);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const inputCls = "px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500";
+
+  const save = async () => {
+    setBusy(true); setErr("");
     try {
-      await onApprove({ id: `pp-${Date.now()}`, storeId, periodStart: from, periodEnd: to, status: "open" });
-      setFrom(""); setTo("");
-    } catch (e) { window.alert("Couldn't close period: " + (e?.message || e)); }
+      await onSave({ frequency: freq, anchorDay: Number(anchorDay) || 21, anchorStart, payDayOffset: Number(offset) || 0 });
+      onClose();
+    } catch (e) { setErr(e?.message || "Couldn't save the schedule."); }
     finally { setBusy(false); }
   };
 
-  const sorted = [...payPeriods].sort((a, b) => (b.periodStart || "").localeCompare(a.periodStart || ""));
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg p-6" onClick={e => e.stopPropagation()}>
+        <div className="flex items-start justify-between mb-1">
+          <h3 className="text-lg font-bold text-white">Change pay schedule</h3>
+          <button onClick={onClose} className="text-slate-500 hover:text-white"><X size={18}/></button>
+        </div>
+        <p className="text-xs text-slate-500 mb-5">Every pay period is generated from this. Changing it re-generates every period that has not been closed — closed timesheets keep the dates they were closed on.</p>
+
+        <div className="space-y-4">
+          <div>
+            <label className="text-[11px] text-slate-500 font-semibold block mb-1.5">Frequency</label>
+            <div className="flex gap-1.5 flex-wrap">
+              {[["monthly","Monthly"],["semimonthly","Twice monthly"],["biweekly","Fortnightly"],["weekly","Weekly"]].map(([k,l]) => (
+                <button key={k} onClick={() => setFreq(k)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${freq===k?"bg-indigo-600 text-white border-indigo-500":"bg-slate-950 text-slate-300 border-slate-700 hover:border-slate-600"}`}>{l}</button>
+              ))}
+            </div>
+          </div>
+
+          {freq === "monthly" && (
+            <div>
+              <label className="text-[11px] text-slate-500 font-semibold block mb-1">Period starts on day</label>
+              <input type="number" min="1" max="31" value={anchorDay} onChange={e => setAnchorDay(e.target.value)} className={inputCls + " w-28"}/>
+              <p className="text-[11px] text-slate-500 mt-1.5">Day {anchorDay} to day {(Number(anchorDay) || 21) - 1 || 31} of the following month. Months that are too short fall back to their last day.</p>
+            </div>
+          )}
+          {(freq === "weekly" || freq === "biweekly") && (
+            <div>
+              <label className="text-[11px] text-slate-500 font-semibold block mb-1">First period starts</label>
+              <input type="date" value={anchorStart} onChange={e => setAnchorStart(e.target.value)} className={inputCls}/>
+            </div>
+          )}
+          {freq === "semimonthly" && (
+            <p className="text-xs text-slate-500">1st–15th and 16th–end of month.</p>
+          )}
+
+          <div>
+            <label className="text-[11px] text-slate-500 font-semibold block mb-1">Pay day, days after the period ends</label>
+            <input type="number" min="0" max="31" value={offset} onChange={e => setOffset(e.target.value)} className={inputCls + " w-28"}/>
+          </div>
+        </div>
+
+        {err && <div className="mt-4 text-xs text-red-400 bg-red-950/30 border border-red-500/30 rounded-lg px-3 py-2">{err}</div>}
+        <div className="flex justify-end gap-2 mt-6">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm font-semibold text-slate-200">Cancel</button>
+          <button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-sm font-bold text-white">{busy ? "Saving…" : "Save schedule"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Edit a single period's dates (one-off; schedule resumes next period) ────
+function EditPayPeriodModal({ period, onSave, onClose }) {
+  const [from, setFrom] = useState(period.periodStart);
+  const [to, setTo] = useState(period.periodEnd);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
   const inputCls = "px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500";
 
+  const save = async () => {
+    if (to < from) { setErr("End date must be on or after the start date."); return; }
+    setBusy(true); setErr("");
+    try { await onSave({ periodStart: from, periodEnd: to }); onClose(); }
+    catch (e) { setErr(e?.message || "Couldn't change the period."); }
+    finally { setBusy(false); }
+  };
+
   return (
-    <div className="space-y-5">
-      {/* Set & close a period */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
-        <h3 className="text-sm font-bold text-white mb-1">Close a pay period</h3>
-        <p className="text-xs text-slate-500 mb-4">Pick the date range (and store) you're running payroll for, then close it to lock those punches.</p>
-        <div className="flex items-end gap-3 flex-wrap">
-          <div>
-            <label className="text-[11px] text-slate-500 font-semibold block mb-1">Start date</label>
-            <input type="date" value={from} onChange={e=>setFrom(e.target.value)} className={inputCls}/>
-          </div>
-          <div>
-            <label className="text-[11px] text-slate-500 font-semibold block mb-1">End date</label>
-            <input type="date" value={to} onChange={e=>setTo(e.target.value)} className={inputCls}/>
-          </div>
-          <div>
-            <label className="text-[11px] text-slate-500 font-semibold block mb-1">Store</label>
-            <select value={storeSel} onChange={e=>setStoreSel(e.target.value)} className={inputCls}>
-              {isHQ && <option value="all">All stores</option>}
-              {stores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
-            </select>
-          </div>
-          <button onClick={close} disabled={busy} className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-sm font-semibold text-white flex items-center gap-1.5">
-            <Lock size={14}/> {busy ? "Closing…" : "Close & lock"}
-          </button>
+    <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg p-6" onClick={e => e.stopPropagation()}>
+        <div className="flex items-start justify-between mb-5">
+          <h3 className="text-lg font-bold text-white">Edit single pay period</h3>
+          <button onClick={onClose} className="text-slate-500 hover:text-white"><X size={18}/></button>
+        </div>
+        <label className="text-[11px] text-slate-500 font-semibold block mb-1.5">Pay period dates</label>
+        <div className="flex items-center gap-2.5">
+          <input type="date" value={from} onChange={e => setFrom(e.target.value)} className={inputCls}/>
+          <ArrowRight size={16} className="text-slate-500 flex-shrink-0"/>
+          <input type="date" value={to} onChange={e => setTo(e.target.value)} className={inputCls}/>
+        </div>
+        <p className="text-xs text-slate-500 mt-3">Changing these dates only affects this pay period, for all locations. Your regular pay schedule resumes next period.</p>
+        {err && <div className="mt-4 text-xs text-red-400 bg-red-950/30 border border-red-500/30 rounded-lg px-3 py-2">{err}</div>}
+        <div className="flex justify-end gap-2 mt-6">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-sm font-semibold text-slate-200">Cancel</button>
+          <button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-sm font-bold text-white">{busy ? "Saving…" : "Change pay period"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Period detail: punches, warnings, labour summary ────────────────────────
+function PayPeriodDetail({
+  period, status, stores = [], closures = [], punchRecords = [], opsTeam = [], schedules = [],
+  currentUser, isHQ, onBack, onCloseStore, onReopenStore, onApprovePunch, onApproveAll, onAmendPunch,
+}) {
+  const [locSel, setLocSel] = useState("all");
+  const [tab, setTab] = useState("punches");
+  const [empSel, setEmpSel] = useState("all");
+  const [punchFilter, setPunchFilter] = useState("all");   // all | needs | approved | variance
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const storeName = useCallback((id) => {
+    const s = stores.find(x => x.id === id);
+    return s ? (s.shortName || s.name) : "—";
+  }, [stores]);
+
+  const closedIds = useMemo(() => new Set(closures.map(c => c.storeId)), [closures]);
+  const scopeStores = useMemo(
+    () => locSel === "all" ? stores : stores.filter(s => s.id === locSel),
+    [locSel, stores]);
+
+  // Punches inside the period, limited to visible stores.
+  const rows = useMemo(() => {
+    const visible = new Set(stores.map(s => s.id));
+    return (punchRecords || [])
+      .filter(p => p.date >= period.periodStart && p.date <= period.periodEnd)
+      .filter(p => visible.has(p.storeId))
+      .filter(p => locSel === "all" || p.storeId === locSel)
+      .filter(p => empSel === "all" || p.employeeId === empSel)
+      .map(p => {
+        const member = (opsTeam || []).find(m => m.id === p.employeeId) || null;
+        const sched = (schedules || []).find(s => s.employeeId === p.employeeId && s.date === p.date) || null;
+        const schedStart = p.scheduledStart || sched?.startTime || null;
+        const schedEnd = p.scheduledEnd || sched?.endTime || null;
+        const schedHrs = ppSchedHours(schedStart, schedEnd);
+        const actual = p.hoursWorked != null ? Number(p.hoursWorked) : null;
+        const variance = (schedHrs != null && actual != null) ? actual - schedHrs : null;
+        return { p, member, schedStart, schedEnd, schedHrs, actual, variance };
+      })
+      .sort((a, b) => (a.p.date || "").localeCompare(b.p.date || "") || (a.p.employeeName || "").localeCompare(b.p.employeeName || ""));
+  }, [punchRecords, period, stores, locSel, empSel, opsTeam, schedules]);
+
+  const filteredRows = useMemo(() => rows.filter(r => {
+    if (punchFilter === "needs") return !r.p.approved && r.p.punchOut;
+    if (punchFilter === "approved") return !!r.p.approved;
+    if (punchFilter === "variance") return r.variance != null && Math.abs(r.variance) >= 0.25;
+    return true;
+  }), [rows, punchFilter]);
+
+  const closable = rows.filter(r => !!r.p.punchOut);
+  const approvedCount = closable.filter(r => r.p.approved).length;
+  const allApproved = closable.length > 0 && approvedCount === closable.length;
+  const periodEnded = period.periodEnd < ppTodayIso();
+
+  const employees = useMemo(() => {
+    const seen = new Map();
+    rows.forEach(r => { if (!seen.has(r.p.employeeId)) seen.set(r.p.employeeId, r.p.employeeName || "Unknown"); });
+    return [...seen.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [rows]);
+
+  // ── Warnings — the things that quietly wreck a payroll run ────────────────
+  const warnings = useMemo(() => {
+    const out = [];
+    rows.forEach(({ p, member, variance }) => {
+      const salaried = member ? isSalaried(member) : false;
+      if (!p.punchOut) out.push({ id: p.id + "-open", sev: "high", who: p.employeeName, date: p.date, msg: "Never clocked out — no hours recorded." });
+      if (p.punchOut && (p.hoursWorked == null || Number(p.hoursWorked) <= 0)) out.push({ id: p.id + "-zero", sev: "high", who: p.employeeName, date: p.date, msg: "Zero or negative hours on a closed punch." });
+      if (p.punchOut && !salaried && !(Number(p.hourlyRate) > 0)) out.push({ id: p.id + "-rate", sev: "high", who: p.employeeName, date: p.date, msg: "No hourly rate on the punch — this shift will pay £0." });
+      if (Number(p.hoursWorked) > 12) out.push({ id: p.id + "-long", sev: "med", who: p.employeeName, date: p.date, msg: `${Number(p.hoursWorked).toFixed(2)}h shift — check for a missed clock-out.` });
+      if (Number(p.overtimeHours) > 0 && !p.overtimeApproved && !p.overtimeRejectedReason) out.push({ id: p.id + "-ot", sev: "med", who: p.employeeName, date: p.date, msg: `${Number(p.overtimeHours).toFixed(2)}h overtime still awaiting a decision.` });
+      if (variance != null && Math.abs(variance) >= 1) out.push({ id: p.id + "-var", sev: "low", who: p.employeeName, date: p.date, msg: `${variance > 0 ? "+" : ""}${variance.toFixed(2)}h against the schedule.` });
+    });
+    const rank = { high: 0, med: 1, low: 2 };
+    return out.sort((a, b) => rank[a.sev] - rank[b.sev] || (a.date || "").localeCompare(b.date || ""));
+  }, [rows]);
+
+  // ── Labour summary ────────────────────────────────────────────────────────
+  const summary = useMemo(() => {
+    const byStore = new Map();
+    let hours = 0, pay = 0;
+    rows.forEach(({ p }) => {
+      const h = Number(p.hoursWorked) || 0;
+      const g = Number(p.grossPay) || 0;
+      hours += h; pay += g;
+      const cur = byStore.get(p.storeId) || { hours: 0, pay: 0, people: new Set(), punches: 0 };
+      cur.hours += h; cur.pay += g; cur.people.add(p.employeeId); cur.punches += 1;
+      byStore.set(p.storeId, cur);
+    });
+    return {
+      hours, pay,
+      stores: [...byStore.entries()].map(([id, v]) => ({ id, ...v, headcount: v.people.size }))
+        .sort((a, b) => b.pay - a.pay),
+    };
+  }, [rows]);
+
+  const doClose = async (storeId) => {
+    if (!window.confirm(`Close ${storeName(storeId)} for ${ppRangeLabel(period)}? Punches at that site become read-only until it is re-opened.`)) return;
+    setBusy(true); setErr("");
+    try { await onCloseStore(period, storeId); }
+    catch (e) { setErr(e?.message || "Couldn't close the timesheet."); }
+    finally { setBusy(false); }
+  };
+  const doReopen = async (storeId) => {
+    if (!window.confirm(`Re-open ${storeName(storeId)} for ${ppRangeLabel(period)}?`)) return;
+    setBusy(true); setErr("");
+    try { await onReopenStore(period, storeId); }
+    catch (e) { setErr(e?.message || "Couldn't re-open the timesheet."); }
+    finally { setBusy(false); }
+  };
+  const doApproveAll = async () => {
+    const n = closable.filter(r => !r.p.approved).length;
+    if (!n) return;
+    if (!window.confirm(`Approve ${n} punch${n === 1 ? "" : "es"} in ${ppRangeLabel(period)}?`)) return;
+    setBusy(true); setErr("");
+    try { await onApproveAll(period, scopeStores.map(s => s.id)); }
+    catch (e) { setErr(e?.message || "Couldn't approve."); }
+    finally { setBusy(false); }
+  };
+
+  const meta = PP_STATUS_META[status] || PP_STATUS_META.upcoming;
+  const selCls = "px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-xs text-white focus:outline-none focus:border-indigo-500";
+
+  return (
+    <div className="space-y-4">
+      <button onClick={onBack} className="flex items-center gap-1.5 text-xs font-semibold text-slate-400 hover:text-white">
+        <ChevronLeft size={15}/> Pay Periods
+      </button>
+
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h2 className="text-xl font-bold text-white">Pay Period: {ppRangeLabel(period)}</h2>
+          {period.isOverride && <div className="text-[11px] text-amber-400 mt-0.5">Dates changed for this period only.</div>}
         </div>
       </div>
 
-      {/* Existing periods */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
-        <div className="px-4 py-3 border-b border-slate-800 text-sm font-bold text-white">Pay periods</div>
-        {sorted.length === 0 ? (
-          <div className="text-center py-10 text-sm text-slate-500">No pay periods yet. Close one above to start.</div>
-        ) : (
+      {/* Timesheets scope */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <select value={locSel} onChange={e => setLocSel(e.target.value)} className={selCls}>
+          <option value="all">All locations</option>
+          {stores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+        </select>
+        <span className="text-xs text-slate-500">{closedIds.size}/{stores.length} location timesheets closed</span>
+      </div>
+
+      {/* Status card */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-8 flex-wrap">
+          <div>
+            <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-widest mb-1.5">Pay period status</div>
+            <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold border ${meta.cls}`}>{meta.label}</span>
+          </div>
+          <div>
+            <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-widest mb-1.5">Employee punches</div>
+            <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold border ${allApproved ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40" : "bg-amber-500/20 text-amber-300 border-amber-500/40"}`}>
+              {approvedCount}/{closable.length} approved
+            </span>
+          </div>
+        </div>
+        <div className="flex items-center gap-3 flex-wrap">
+          {periodEnded && <span className="text-xs text-slate-500">Pay period has ended</span>}
+          {locSel === "all" ? (
+            <span className="text-xs text-slate-500">Pick a location to close its timesheet</span>
+          ) : closedIds.has(locSel) ? (
+            <button onClick={() => doReopen(locSel)} disabled={busy || !isHQ}
+              className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-sm font-semibold text-slate-200 flex items-center gap-1.5">
+              <Unlock size={14}/> Re-open pay period
+            </button>
+          ) : (
+            <button onClick={() => doClose(locSel)} disabled={busy}
+              className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-sm font-bold text-white flex items-center gap-1.5">
+              <Lock size={14}/> Close pay period
+            </button>
+          )}
+        </div>
+      </div>
+
+      {err && <div className="text-xs text-red-400 bg-red-950/30 border border-red-500/30 rounded-lg px-3 py-2">{err}</div>}
+
+      {/* Per-location closure state */}
+      {locSel === "all" && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-800 text-sm font-bold text-white">Location timesheets</div>
           <div className="divide-y divide-slate-800/60">
-            {sorted.map(pp => (
-              <div key={pp.id} className="flex items-center justify-between gap-3 px-4 py-3 flex-wrap">
-                <div className="flex items-center gap-2.5">
-                  {pp.status === "approved" ? <Lock size={15} className="text-emerald-400"/> : <Unlock size={15} className="text-slate-500"/>}
-                  <div>
-                    <div className="text-sm font-semibold text-white">{pp.periodStart} → {pp.periodEnd}</div>
-                    <div className="text-[11px] text-slate-500">{storeName(pp.storeId)}{pp.status === "approved" && pp.approvedBy ? ` · approved by ${pp.approvedBy}` : ""}</div>
+            {stores.map(s => {
+              const c = closures.find(x => x.storeId === s.id);
+              return (
+                <div key={s.id} className="flex items-center justify-between gap-3 px-4 py-2.5 flex-wrap">
+                  <div className="flex items-center gap-2.5">
+                    {c ? <Lock size={14} className="text-emerald-400"/> : <Unlock size={14} className="text-slate-500"/>}
+                    <div>
+                      <div className="text-sm font-semibold text-white">{s.shortName || s.name}</div>
+                      {c && <div className="text-[11px] text-slate-500">Closed {new Date(c.closedAt).toLocaleDateString("en-GB")}{c.closedBy ? ` by ${c.closedBy}` : ""}</div>}
+                    </div>
+                  </div>
+                  {c
+                    ? <button onClick={() => doReopen(s.id)} disabled={busy || !isHQ} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-xs font-semibold text-slate-200">Re-open</button>
+                    : <button onClick={() => doClose(s.id)} disabled={busy} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-xs font-semibold text-white">Close</button>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Tabs */}
+      <div className="flex items-center gap-1.5 border-b border-slate-800">
+        {[["punches", `Employee Punches`], ["warnings", `Warnings${warnings.length ? ` (${warnings.length})` : ""}`], ["labour", "Labour Summary"]].map(([k, l]) => (
+          <button key={k} onClick={() => setTab(k)}
+            className={`px-3.5 py-2 text-xs font-bold border-b-2 -mb-px ${tab===k?"border-indigo-500 text-white":"border-transparent text-slate-400 hover:text-slate-200"}`}>{l}</button>
+        ))}
+      </div>
+
+      {tab === "punches" && (
+        <>
+          <div className="flex items-center gap-2 flex-wrap">
+            <select value={empSel} onChange={e => setEmpSel(e.target.value)} className={selCls}>
+              <option value="all">All employees</option>
+              {employees.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+            </select>
+            {[["all","All"],["needs","Needs approval"],["approved","Approved"],["variance","Variance"]].map(([k,l]) => (
+              <button key={k} onClick={() => setPunchFilter(k)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${punchFilter===k?"bg-indigo-600 text-white":"bg-slate-800 text-slate-300 hover:bg-slate-700"}`}>{l}</button>
+            ))}
+            <button onClick={doApproveAll} disabled={busy || allApproved || closable.length === 0}
+              className="ml-auto px-3.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-xs font-bold text-white flex items-center gap-1.5">
+              <Check size={14}/> Approve All
+            </button>
+          </div>
+
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-x-auto dist-table">
+            <table className="w-full text-sm">
+              <thead className="dist-th">
+                <tr>
+                  <th>Date</th><th>Name / Role</th><th>Location</th><th>Source</th>
+                  <th>Punch in – Punch out</th><th className="text-right">Actual hrs</th>
+                  <th>Sched. punch in – out</th><th className="text-right">Sched. hrs</th>
+                  <th className="text-right">Variance</th><th className="text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredRows.length === 0 ? (
+                  <tr><td colSpan={10} className="text-center py-10 text-sm text-slate-500">No punches match this filter.</td></tr>
+                ) : filteredRows.map(({ p, member, schedStart, schedEnd, schedHrs, actual, variance }) => (
+                  <tr key={p.id}>
+                    <td className="px-4 whitespace-nowrap text-slate-300">{ppFmtShort(p.date)}</td>
+                    <td className="px-4">
+                      <div className="font-semibold text-white">{p.employeeName || "Unknown"}</div>
+                      <div className="text-[11px] text-slate-500">{member?.role || member?.department || "—"}</div>
+                    </td>
+                    <td className="px-4 text-slate-300">{storeName(p.storeId)}</td>
+                    <td className="px-4 text-slate-500 text-xs">{p.amendedBy ? "Manual" : "Clock-in"}</td>
+                    <td className="px-4 whitespace-nowrap text-slate-300">{ppClockHm(p.punchIn)} – {p.punchOut ? ppClockHm(p.punchOut) : <span className="text-amber-400">still in</span>}</td>
+                    <td className="px-4 text-right tabular-nums text-white">{actual != null ? actual.toFixed(2) : "—"}</td>
+                    <td className="px-4 whitespace-nowrap text-slate-400">{schedStart && schedEnd ? `${schedStart} – ${schedEnd}` : "—"}</td>
+                    <td className="px-4 text-right tabular-nums text-slate-400">{schedHrs != null ? schedHrs.toFixed(2) : "—"}</td>
+                    <td className={`px-4 text-right tabular-nums font-semibold ${variance == null ? "text-slate-500" : variance > 0.01 ? "text-amber-400" : variance < -0.01 ? "text-emerald-400" : "text-slate-400"}`}>
+                      {variance == null ? "—" : `${variance > 0 ? "+" : ""}${variance.toFixed(2)}`}
+                    </td>
+                    <td className="px-4">
+                      <div className="flex items-center justify-end gap-1.5">
+                        {p.approved
+                          ? <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">Approved</span>
+                          : <button onClick={() => onApprovePunch(p, true)} disabled={!p.punchOut}
+                              className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-30 text-[10px] font-bold text-white">Approve</button>}
+                        <button onClick={() => onAmendPunch(p)} className="p-1 text-slate-500 hover:text-white" title="Amend"><Pencil size={13}/></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {tab === "warnings" && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          {warnings.length === 0 ? (
+            <div className="text-center py-12">
+              <CheckCircle size={28} className="text-emerald-400 mx-auto mb-2"/>
+              <div className="text-sm text-slate-300 font-semibold">Nothing to flag in this period.</div>
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-800/60">
+              {warnings.map(w => (
+                <div key={w.id} className="flex items-start gap-3 px-4 py-3">
+                  <AlertTriangle size={15} className={`flex-shrink-0 mt-0.5 ${w.sev === "high" ? "text-red-400" : w.sev === "med" ? "text-amber-400" : "text-slate-500"}`}/>
+                  <div className="min-w-0">
+                    <div className="text-sm text-slate-200">{w.msg}</div>
+                    <div className="text-[11px] text-slate-500">{w.who} · {ppFmtShort(w.date)}</div>
                   </div>
                 </div>
-                {pp.status === "approved" ? (
-                  <button onClick={()=>{ if(window.confirm("Re-open this period for edits? It will need closing again before payroll.")) onReopen(pp); }} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200">Re-open</button>
-                ) : (
-                  <button onClick={()=>{ if(window.confirm(`Close and lock ${pp.periodStart} → ${pp.periodEnd}?`)) onApprove(pp); }} className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white">Close & lock</button>
-                )}
-              </div>
-            ))}
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === "labour" && (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-widest">Hours</div>
+              <div className="text-2xl font-bold text-white tabular-nums">{summary.hours.toFixed(1)}</div>
+            </div>
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-widest">Gross pay</div>
+              <div className="text-2xl font-bold text-emerald-400 tabular-nums">£{summary.pay.toFixed(2)}</div>
+            </div>
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-widest">Punches</div>
+              <div className="text-2xl font-bold text-white tabular-nums">{rows.length}</div>
+            </div>
+            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+              <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-widest">Avg £/hr</div>
+              <div className="text-2xl font-bold text-white tabular-nums">£{summary.hours > 0 ? (summary.pay / summary.hours).toFixed(2) : "0.00"}</div>
+            </div>
           </div>
-        )}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-x-auto dist-table">
+            <table className="w-full text-sm">
+              <thead className="dist-th">
+                <tr><th>Location</th><th className="text-right">People</th><th className="text-right">Punches</th><th className="text-right">Hours</th><th className="text-right">Gross pay</th></tr>
+              </thead>
+              <tbody>
+                {summary.stores.map(s => (
+                  <tr key={s.id}>
+                    <td className="px-4 font-semibold text-white">{storeName(s.id)}</td>
+                    <td className="px-4 text-right tabular-nums text-slate-300">{s.headcount}</td>
+                    <td className="px-4 text-right tabular-nums text-slate-300">{s.punches}</td>
+                    <td className="px-4 text-right tabular-nums text-slate-300">{s.hours.toFixed(1)}</td>
+                    <td className="px-4 text-right tabular-nums text-emerald-400 font-semibold">£{s.pay.toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Pay periods list ────────────────────────────────────────────────────────
+function PayPeriodsPanel({
+  stores = [], isHQ, punchRecords = [], opsTeam = [], schedules = [], currentUser,
+  paySchedule, periodRows = [], periodLocations = [], onPeriodsChanged, onAmendPunch,
+  onApprovePunch, onApproveAllPunches,
+}) {
+  const [detailId, setDetailId] = useState(null);
+  const [menuFor, setMenuFor] = useState(null);
+  const [editPeriod, setEditPeriod] = useState(null);
+  const [showSchedule, setShowSchedule] = useState(false);
+  const [err, setErr] = useState("");
+  const today = ppTodayIso();
+
+  // Generated periods, with any persisted override taking precedence.
+  const periods = useMemo(() => {
+    const gen = generatePayPeriods(paySchedule, { back: 14, forward: 1 });
+    const byId = new Map(gen.map(p => [p.id, p]));
+    (periodRows || []).forEach(row => {
+      const base = byId.get(row.id);
+      if (base) byId.set(row.id, { ...base, periodStart: row.periodStart, periodEnd: row.periodEnd, isOverride: row.isOverride });
+      else if (row.periodStart) byId.set(row.id, { id: row.id, periodStart: row.periodStart, periodEnd: row.periodEnd, isOverride: row.isOverride, generated: false });
+    });
+    return [...byId.values()].sort((a, b) => b.periodStart.localeCompare(a.periodStart));
+  }, [paySchedule, periodRows]);
+
+  const closuresFor = useCallback((pid) => (periodLocations || []).filter(l => l.payPeriodId === pid), [periodLocations]);
+  const statusFor = useCallback((p) => payPeriodStatus(p, {
+    closedStores: closuresFor(p.id).filter(c => stores.some(s => s.id === c.storeId)).length,
+    totalStores: stores.length, today,
+  }), [closuresFor, stores, today]);
+
+  const current = periods.find(p => p.periodStart <= today && p.periodEnd >= today) || null;
+  const upcoming = periods.filter(p => p.periodStart > today).sort((a, b) => a.periodStart.localeCompare(b.periodStart))[0] || null;
+  const history = periods.filter(p => p.periodEnd < today);
+
+  const detail = detailId ? periods.find(p => p.id === detailId) : null;
+
+  const run = async (fn) => {
+    setErr("");
+    try { await fn(); await onPeriodsChanged(); }
+    catch (e) { setErr(e?.message || "Something went wrong."); throw e; }
+  };
+
+  if (detail) {
+    return (
+      <PayPeriodDetail
+        period={detail} status={statusFor(detail)} stores={stores} closures={closuresFor(detail.id)}
+        punchRecords={punchRecords} opsTeam={opsTeam} schedules={schedules}
+        currentUser={currentUser} isHQ={isHQ}
+        onBack={() => setDetailId(null)}
+        onCloseStore={(p, storeId) => run(() => closePayPeriodStore(p, storeId, currentUser?.name || ""))}
+        onReopenStore={(p, storeId) => run(() => reopenPayPeriodStore(p.id, storeId))}
+        onApprovePunch={onApprovePunch}
+        onApproveAll={onApproveAllPunches}
+        onAmendPunch={onAmendPunch}
+      />
+    );
+  }
+
+  const Row = ({ p }) => {
+    const st = statusFor(p);
+    const meta = PP_STATUS_META[st];
+    const closed = closuresFor(p.id).filter(c => stores.some(s => s.id === c.storeId)).length;
+    return (
+      <div className="flex items-center justify-between gap-3 px-4 py-3.5 flex-wrap">
+        <div className="flex items-center gap-2.5 min-w-0">
+          {st === "closed" ? <Lock size={15} className="text-emerald-400 flex-shrink-0"/> : <Calendar size={15} className="text-slate-500 flex-shrink-0"/>}
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-white truncate">{ppRangeLabel(p)}</div>
+            {p.payDate && <div className="text-[11px] text-slate-500">Pay day {ppFmtLong(p.payDate)}{p.isOverride ? " · dates changed" : ""}</div>}
+          </div>
+        </div>
+        <div className="flex items-center gap-3 flex-wrap">
+          <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold border ${meta.cls}`}>{meta.label}</span>
+          {st !== "upcoming" && <span className="text-[11px] text-slate-500">{closed}/{stores.length} location timesheets closed</span>}
+          <button onClick={() => setDetailId(p.id)} className="px-3.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200">Review</button>
+          <div className="relative">
+            <button onClick={() => setMenuFor(menuFor === p.id ? null : p.id)} className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400"><MoreHorizontal size={16}/></button>
+            {menuFor === p.id && (
+              <div className="absolute right-0 top-full mt-1 z-20 w-56 bg-slate-900 border border-slate-700 rounded-xl overflow-hidden shadow-xl">
+                <button onClick={() => { setEditPeriod(p); setMenuFor(null); }} className="w-full text-left px-3.5 py-2.5 text-xs text-slate-200 hover:bg-slate-800">Edit single pay period</button>
+                <button onClick={() => { setShowSchedule(true); setMenuFor(null); }} className="w-full text-left px-3.5 py-2.5 text-xs text-slate-200 hover:bg-slate-800 border-t border-slate-800">Change pay schedule</button>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
+    );
+  };
+
+  return (
+    <div className="space-y-5" onClick={() => menuFor && setMenuFor(null)}>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h3 className="text-lg font-bold text-white">Pay Periods</h3>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Auto-generated from your pay schedule.
+            {upcoming ? ` Next upcoming pay period: ${ppRangeLabel(upcoming)}.` : ""}
+          </p>
+        </div>
+        <button onClick={() => setShowSchedule(true)} className="p-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300" title="Change pay schedule"><Settings size={15}/></button>
+      </div>
+
+      {err && <div className="text-xs text-red-400 bg-red-950/30 border border-red-500/30 rounded-lg px-3 py-2">{err}</div>}
+
+      {current && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          <Row p={current}/>
+        </div>
+      )}
+
+      <div>
+        <h4 className="text-sm font-bold text-white mb-2">History</h4>
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          {history.length === 0 ? (
+            <div className="text-center py-10 text-sm text-slate-500">No completed pay periods yet.</div>
+          ) : (
+            <div className="divide-y divide-slate-800/60">
+              {history.map(p => <Row key={p.id} p={p}/>)}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {editPeriod && (
+        <EditPayPeriodModal period={editPeriod}
+          onSave={({ periodStart, periodEnd }) => run(() => overridePayPeriodDates(editPeriod, { periodStart, periodEnd, by: currentUser?.name || "" }))}
+          onClose={() => setEditPeriod(null)}/>
+      )}
+      {showSchedule && (
+        <PayScheduleModal schedule={paySchedule}
+          onSave={(s) => run(() => savePaySchedule(s))}
+          onClose={() => setShowSchedule(false)}/>
+      )}
     </div>
   );
 }
@@ -55303,7 +55866,7 @@ function BreaksAnalysisTab({ enriched = [], breakSplit, opsTeam = [], stores = [
 }
 
 
-function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedules, punchRecords, currentUser, onUpdate, onAdd, onDelete, onAddComment, payPeriods = [], isPunchLocked, onApprovePeriod, onReopenPeriod }) {
+function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedules, punchRecords, currentUser, onUpdate, onAdd, onDelete, onAddComment, payPeriods = [], isPunchLocked, onApprovePeriod, onReopenPeriod, paySchedule, payPeriodLocations = [], onPeriodsChanged, onApprovePunch, onApproveAllPunches }) {
   const { user } = useAuth();
 
   // Store-first scoping. Owner/HQ get the ownership filter (defaults to
@@ -55455,8 +56018,11 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
 
   // Pay-period approval status for the current view (store + date range).
   const periodStoreId = selStore === "all" ? null : selStore;
+  // PAYPERIOD 2026-07-28d — was an exact start/end equality test, so a period
+  // that spanned the visible week never registered and the header reported the
+  // week as open while isPunchLocked() was already refusing edits underneath.
   const matchingPeriod = (payPeriods || []).find(pp =>
-    (pp.storeId || null) === periodStoreId && pp.periodStart === from && pp.periodEnd === to);
+    (pp.storeId || null) === periodStoreId && pp.periodStart <= from && pp.periodEnd >= to);
   const periodApproved = matchingPeriod?.status === "approved";
   const [periodBusy, setPeriodBusy] = useState(false);
   const doApprovePeriod = async () => {
@@ -56248,11 +56814,19 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
 
       {tab === "periods" && (
         <PayPeriodsPanel
-          payPeriods={payPeriods}
           stores={sortedVisibleStores}
           isHQ={isHqOrAbove(user.role)}
-          onApprove={onApprovePeriod}
-          onReopen={onReopenPeriod}
+          punchRecords={punchRecords}
+          opsTeam={opsTeam}
+          schedules={schedules}
+          currentUser={currentUser}
+          paySchedule={paySchedule}
+          periodRows={payPeriods}
+          periodLocations={payPeriodLocations}
+          onPeriodsChanged={onPeriodsChanged}
+          onAmendPunch={setAmendModal}
+          onApprovePunch={onApprovePunch}
+          onApproveAllPunches={onApproveAllPunches}
         />
       )}
 
@@ -60964,7 +61538,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: BREAKSTART 2026-07-28b");
+      console.log("CB build: PAYPERIOD 2026-07-28d");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -61018,6 +61592,8 @@ export default function App() {
   const [moreOpen, setMoreOpen] = useState(false);                 // mobile "More" sheet
   const [appSettings, setAppSettings] = useState({});
   const [payPeriods, setPayPeriods] = useState([]);
+  const [payPeriodLocations, setPayPeriodLocations] = useState([]);
+  const [paySchedule, setPaySchedule] = useState(null);
   const [bankTransactions, setBankTransactions] = useState([]);
   const importBankTxns = useCallback(async (rows) => {
     const res = await insertBankTransactions(rows);
@@ -61109,12 +61685,22 @@ export default function App() {
   }, []);
   // A punch is locked if its (store, date) falls inside an APPROVED pay period.
   // A period with no storeId applies to all stores.
+  // PAYPERIOD 2026-07-28d — two ways a punch can be locked:
+  //   (a) legacy whole-period approval (status "approved"), kept so older
+  //       periods stay locked, and
+  //   (b) a per-store closure in pay_period_locations, which is how the
+  //       7shifts-style flow closes a site's timesheet.
   const isPunchLocked = useCallback((punch) => {
     if (!punch?.date) return false;
-    return payPeriods.some(pp => pp.status === "approved"
+    if (payPeriods.some(pp => pp.status === "approved"
       && (!pp.storeId || pp.storeId === punch.storeId)
-      && punch.date >= pp.periodStart && punch.date <= pp.periodEnd);
-  }, [payPeriods]);
+      && punch.date >= pp.periodStart && punch.date <= pp.periodEnd)) return true;
+    return payPeriodLocations.some(loc => {
+      if (loc.storeId !== punch.storeId) return false;
+      const pp = payPeriods.find(x => x.id === loc.payPeriodId);
+      return !!pp && punch.date >= pp.periodStart && punch.date <= pp.periodEnd;
+    });
+  }, [payPeriods, payPeriodLocations]);
   const updatePunchRec = useCallback(async rec => {
     if (isPunchLocked(rec)) throw new Error("This punch is in an approved (locked) pay period. Re-open the period to edit it.");
     const s = await upsertPunchRecord(rec); setPunchRecords(ps => ps.map(p => p.id === s.id ? s : p));
@@ -61732,6 +62318,42 @@ export default function App() {
     if (om === "franchise") return canAccessEntity("entity.ownership.franchise");
     return true;
   }, [canAccessEntity]);
+
+  // ── PAYPERIOD 2026-07-28d — pay schedule + per-store closures ─────────────
+  // Loaded separately from the main bootstrap so a missing table (before the
+  // migration runs) degrades to the built-in monthly 21st→20th default rather
+  // than failing the whole app load.
+  const reloadPayPeriodData = useCallback(async () => {
+    const [sched, locs, rows] = await Promise.all([
+      fetchPaySchedule().catch(() => null),
+      fetchPayPeriodLocations().catch(() => []),
+      fetchPayPeriods().catch(() => []),
+    ]);
+    if (sched) setPaySchedule(sched);
+    setPayPeriodLocations(locs || []);
+    setPayPeriods(rows || []);
+  }, []);
+  useEffect(() => { reloadPayPeriodData(); }, [reloadPayPeriodData]);
+
+  // Approve a single punch, and bulk-approve everything closed in a period.
+  const approveOnePunch = useCallback(async (punch, approved = true) => {
+    try {
+      const saved = await setPunchApproved(punch.id, approved, currentUser?.name || "");
+      setPunchRecords(ps => ps.map(p => p.id === saved.id ? saved : p));
+    } catch (e) { showToast("Couldn't approve: " + (e?.message || e), "error"); }
+  }, [currentUser, showToast]);
+
+  const approveAllPunchesInPeriod = useCallback(async (period, storeIds) => {
+    const n = await approvePunchesInPeriod({
+      from: period.periodStart, to: period.periodEnd,
+      storeIds: storeIds && storeIds.length ? storeIds : null,
+      approvedBy: currentUser?.name || "",
+    });
+    const fresh = await fetchPunchRecords();
+    setPunchRecords(fresh);
+    showToast(n ? `Approved ${n} punch${n === 1 ? "" : "es"}` : "Nothing left to approve");
+    return n;
+  }, [currentUser, showToast]);
 
   const approvePayPeriod = useCallback(async (pp) => {
     const saved = await upsertPayPeriod({ ...pp, status: "approved", approvedBy: currentUser?.name || "", approvedAt: new Date().toISOString() });
@@ -62820,6 +63442,8 @@ export default function App() {
                     onUpdate={handleAmendPunch} onAdd={handlePunchIn} onDelete={removeSchedulePunchRecord}
                     onAddComment={handleAddPunchComment}
                     payPeriods={payPeriods} isPunchLocked={isPunchLocked} onApprovePeriod={approvePayPeriod} onReopenPeriod={reopenPayPeriod}
+                    paySchedule={paySchedule} payPeriodLocations={payPeriodLocations} onPeriodsChanged={reloadPayPeriodData}
+                    onApprovePunch={approveOnePunch} onApproveAllPunches={approveAllPunchesInPeriod}
                   />}
                   {effTeamTab === "onboarding-board" && canSeeView("onboarding-board") && <OnboardingBoard stores={stores.filter(s => scopedVisibleStoreIds.includes(s.id))} opsTeam={opsTeam}/>}
                 </div>

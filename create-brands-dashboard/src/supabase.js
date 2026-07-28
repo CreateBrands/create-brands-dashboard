@@ -1195,6 +1195,10 @@ export async function insertPunchIn(record) {
 // come through with no enforced deduction at all.
 export const BREAK_RULE_EFFECTIVE_FROM = "2026-06-29";
 
+// MISPUNCH: a clock-out this soon after the clock-in is not a shift. Used both
+// to refuse the punch-out outright and to stop the overnight rule firing on it.
+export const MISPUNCH_WINDOW_MS = 120000;   // 2 minutes
+
 // Was the enforced-break rule in force for a punch that started at `punchIn`?
 // Undated calls default to TRUE so live clock-outs (which always pass a date)
 // and any future caller keep the rule.
@@ -1242,7 +1246,15 @@ export function computePunchHours({ punchIn, punchOut, breakMinutes = 0, breakSt
   // 23:00, out 01:00). If they're exactly EQUAL, this is a zero-length shift (or
   // a punch_out mistakenly set equal to punch_in) — NOT a 24h overnight shift.
   // Treating equal as +24h was producing phantom "24h worked" records.
-  if (outMs < inMs) { outMs += 86400000; overnight = true; }
+  // MISPUNCH: a clock-out a few seconds BEFORE the clock-in is a double-tap or a
+  // kiosk retry, not a shift that ran to the next day. Rolling it forward 24h
+  // produced the phantom 23-hour records (Albin 23.23h, Aliza 23.20h). Only
+  // treat it as overnight when the clock-out is meaningfully earlier — a real
+  // overnight shift is hours short, never seconds.
+  if (outMs < inMs) {
+    if (inMs - outMs <= MISPUNCH_WINDOW_MS) { outMs = inMs; }
+    else { outMs += 86400000; overnight = true; }
+  }
   const rawHours = (outMs - inMs) / 3600000;
 
   // BREAKSTART: the enforced minimum only applies from the date staff were told.
@@ -1359,6 +1371,25 @@ export async function updatePunchOut(id, punchOut, hoursWorked, grossPay) {
     .from("punch_records")
     .select("break_start, break_end, break_minutes, break_log, punch_in")
     .eq("id", id).single();
+
+  // MISPUNCH GUARD — refuse a clock-out that lands within two minutes of the
+  // clock-in. This is a double-tap or a kiosk retry, never a shift. Previously
+  // it was recorded and then had to be cleaned up: 98 such rows accumulated,
+  // carrying −442 hours and −£2,365 of negative pay, plus four phantom 23-hour
+  // records where a one-second gap tripped the overnight rule.
+  // Throwing leaves the person CLOCKED IN, which is the honest state — they
+  // never left, so they should still be on shift.
+  if (existing && existing.punch_in && punchOut) {
+    const gapMs = new Date(punchOut).getTime() - new Date(existing.punch_in).getTime();
+    if (Number.isFinite(gapMs) && gapMs < MISPUNCH_WINDOW_MS) {
+      const secs = Math.max(0, Math.round(gapMs / 1000));
+      throw new Error(
+        `You clocked in ${secs} second${secs === 1 ? "" : "s"} ago — that's too soon to clock out. ` +
+        `You're still on shift. If you really are finishing, wait a moment and try again, ` +
+        `or ask your manager to amend it.`
+      );
+    }
+  }
 
   // SANITY GUARD — a single café shift over 16h is physically implausible
   // (real cause is a forgotten punch, a clock anomaly, or a kiosk retry writing
@@ -5910,7 +5941,221 @@ function dbPayPeriodToApp(p) {
     periodStart: p.period_start, periodEnd: p.period_end,
     status: p.status || "open", approvedBy: p.approved_by || "",
     approvedAt: p.approved_at || null, createdAt: p.created_at,
+    isOverride: p.is_override ?? false, overriddenBy: p.overridden_by || "",
+    closedAt: p.closed_at || null, closedBy: p.closed_by || "",
   };
+}
+
+// ── Pay schedule & generated pay periods (PAYPERIOD 2026-07-28d2) ───────────
+// NOTE: the table is pay_schedule_CONFIG. A pre-existing `pay_schedule`
+// table already lives in this database with a different shape — renamed to
+// avoid touching it.
+// Create Brands runs a MONTHLY cycle, 21st → 20th. Periods are DERIVED from
+// the schedule rather than typed in by hand: a `pay_periods` row only comes
+// into existence once a period has been acted on — dates overridden, or a
+// store's timesheet closed. Closure is PER STORE (`pay_period_locations`);
+// a period reads as "closed" only when every in-scope store is closed.
+//
+// Mirrors 7shifts: In Progress → Ready for review → closed, with a one-off
+// date override that does not disturb the recurring schedule.
+
+export const PAY_SCHEDULE_DEFAULT = {
+  frequency: "monthly",        // weekly | biweekly | semimonthly | monthly
+  anchorDay: 21,               // monthly: day the period starts
+  anchorStart: "2026-05-21",   // weekly/biweekly: first period start
+  payDayOffset: 5,             // pay day = period end + N days
+};
+
+function ppIso(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function ppFromIso(s) {
+  const [y, m, d] = String(s).split("-").map(Number);
+  return new Date(y, (m || 1) - 1, d || 1);
+}
+function ppAddDays(date, n) {
+  const d = new Date(date.getTime());
+  d.setDate(d.getDate() + n);
+  return d;
+}
+// Day-of-month clamped to the month's length, so anchorDay 31 lands on the
+// 28th/30th rather than rolling into the next month.
+function ppMonthStart(year, monthIdx, day) {
+  const dim = new Date(year, monthIdx + 1, 0).getDate();
+  return new Date(year, monthIdx, Math.min(day, dim));
+}
+
+export function payPeriodId(startIso) { return `pp-${startIso}`; }
+
+export function payPeriodLabelText(startIso, endIso) {
+  const f = (s) => ppFromIso(s).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" });
+  return `${f(startIso)} – ${f(endIso)}`;
+}
+
+// Deterministic generation. Returns newest-first, each { id, periodStart,
+// periodEnd, payDate, generated:true }.
+export function generatePayPeriods(schedule, { back = 14, forward = 1, today = null } = {}) {
+  const s = { ...PAY_SCHEDULE_DEFAULT, ...(schedule || {}) };
+  const now = today ? ppFromIso(today) : new Date();
+  now.setHours(0, 0, 0, 0);
+  const out = [];
+
+  const push = (startDate, endDate) => {
+    const startIso = ppIso(startDate), endIso = ppIso(endDate);
+    out.push({
+      id: payPeriodId(startIso),
+      periodStart: startIso,
+      periodEnd: endIso,
+      payDate: ppIso(ppAddDays(endDate, s.payDayOffset ?? 5)),
+      generated: true,
+    });
+  };
+
+  if (s.frequency === "monthly") {
+    const day = s.anchorDay || 21;
+    // Index of the period containing today.
+    let y = now.getFullYear(), m = now.getMonth();
+    if (now.getDate() < Math.min(day, new Date(y, m + 1, 0).getDate())) m -= 1;
+    for (let k = -back; k <= forward; k++) {
+      const start = ppMonthStart(y, m + k, day);
+      const end = ppAddDays(ppMonthStart(y, m + k + 1, day), -1);
+      push(start, end);
+    }
+  } else if (s.frequency === "semimonthly") {
+    let y = now.getFullYear(), m = now.getMonth();
+    let half = now.getDate() >= 16 ? 1 : 0;
+    let idx = (y * 24) + (m * 2) + half;
+    for (let k = -back; k <= forward; k++) {
+      const i = idx + k;
+      const yy = Math.floor(i / 24), rem = i - yy * 24;
+      const mm = Math.floor(rem / 2), hh = rem % 2;
+      const start = hh === 0 ? new Date(yy, mm, 1) : new Date(yy, mm, 16);
+      const end = hh === 0 ? new Date(yy, mm, 15) : new Date(yy, mm + 1, 0);
+      push(start, end);
+    }
+  } else {
+    const step = s.frequency === "weekly" ? 7 : 14;
+    const anchor = ppFromIso(s.anchorStart || PAY_SCHEDULE_DEFAULT.anchorStart);
+    const dayMs = 86400000;
+    const k0 = Math.floor((now - anchor) / (step * dayMs));
+    for (let k = k0 - back; k <= k0 + forward; k++) {
+      const start = ppAddDays(anchor, k * step);
+      push(start, ppAddDays(start, step - 1));
+    }
+  }
+
+  return out.sort((a, b) => b.periodStart.localeCompare(a.periodStart));
+}
+
+// Derived status. `closedStores` / `totalStores` drive the closed state so a
+// period is never "closed" while a site still has an open timesheet.
+export function payPeriodStatus(p, { closedStores = 0, totalStores = 0, today = null } = {}) {
+  const t = today || ppIso(new Date());
+  if (totalStores > 0 && closedStores >= totalStores) return "closed";
+  if (p.periodStart > t) return "upcoming";
+  if (p.periodEnd >= t) return "in_progress";
+  return "ready_for_review";
+}
+
+export async function fetchPaySchedule() {
+  const { data, error } = await supabase.from("pay_schedule_config").select("*").eq("id", "default").maybeSingle();
+  if (error) throw error;
+  if (!data) return { ...PAY_SCHEDULE_DEFAULT };
+  return {
+    frequency: data.frequency || PAY_SCHEDULE_DEFAULT.frequency,
+    anchorDay: data.anchor_day ?? PAY_SCHEDULE_DEFAULT.anchorDay,
+    anchorStart: data.anchor_start || PAY_SCHEDULE_DEFAULT.anchorStart,
+    payDayOffset: data.pay_day_offset ?? PAY_SCHEDULE_DEFAULT.payDayOffset,
+  };
+}
+
+export async function savePaySchedule(s) {
+  const row = {
+    id: "default",
+    frequency: s.frequency || "monthly",
+    anchor_day: s.anchorDay ?? 21,
+    anchor_start: s.anchorStart || PAY_SCHEDULE_DEFAULT.anchorStart,
+    pay_day_offset: s.payDayOffset ?? 5,
+    updated_at: new Date().toISOString(),
+  };
+  const { error } = await supabase.from("pay_schedule_config").upsert(row, { onConflict: "id" });
+  if (error) throw error;
+  return { ...s };
+}
+
+export async function fetchPayPeriodLocations(periodIds = null) {
+  let q = supabase.from("pay_period_locations").select("*");
+  if (Array.isArray(periodIds) && periodIds.length) q = q.in("pay_period_id", periodIds);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(r => ({
+    payPeriodId: r.pay_period_id, storeId: r.store_id,
+    closedAt: r.closed_at, closedBy: r.closed_by || "",
+  }));
+}
+
+// A generated period has no row until something happens to it.
+async function ensurePayPeriodRow(p) {
+  const { error } = await supabase.from("pay_periods").upsert({
+    id: p.id, period_start: p.periodStart, period_end: p.periodEnd,
+    status: "open", updated_at: new Date().toISOString(),
+  }, { onConflict: "id" });
+  if (error) throw error;
+}
+
+export async function closePayPeriodStore(p, storeId, closedBy) {
+  if (!storeId) throw new Error("A store is required — timesheets close per site.");
+  await ensurePayPeriodRow(p);
+  const closedAt = new Date().toISOString();
+  const { error } = await supabase.from("pay_period_locations").upsert({
+    pay_period_id: p.id, store_id: storeId, closed_at: closedAt, closed_by: closedBy || "",
+  }, { onConflict: "pay_period_id,store_id" });
+  if (error) throw error;
+  return { payPeriodId: p.id, storeId, closedAt, closedBy: closedBy || "" };
+}
+
+export async function reopenPayPeriodStore(periodId, storeId) {
+  const { error } = await supabase.from("pay_period_locations")
+    .delete().eq("pay_period_id", periodId).eq("store_id", storeId);
+  if (error) throw error;
+  return { payPeriodId: periodId, storeId };
+}
+
+// One-off date change. The recurring schedule is untouched, so the next
+// period reverts to the normal cadence — same wording as 7shifts.
+export async function overridePayPeriodDates(p, { periodStart, periodEnd, by = "" }) {
+  if (!periodStart || !periodEnd) throw new Error("Both dates are required.");
+  if (periodEnd < periodStart) throw new Error("End date must be on or after the start date.");
+  const { error } = await supabase.from("pay_periods").upsert({
+    id: p.id, period_start: periodStart, period_end: periodEnd,
+    status: "open", is_override: true, overridden_by: by || "",
+    updated_at: new Date().toISOString(),
+  }, { onConflict: "id" });
+  if (error) throw error;
+  return { ...p, periodStart, periodEnd, isOverride: true };
+}
+
+// ── Punch approval ──────────────────────────────────────────────────────────
+export async function setPunchApproved(id, approved, by = "") {
+  const { data, error } = await supabase.from("punch_records")
+    .update({ approved: !!approved, approved_by: approved ? (by || "") : "", updated_at: new Date().toISOString() })
+    .eq("id", id).select().single();
+  if (error) throw error;
+  return dbPunchToApp(data);
+}
+
+// Bulk approve. Deliberately skips still-open punches (no punch_out) — an
+// unfinished shift has no hours to approve.
+export async function approvePunchesInPeriod({ from, to, storeIds = null, approvedBy = "" }) {
+  let q = supabase.from("punch_records")
+    .update({ approved: true, approved_by: approvedBy || "", updated_at: new Date().toISOString() })
+    .gte("date", from).lte("date", to)
+    .eq("approved", false)
+    .not("punch_out", "is", null);
+  if (Array.isArray(storeIds) && storeIds.length) q = q.in("store_id", storeIds);
+  const { data, error } = await q.select("id");
+  if (error) throw error;
+  return (data || []).length;
 }
 
 export async function fetchAppSettings() {
