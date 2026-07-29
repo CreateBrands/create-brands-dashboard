@@ -32719,6 +32719,40 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
   // one screen is how someone ends up running a site twice or not at all, so
   // only the chosen basis is shown and only that field is editable.
   const [locMode, setLocMode] = useState("payroll");   // payroll | accounting
+  // PAYNOTES 2026-07-28v — a note typed here is filed on the employee's profile
+  // as a proper note entry, and an edited bank amount is written back as their
+  // new default. Both persist beyond the run, so a correction made while
+  // reviewing payroll isn't lost the moment the screen is left.
+  const [noteDrafts, setNoteDrafts] = useState({});
+  const [bankTouched, setBankTouched] = useState({});
+  const [savedFlag, setSavedFlag] = useState({});
+  const flash = (id, key) => {
+    setSavedFlag(s => ({ ...s, [id + ":" + key]: true }));
+    setTimeout(() => setSavedFlag(s => { const n = { ...s }; delete n[id + ":" + key]; return n; }), 2000);
+  };
+  const saveNote = async (r) => {
+    const text = (noteDrafts[r.employeeId] || "").trim();
+    if (!text) return;
+    try {
+      await addEmployeeNote({
+        employeeId: r.employeeId, content: text,
+        authorId: currentUser?.id, authorName: currentUser?.name || "Payroll",
+      });
+      setNoteDrafts(d => ({ ...d, [r.employeeId]: "" }));
+      flash(r.employeeId, "note");
+    } catch (e) { setErr(e.message); }
+  };
+  // Only writes when the field was actually typed in — the displayed amount is
+  // capped at gross, so saving an untouched row would quietly overwrite a
+  // £2,580 default with whatever this short period happened to compute.
+  const saveBankDefault = async (r) => {
+    if (!bankTouched[r.employeeId]) return;
+    try {
+      await updateOpsTeamMember(r.employeeId, { defaultBankAmount: Number(r.bankAmount) || 0 });
+      setBankTouched(t => { const n = { ...t }; delete n[r.employeeId]; return n; });
+      flash(r.employeeId, "bank");
+    } catch (e) { setErr(e.message); }
+  };
   // PAYRUNPERIOD 2026-07-28r — drive the run off the pay-period calendar so a
   // run can't be made for a range that isn't a real period. Typing dates by
   // hand is still available, but it is now the deliberate exception.
@@ -33236,6 +33270,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                   <th className="py-2 pr-3">Bank transfer</th>
                   <th className="py-2 pr-3">Cash paid</th>
                   <th className="py-2 pr-3">Age / min rate</th>
+                  <th className="py-2 pr-3">Note</th>
                   <th className="py-2 pr-3">{locModeLabel}</th>
                   <th className="py-2 pr-3">Working</th>
                 </tr>
@@ -33257,8 +33292,11 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                           <div className="flex items-center gap-1">
                             <span className="text-slate-500 text-xs">£</span>
                             <input type="number" step="0.01" min="0" max={r.totalPay} value={Number(r.bankAmount.toFixed(2))}
-                              onChange={e => updateRow(r.employeeId, { bankAmount: e.target.value })}
+                              onChange={e => { updateRow(r.employeeId, { bankAmount: e.target.value }); setBankTouched(t => ({ ...t, [r.employeeId]: true })); }}
+                              onBlur={() => saveBankDefault(r)}
+                              title="Editing this saves it as the employee's default bank amount"
                               className="w-24 px-2 py-1 bg-slate-900 border border-slate-800 rounded text-slate-200 text-xs" />
+                            {savedFlag[r.employeeId + ":bank"] && <span className="text-[10px] text-emerald-400">saved</span>}
                           </div>
                         </td>
                         <td className="py-2 pr-3 text-slate-300 font-medium">
@@ -33274,6 +33312,19 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                               {r.ageAtEnd} @ {r.nmwRate != null ? fmtGBP(r.nmwRate) : <span className="text-amber-400">rate not set</span>}
                             </span>
                           )}
+                        </td>
+                        <td className="py-2 pr-3">
+                          {/* PAYNOTES — filed on the employee's profile on blur. */}
+                          <div className="flex items-center gap-1">
+                            <input type="text" value={noteDrafts[r.employeeId] || ""}
+                              onChange={e => setNoteDrafts(d => ({ ...d, [r.employeeId]: e.target.value }))}
+                              onBlur={() => saveNote(r)}
+                              onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }}
+                              placeholder="Add note…"
+                              title="Saved to this employee's profile notes"
+                              className="w-40 px-2 py-1 bg-slate-900 border border-slate-800 rounded text-slate-200 text-xs" />
+                            {savedFlag[r.employeeId + ":note"] && <span className="text-[10px] text-emerald-400">saved</span>}
+                          </div>
                         </td>
                         <td className="py-2 pr-3">
                           {/* LOCMODE — only the basis being run is editable, so a
@@ -61992,7 +62043,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: NMWCOL 2026-07-28u");
+      console.log("CB build: PAYNOTES 2026-07-28v");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
