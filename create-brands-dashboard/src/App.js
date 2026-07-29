@@ -9923,6 +9923,7 @@ function DistSalesOrderView({ currentUser, setActiveView }) {
   const [sos, setSos] = useState([]); const [customers, setCustomers] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]);
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
   const [detail, setDetail] = useState(null); const [statusMap, setStatusMap] = useState({});
+  const [mergeSel, setMergeSel] = useState([]); const [mergeBusy, setMergeBusy] = useState(false);  // SOMERGE
   const [query, setQuery] = useState(""); const [statusFilter, setStatusFilter] = useState("all");
   const load = useCallback(async () => { setLoading(true); try { const [s, c, it, tx] = await Promise.all([fetchDistSalesOrders(), fetchDistContacts({ kind: "customer" }), fetchDistItems(), fetchDistTaxRates()]); setSos(s); setCustomers(c); setItems(it); setTaxRates(tx);
     // Resolve fulfilment status for the pillar dots in ONE coordinated call
@@ -9986,6 +9987,37 @@ function DistSalesOrderView({ currentUser, setActiveView }) {
         {(query || statusFilter !== "all") && <button onClick={() => { setQuery(""); setStatusFilter("all"); }} className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-400 hover:text-white">Clear</button>}
       </div>
       {err && <div className="text-xs text-red-400">{err}</div>}
+      {/* SOMERGE 2026-07-28j — combine duplicate orders for the same store */}
+      {mergeSel.length > 0 && (() => {
+        const picked = sos.filter(s => mergeSel.includes(s.id));
+        const custIds = [...new Set(picked.map(s => s.customerId))];
+        const sameCust = custIds.length === 1;
+        const ready = sameCust && picked.length >= 2;
+        return (
+          <div className="flex items-center justify-between gap-3 flex-wrap rounded-xl border border-indigo-500/40 bg-indigo-950/20 px-4 py-3">
+            <div className="text-xs text-slate-200">
+              <span className="font-bold">{mergeSel.length} order{mergeSel.length !== 1 ? "s" : ""} selected</span>
+              {!sameCust && <span className="text-amber-300"> — pick orders for a single store; these span {custIds.length}.</span>}
+              {sameCust && picked.length < 2 && <span className="text-slate-400"> — select one more to merge.</span>}
+              {ready && <span className="text-slate-400"> — {cName(custIds[0])}. Quantities are summed; the others are cancelled.</span>}
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setMergeSel([])} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200">Clear</button>
+              <button disabled={!ready || mergeBusy}
+                onClick={async () => {
+                  if (!window.confirm(`Merge ${picked.length} orders for ${cName(custIds[0])}? The others are cancelled and stamped with the surviving order number.`)) return;
+                  setMergeBusy(true);
+                  try { await mergePendingOrders(mergeSel, currentUser?.name); setMergeSel([]); await load(); }
+                  catch (e) { alert(e.message); }
+                  setMergeBusy(false);
+                }}
+                className="px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-xs font-bold text-white">
+                {mergeBusy ? "Merging…" : "Merge orders"}
+              </button>
+            </div>
+          </div>
+        );
+      })()}
       {loading ? <div className="text-sm text-slate-500 py-6 text-center">Loading…</div> : (
         <div className="dist-table bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
           {visibleSos.length === 0 ? <div className="px-4 py-8 text-center text-sm text-slate-600">{sos.length === 0 ? "No sales orders yet. An order commits stock (reserves it) without shipping." : "No orders match your search/filter."}</div> : (
@@ -9993,6 +10025,7 @@ function DistSalesOrderView({ currentUser, setActiveView }) {
               <table className="w-full text-sm">
                 <thead className="dist-th">
                   <tr>
+                    <th className="w-8 px-2 py-2.5"></th>
                     <th className="text-left px-3 py-2.5 font-semibold">Date</th>
                     <th className="text-left px-3 py-2.5 font-semibold">SO #</th>
                     <th className="text-left px-3 py-2.5 font-semibold">Customer</th>
@@ -10011,6 +10044,14 @@ function DistSalesOrderView({ currentUser, setActiveView }) {
                     const Dot = ({ on }) => <span className={`inline-block w-2 h-2 rounded-full ${on ? "bg-emerald-400" : "bg-slate-700"}`}></span>;
                     return (
                       <tr key={so.id} onClick={() => setDetail(so)} className="border-t border-slate-800/50 hover:bg-slate-800/40 cursor-pointer">
+                        {/* SOMERGE — only unpicked pending/confirmed orders can be combined */}
+                        <td className="px-2 py-2.5" onClick={e => e.stopPropagation()}>
+                          {(so.status === "pending_approval" || so.status === "confirmed") && !st.picked ? (
+                            <input type="checkbox" checked={mergeSel.includes(so.id)}
+                              onChange={e => setMergeSel(x => e.target.checked ? [...x, so.id] : x.filter(y => y !== so.id))}
+                              title="Select to merge with another order for this store"/>
+                          ) : null}
+                        </td>
                         <td className="px-3 py-2.5 text-slate-400 whitespace-nowrap">{so.orderDate}</td>
                         <td className="px-3 py-2.5"><span className="font-mono text-indigo-300 hover:underline">{so.soNumber}</span></td>
                         <td className="px-3 py-2.5 text-slate-300">{cName(so.customerId)}</td>
@@ -61663,7 +61704,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: ORDERWHO 2026-07-28i");
+      console.log("CB build: SOMERGE 2026-07-28j");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
