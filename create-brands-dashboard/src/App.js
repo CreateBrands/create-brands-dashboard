@@ -33521,8 +33521,14 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                             : <span className="text-[11px] text-slate-200">{r.ageAtEnd}</span>}
                         </td>
                         <td className="py-2 pr-3 whitespace-nowrap">
+                          {/* SALMIN 2026-07-28ad — a salaried row has no hourly floor,
+                              so show the monthly salary the pay is derived from
+                              rather than the bare word "salaried". */}
                           {r.salaried ? (
-                            <span className="text-[11px] text-slate-500">salaried</span>
+                            <span className="text-[11px] text-slate-300"
+                              title={r.payType === "annual" ? `${fmtGBP(r.salaryAmount)} per year ÷ 12` : "Monthly salary"}>
+                              {fmtGBP(r.payType === "annual" ? r.salaryAmount / 12 : r.salaryAmount)}/mo
+                            </span>
                           ) : r.nmwRate != null ? (
                             <span className="text-[11px] text-slate-200">{fmtGBP(r.nmwRate)}</span>
                           ) : (
@@ -62227,7 +62233,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: SALWORK 2026-07-28ac");
+      console.log("CB build: SALMIN 2026-07-28ad");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
