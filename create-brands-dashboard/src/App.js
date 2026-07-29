@@ -70,7 +70,7 @@ import {
   // Slice 5: hire workflow
   hireApplication, hireApplicationCheck,
   // Slice 6: employee profile
-  fetchEmployeeNotes, addEmployeeNote, fetchLinkedApplication,
+  fetchEmployeeNotes, addEmployeeNote, updateEmployeeNote, deleteEmployeeNote, fetchLinkedApplication,
   // Slice 6 follow-up: pay history
   fetchPayHistory, addPayHistory,
   // Slice 6 follow-up: certifications
@@ -32724,6 +32724,15 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
   // new default. Both persist beyond the run, so a correction made while
   // reviewing payroll isn't lost the moment the screen is left.
   const [noteDrafts, setNoteDrafts] = useState({});
+  // PAYNOTES2 2026-07-28x — the payroll note field is a window onto the
+  // employee's profile notes, not a write-only box: it shows the full history,
+  // and each entry can be edited or removed. Same employee_notes rows the
+  // profile reads, so a note added here is the same note there.
+  const [notesFor, setNotesFor] = useState(null);      // { employeeId, name }
+  const [notesList, setNotesList] = useState([]);
+  const [notesBusy, setNotesBusy] = useState(false);
+  const [notesCount, setNotesCount] = useState({});    // employeeId -> count
+  const [editDraft, setEditDraft] = useState({});      // noteId -> text
   const [bankTouched, setBankTouched] = useState({});
   // BANKFIX 2026-07-28w — the row's bankAmount is CLAMPED to the period's gross
   // (a £2,580 default on a £44 part-period row shows as £44). Saving that back
@@ -32739,17 +32748,46 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
     setSavedFlag(s => ({ ...s, [id + ":" + key]: true }));
     setTimeout(() => setSavedFlag(s => { const n = { ...s }; delete n[id + ":" + key]; return n; }), 2000);
   };
-  const saveNote = async (r) => {
-    const text = (noteDrafts[r.employeeId] || "").trim();
+  const loadNotes = async (employeeId) => {
+    setNotesBusy(true);
+    try {
+      const list = await fetchEmployeeNotes(employeeId);
+      setNotesList(list);
+      setNotesCount(c => ({ ...c, [employeeId]: list.length }));
+    } catch (e) { setErr(e.message); }
+    setNotesBusy(false);
+  };
+  const openNotes = async (r) => {
+    setNotesFor({ employeeId: r.employeeId, name: r.name });
+    setNotesList([]); setEditDraft({});
+    await loadNotes(r.employeeId);
+  };
+  const saveNote = async (employeeId) => {
+    const text = (noteDrafts[employeeId] || "").trim();
     if (!text) return;
     try {
       await addEmployeeNote({
-        employeeId: r.employeeId, content: text,
+        employeeId, content: text,
         authorId: currentUser?.id, authorName: currentUser?.name || "Payroll",
       });
-      setNoteDrafts(d => ({ ...d, [r.employeeId]: "" }));
-      flash(r.employeeId, "note");
+      setNoteDrafts(d => ({ ...d, [employeeId]: "" }));
+      await loadNotes(employeeId);
+      flash(employeeId, "note");
     } catch (e) { setErr(e.message); }
+  };
+  const saveNoteEdit = async (employeeId, note) => {
+    const text = (editDraft[note.id] ?? note.content).trim();
+    if (!text || text === note.content) { setEditDraft(d => { const n = { ...d }; delete n[note.id]; return n; }); return; }
+    try {
+      await updateEmployeeNote(note.id, text, currentUser?.name || "Payroll");
+      setEditDraft(d => { const n = { ...d }; delete n[note.id]; return n; });
+      await loadNotes(employeeId);
+    } catch (e) { setErr(e.message); }
+  };
+  const removeNote = async (employeeId, note) => {
+    if (!window.confirm("Delete this note? It is removed from the employee's profile permanently.")) return;
+    try { await deleteEmployeeNote(note.id); await loadNotes(employeeId); }
+    catch (e) { setErr(e.message); }
   };
   // Only writes when the field was actually typed in — the displayed amount is
   // capped at gross, so saving an untouched row would quietly overwrite a
@@ -33224,6 +33262,78 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
         )}
       </div>
 
+      {/* PAYNOTES2 — employee note history: add, edit, delete. Same rows the
+          profile shows, so this is the profile's notes seen from payroll. */}
+      {notesFor && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4" onClick={() => setNotesFor(null)}>
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-xl max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3 p-5 border-b border-slate-800">
+              <div>
+                <h3 className="text-base font-bold text-white">Notes — {notesFor.name}</h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">These are the notes on this employee's profile.</p>
+              </div>
+              <button onClick={() => setNotesFor(null)} className="text-slate-500 hover:text-white"><X size={18}/></button>
+            </div>
+
+            <div className="p-5 border-b border-slate-800">
+              <div className="flex gap-2">
+                <input type="text" value={noteDrafts[notesFor.employeeId] || ""}
+                  onChange={e => setNoteDrafts(d => ({ ...d, [notesFor.employeeId]: e.target.value }))}
+                  onKeyDown={e => { if (e.key === "Enter") saveNote(notesFor.employeeId); }}
+                  placeholder="Add a note…"
+                  className="flex-1 px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500" />
+                <button onClick={() => saveNote(notesFor.employeeId)}
+                  disabled={!(noteDrafts[notesFor.employeeId] || "").trim()}
+                  className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-sm font-bold text-white">Add</button>
+              </div>
+              {savedFlag[notesFor.employeeId + ":note"] && <div className="text-[11px] text-emerald-400 mt-1.5">Saved to profile</div>}
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5 space-y-3">
+              {notesBusy && notesList.length === 0 ? (
+                <div className="text-sm text-slate-500 text-center py-6">Loading…</div>
+              ) : notesList.length === 0 ? (
+                <div className="text-sm text-slate-500 text-center py-6">No notes yet.</div>
+              ) : notesList.map(n => {
+                const editing = editDraft[n.id] !== undefined;
+                return (
+                  <div key={n.id} className="border border-slate-800 rounded-xl p-3">
+                    {editing ? (
+                      <>
+                        <textarea value={editDraft[n.id]} rows={3}
+                          onChange={e => setEditDraft(d => ({ ...d, [n.id]: e.target.value }))}
+                          className="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500" />
+                        <div className="flex justify-end gap-2 mt-2">
+                          <button onClick={() => setEditDraft(d => { const x = { ...d }; delete x[n.id]; return x; })}
+                            className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200">Cancel</button>
+                          <button onClick={() => saveNoteEdit(notesFor.employeeId, n)}
+                            className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-bold text-white">Save</button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="text-sm text-slate-200 whitespace-pre-wrap">{n.content}</div>
+                        <div className="flex items-center justify-between gap-3 mt-2">
+                          <div className="text-[11px] text-slate-500">
+                            {n.authorName} · {n.createdAt ? new Date(n.createdAt).toLocaleString("en-GB", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : ""}
+                          </div>
+                          <div className="flex gap-1">
+                            <button onClick={() => setEditDraft(d => ({ ...d, [n.id]: n.content }))}
+                              className="p-1 text-slate-500 hover:text-white" title="Edit"><Pencil size={13}/></button>
+                            <button onClick={() => removeNote(notesFor.employeeId, n)}
+                              className="p-1 text-slate-500 hover:text-red-400" title="Delete"><Trash2 size={13}/></button>
+                          </div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
       {err && <div className="text-sm text-red-400 bg-red-950/30 border border-red-800/40 rounded-xl px-4 py-2">{err}</div>}
       {overlapWarn && <div className="text-xs text-amber-300 bg-amber-950/30 border border-amber-800/40 rounded-xl px-4 py-2">{overlapWarn}</div>}
       {savedMsg && <div className="text-sm text-emerald-300 bg-emerald-950/30 border border-emerald-800/40 rounded-xl px-4 py-2">{savedMsg}</div>}
@@ -33341,17 +33451,11 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                           )}
                         </td>
                         <td className="py-2 pr-3">
-                          {/* PAYNOTES — filed on the employee's profile on blur. */}
-                          <div className="flex items-center gap-1">
-                            <input type="text" value={noteDrafts[r.employeeId] || ""}
-                              onChange={e => setNoteDrafts(d => ({ ...d, [r.employeeId]: e.target.value }))}
-                              onBlur={() => saveNote(r)}
-                              onKeyDown={e => { if (e.key === "Enter") e.currentTarget.blur(); }}
-                              placeholder="Add note…"
-                              title="Saved to this employee's profile notes"
-                              className="w-40 px-2 py-1 bg-slate-900 border border-slate-800 rounded text-slate-200 text-xs" />
-                            {savedFlag[r.employeeId + ":note"] && <span className="text-[10px] text-emerald-400">saved</span>}
-                          </div>
+                          {/* PAYNOTES2 — opens the employee's full note history. */}
+                          <button onClick={() => openNotes(r)}
+                            className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-200 whitespace-nowrap">
+                            {notesCount[r.employeeId] > 0 ? `${notesCount[r.employeeId]} note${notesCount[r.employeeId] === 1 ? "" : "s"}` : "Notes"}
+                          </button>
                         </td>
                         <td className="py-2 pr-3">
                           {/* LOCMODE — only the basis being run is editable, so a
@@ -62070,7 +62174,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: BANKFIX 2026-07-28w");
+      console.log("CB build: PAYNOTES2 2026-07-28x");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
