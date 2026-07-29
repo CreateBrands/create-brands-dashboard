@@ -32773,10 +32773,24 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
       }
 
       const computed = scopedEmployees.map(emp => {
-        // approved punches for this employee in range
-        const empPunches = (punches || []).filter(
-          p => p.employeeId === emp.id && p.approved && p.hoursWorked
+        // PAYALLHOURS 2026-07-28q — was `p.approved && p.hoursWorked`, which
+        // paid only explicitly-approved punches. That column is almost never
+        // set: the Approve button only ever surfaced for overtime and
+        // unscheduled shifts, so ordinary shifts stayed false forever and were
+        // silently unpaid. £13,057 went missing at one site in one month.
+        //
+        // Payroll now pays every CLOSED punch with recorded hours. Hours worked
+        // are owed whether or not a manager clicked a button; unresolved
+        // overtime is surfaced as a flag, never as a silent deduction.
+        const allPunches = (punches || []).filter(
+          p => p.employeeId === emp.id && Number(p.hoursWorked) > 0
         );
+        const empPunches = allPunches.filter(p => p.punchOut);
+        const openPunches = allPunches.length - empPunches.length;
+        const otPending = empPunches.filter(
+          p => Number(p.overtimeHours) > 0 && !p.overtimeApproved && !p.overtimeRejectedReason
+        ).length;
+        const notApproved = empPunches.filter(p => !p.approved).length;
         let totalHours = 0, totalPay = 0;
         const lines = [];
         let rowError = "";
@@ -32852,6 +32866,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
           basis: salaried ? (emp.payType === "annual" ? "Annual salary" : "Monthly salary") : (emp.payBasis || "fixed"),
           salaried,
           totalHours, totalPay,
+          punchCount: empPunches.length, openPunches, otPending, notApproved,
           bankAmount, cashAmount,
           payrollLocation: emp.payrollLocation || (emp.storeIds?.[0] || ""),
           accountingLocation: emp.accountingLocation || (emp.storeIds?.[0] || ""),
@@ -33088,6 +33103,28 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
       {err && <div className="text-sm text-red-400 bg-red-950/30 border border-red-800/40 rounded-xl px-4 py-2">{err}</div>}
       {overlapWarn && <div className="text-xs text-amber-300 bg-amber-950/30 border border-amber-800/40 rounded-xl px-4 py-2">{overlapWarn}</div>}
       {savedMsg && <div className="text-sm text-emerald-300 bg-emerald-950/30 border border-emerald-800/40 rounded-xl px-4 py-2">{savedMsg}</div>}
+
+      {/* PAYALLHOURS — surface what the run excluded or couldn't settle, so a
+          low figure is visible rather than silent. */}
+      {rows && (() => {
+        const stillIn = rows.filter(r => r.openPunches > 0);
+        const otOpen = rows.filter(r => r.otPending > 0);
+        if (!stillIn.length && !otOpen.length) return null;
+        return (
+          <div className="text-xs text-amber-200 bg-amber-950/30 border border-amber-700/50 rounded-xl px-4 py-3 space-y-1">
+            {stillIn.length > 0 && (
+              <div>
+                <strong>⚠ {stillIn.length} employee(s) have punches still clocked in</strong> — those shifts have no end time, so they are not paid on this run: {stillIn.map(r => `${r.name} (${r.openPunches})`).join(", ")}
+              </div>
+            )}
+            {otOpen.length > 0 && (
+              <div>
+                <strong>{otOpen.length} employee(s) have overtime awaiting a decision</strong> — their base hours ARE paid here; only the overtime premium is outstanding: {otOpen.map(r => `${r.name} (${r.otPending})`).join(", ")}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {zeroPaid.length > 0 && (
         <div className="text-xs text-red-200 bg-red-950/40 border border-red-700/50 rounded-xl px-4 py-3">
@@ -61861,7 +61898,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: SALARYPAY 2026-07-28p");
+      console.log("CB build: PAYALLHOURS 2026-07-28q");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
