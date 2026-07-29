@@ -55109,12 +55109,50 @@ function PayPeriodDetail({
       cur.hours += h; cur.pay += g; cur.people.add(p.employeeId); cur.punches += 1;
       byStore.set(p.storeId, cur);
     });
+    // PAYSUMMARY 2026-07-28m — per-employee breakdown. This is what payroll
+    // actually keys off; the per-site totals only say where the money went.
+    const byEmp = new Map();
+    rows.forEach(({ p, member }) => {
+      const k = p.employeeId || p.employeeName || "unknown";
+      const cur = byEmp.get(k) || {
+        id: p.employeeId, name: p.employeeName || "Unknown",
+        role: member?.role || member?.department || "",
+        stores: new Set(), punches: 0, hours: 0, ot: 0, pay: 0, unapproved: 0, open: 0,
+      };
+      cur.stores.add(p.storeId);
+      cur.punches += 1;
+      cur.hours += Number(p.hoursWorked) || 0;
+      cur.ot += Number(p.overtimeHours) || 0;
+      cur.pay += Number(p.grossPay) || 0;
+      if (!p.punchOut) cur.open += 1;
+      else if (!p.approved) cur.unapproved += 1;
+      byEmp.set(k, cur);
+    });
     return {
       hours, pay,
       stores: [...byStore.entries()].map(([id, v]) => ({ id, ...v, headcount: v.people.size }))
         .sort((a, b) => b.pay - a.pay),
+      employees: [...byEmp.values()].sort((a, b) => b.pay - a.pay),
     };
   }, [rows]);
+
+  // Payroll hands this to the bureau, so give them a file rather than a screen.
+  const downloadSummaryCsv = () => {
+    const esc = (v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
+    const head = ["Employee", "Role", "Locations", "Punches", "Hours", "Overtime hrs", "Gross pay", "Avg £/hr", "Unapproved", "Still clocked in"];
+    const body = summary.employees.map(e => [
+      e.name, e.role, [...e.stores].map(storeName).join(" / "), e.punches,
+      e.hours.toFixed(2), e.ot.toFixed(2), e.pay.toFixed(2),
+      e.hours > 0 ? (e.pay / e.hours).toFixed(2) : "0.00", e.unapproved, e.open,
+    ]);
+    const csv = [head, ...body].map(r => r.map(esc).join(",")).join("\r\n");
+    const url = URL.createObjectURL(new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `pay-period-${period.periodStart}-to-${period.periodEnd}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const doClose = async (storeId) => {
     if (!window.confirm(`Close ${storeName(storeId)} for ${ppRangeLabel(period)}? Punches at that site become read-only until it is re-opened.`)) return;
@@ -55352,6 +55390,51 @@ function PayPeriodDetail({
                     <td className="px-4 text-right tabular-nums text-slate-300">{s.punches}</td>
                     <td className="px-4 text-right tabular-nums text-slate-300">{s.hours.toFixed(1)}</td>
                     <td className="px-4 text-right tabular-nums text-emerald-400 font-semibold">£{s.pay.toFixed(2)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <h4 className="text-sm font-bold text-white">By employee — {summary.employees.length} {summary.employees.length === 1 ? "person" : "people"}</h4>
+            <button onClick={downloadSummaryCsv}
+              className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+              <Download size={13}/> Download CSV
+            </button>
+          </div>
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-x-auto dist-table">
+            <table className="w-full text-sm">
+              <thead className="dist-th">
+                <tr>
+                  <th>Employee</th><th>Location</th>
+                  <th className="text-right">Punches</th><th className="text-right">Hours</th>
+                  <th className="text-right">OT hrs</th><th className="text-right">Avg £/hr</th>
+                  <th className="text-right">Gross pay</th><th className="text-right">Flags</th>
+                </tr>
+              </thead>
+              <tbody>
+                {summary.employees.length === 0 ? (
+                  <tr><td colSpan={8} className="text-center py-8 text-sm text-slate-500">No punches in this period.</td></tr>
+                ) : summary.employees.map(e => (
+                  <tr key={e.id || e.name}>
+                    <td className="px-4">
+                      <div className="font-semibold text-white">{e.name}</div>
+                      {e.role && <div className="text-[11px] text-slate-500">{e.role}</div>}
+                    </td>
+                    <td className="px-4 text-slate-300 text-xs">{[...e.stores].map(storeName).join(", ")}</td>
+                    <td className="px-4 text-right tabular-nums text-slate-300">{e.punches}</td>
+                    <td className="px-4 text-right tabular-nums text-white font-semibold">{e.hours.toFixed(2)}</td>
+                    <td className={`px-4 text-right tabular-nums ${e.ot > 0 ? "text-amber-400" : "text-slate-500"}`}>{e.ot ? e.ot.toFixed(2) : "—"}</td>
+                    <td className={`px-4 text-right tabular-nums ${e.hours > 0 && e.pay / e.hours < 1 ? "text-red-400" : "text-slate-400"}`}>£{e.hours > 0 ? (e.pay / e.hours).toFixed(2) : "0.00"}</td>
+                    <td className="px-4 text-right tabular-nums text-emerald-400 font-semibold">£{e.pay.toFixed(2)}</td>
+                    <td className="px-4 text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        {e.open > 0 && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-500/20 text-red-300" title="Still clocked in">{e.open} open</span>}
+                        {e.unapproved > 0 && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300" title="Not approved">{e.unapproved}</span>}
+                        {e.open === 0 && e.unapproved === 0 && <span className="text-slate-600 text-xs">—</span>}
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -61685,7 +61768,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: PAYPERIODVIEW 2026-07-28l");
+      console.log("CB build: PAYSUMMARY 2026-07-28m");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
