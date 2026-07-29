@@ -33000,6 +33000,10 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
           basis: salaried ? (emp.payType === "annual" ? "Annual salary" : "Monthly salary") : (emp.payBasis || "fixed"),
           salaried,
           payType: emp.payType || "hourly",
+          // NEWSTARTER 2026-07-28ae — someone whose hire date lands in this
+          // period is a new starter by default. Overridable per row, because
+          // the payroll bureau only needs full personal details once.
+          newStarter: !!(emp.hireDate && emp.hireDate >= from && emp.hireDate <= to),
           salaryAmount: Number(emp.hourlyRate) || 0,
           totalHours, totalPay,
           punchCount: empPunches.length, openPunches, otPending, notApproved,
@@ -33083,121 +33087,128 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
     }
   };
 
+  // NEWSTARTER 2026-07-28ae — the bureau only needs an employee's personal
+  // details once, when they first appear. So the sheet is two blocks: a NEW
+  // STARTERS block at the top carrying the full details for ticked employees
+  // only, then the payroll figures for everyone below.
   const exportExcel = async () => {
     if (!ExcelJS) { alert("Excel library still loading — try again in a moment."); return; }
     if (!rows) return;
     const exportable = rows.filter(r => !r.rowError);
-
-    // Exact column spec for the accountant, in order.
-    const columns = [
-      { header: "Accounting Location", key: "acctLoc",  width: 20 },
-      { header: "Start Date",          key: "startDate", width: 13, kind: "date" },
-      { header: "End Date",            key: "endDate",   width: 13, kind: "date" },
-      { header: "First Name",          key: "firstName", width: 16 },
-      { header: "Last Name",           key: "lastName",  width: 16 },
-      { header: "Gender",              key: "gender",    width: 9 },
-      { header: "DOB",                 key: "dob",       width: 13, kind: "date" },
-      { header: "NI Number",           key: "ni",        width: 14 },
-      { header: "Email",               key: "email",     width: 26 },
-      { header: "Address",             key: "address",   width: 32 },
-      { header: "Starter Statement A", key: "stA",       width: 10, kind: "center" },
-      { header: "Starter Statement B", key: "stB",       width: 10, kind: "center" },
-      { header: "Starter Statement C", key: "stC",       width: 10, kind: "center" },
-      { header: "Salary Term",         key: "term",      width: 14 },
-      { header: "Min Rate",            key: "minRate",   width: 11, kind: "money" },
-      { header: "Gross Pay",           key: "gross",     width: 13, kind: "money" },
-      { header: "Bank Transfer",       key: "bank",      width: 14, kind: "money" },
-      { header: "Cash Paid",           key: "cash",      width: 13, kind: "money" },
-    ];
+    const starters = exportable.filter(r => r.newStarter);
 
     const wb = new ExcelJS.Workbook();
     wb.creator = "Chocoberry Dashboard";
     wb.created = new Date();
-    const ws = wb.addWorksheet("Payroll", {
-      views: [{ state: "frozen", ySplit: 1 }],   // freeze header row
-    });
-    ws.columns = columns.map(c => ({ header: c.header, key: c.key, width: c.width }));
+    const ws = wb.addWorksheet("Payroll");
 
-    // Header styling
-    const headerRow = ws.getRow(1);
-    headerRow.height = 22;
-    headerRow.eachCell(cell => {
-      cell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
-      cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FF4F46E5" } };
-      cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
-      cell.border = {
-        top: { style: "thin", color: { argb: "FF3730A3" } },
-        bottom: { style: "thin", color: { argb: "FF3730A3" } },
-        left: { style: "thin", color: { argb: "FF3730A3" } },
-        right: { style: "thin", color: { argb: "FF3730A3" } },
-      };
-    });
-
+    const HEAD_FILL = "FF4F46E5";
+    const styleHeader = (row) => {
+      row.eachCell(cell => {
+        cell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 11 };
+        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: HEAD_FILL } };
+        cell.alignment = { vertical: "middle", horizontal: "center", wrapText: true };
+        cell.border = { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } };
+      });
+      row.height = 22;
+    };
+    const styleBody = (row, i, moneyCols = []) => {
+      if (i % 2 === 1) row.eachCell(cell => { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF3F4F6" } }; });
+      row.eachCell((cell, col) => {
+        cell.border = {
+          top: { style: "hair", color: { argb: "FFD1D5DB" } }, bottom: { style: "hair", color: { argb: "FFD1D5DB" } },
+          left: { style: "hair", color: { argb: "FFD1D5DB" } }, right: { style: "hair", color: { argb: "FFD1D5DB" } },
+        };
+        if (moneyCols.includes(col)) { cell.numFmt = "£#,##0.00"; cell.alignment = { horizontal: "right" }; }
+      });
+    };
+    const sectionTitle = (text) => {
+      const r = ws.addRow([text]);
+      r.getCell(1).font = { bold: true, size: 12, color: { argb: "FF1F2937" } };
+      return r;
+    };
     const stMark = (r, letter) => (String(r.taxStarterStatement || "").toUpperCase() === letter ? "Yes" : "");
 
-    exportable.forEach((r, i) => {
-      const row = ws.addRow({
-        acctLoc: storeName(r.accountingLocation),
-        startDate: r.hireDate || "",
-        endDate: "",                                   // no contract-end field; left blank
-        firstName: r.firstName || "",
-        lastName: r.lastName || "",
-        gender: r.gender || "",
-        dob: r.dob || "",
-        ni: r.niNumber || "",
-        email: r.email || "",
-        address: r.address || "",
-        stA: stMark(r, "A"),
-        stB: stMark(r, "B"),
-        stC: stMark(r, "C"),
-        // EXPTERM 2026-07-28ab — was `basis === "minimum_wage" ? "Hourly" : "Fixed"`,
-        // so every salaried employee exported as "Fixed" alongside the hourly
-        // staff. The accountant needs to see which figures are a monthly salary
-        // and which are hours × rate.
-        term: r.salaried ? "Monthly Salary" : "Hourly",
-        // Statutory floor for their age band. Blank for salaried — no hourly
-        // rate to compare against.
-        minRate: r.salaried || r.nmwRate == null ? "" : Number(r.nmwRate),
-        gross: Number(r.totalPay.toFixed(2)),
-        bank: Number(r.bankAmount.toFixed(2)),
-        cash: Number(r.cashAmount.toFixed(2)),
-      });
-      // zebra striping
-      if (i % 2 === 1) {
-        row.eachCell(cell => { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF3F4F6" } }; });
-      }
-      row.eachCell((cell, col) => {
-        const spec = columns[col - 1];
-        cell.border = {
-          top: { style: "hair", color: { argb: "FFD1D5DB" } },
-          bottom: { style: "hair", color: { argb: "FFD1D5DB" } },
-          left: { style: "hair", color: { argb: "FFD1D5DB" } },
-          right: { style: "hair", color: { argb: "FFD1D5DB" } },
-        };
-        if (spec?.kind === "money") { cell.numFmt = "£#,##0.00"; cell.alignment = { horizontal: "right" }; }
-        if (spec?.kind === "center") cell.alignment = { horizontal: "center" };
-      });
-    });
+    // ── Title ──────────────────────────────────────────────────────────────
+    const t = ws.addRow([`Payroll — ${from} to ${to}`]);
+    t.getCell(1).font = { bold: true, size: 14 };
+    const sub = ws.addRow([`${locModeLabel}: ${locFilter === "all" ? "All locations" : storeName(locFilter)} · ${exportable.length} employees · ${starters.length} new starter${starters.length === 1 ? "" : "s"}`]);
+    sub.getCell(1).font = { size: 10, color: { argb: "FF64748B" } };
+    ws.addRow([]);
 
-    // Totals row
-    if (exportable.length) {
-      const totalRow = ws.addRow({
-        acctLoc: "TOTAL",
-        gross: { formula: `SUM(O2:O${exportable.length + 1})` },
-        bank:  { formula: `SUM(P2:P${exportable.length + 1})` },
-        cash:  { formula: `SUM(Q2:Q${exportable.length + 1})` },
-      });
-      totalRow.eachCell((cell, col) => {
-        cell.font = { bold: true };
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } };
-        const spec = columns[col - 1];
-        if (spec?.kind === "money") { cell.numFmt = "£#,##0.00"; cell.alignment = { horizontal: "right" }; }
-        cell.border = { top: { style: "thin", color: { argb: "FF9CA3AF" } } };
+    // ── Block 1: new starters, full details ────────────────────────────────
+    sectionTitle("NEW STARTERS — full details");
+    const starterCols = [
+      ["First Name", 16], ["Last Name", 16], ["Accounting Location", 20], ["Start Date", 13],
+      ["Gender", 9], ["DOB", 13], ["NI Number", 14], ["Email", 26], ["Address", 32],
+      ["Starter Statement A", 10], ["Starter Statement B", 10], ["Starter Statement C", 10],
+    ];
+    styleHeader(ws.addRow(starterCols.map(c => c[0])));
+    if (starters.length === 0) {
+      const none = ws.addRow(["No new starters in this period."]);
+      none.getCell(1).font = { italic: true, color: { argb: "FF6B7280" } };
+    } else {
+      starters.forEach((r, i) => {
+        const row = ws.addRow([
+          r.firstName || "", r.lastName || "", storeName(r.accountingLocation), r.hireDate || "",
+          r.gender || "", r.dob || "", r.niNumber || "", r.email || "", r.address || "",
+          stMark(r, "A"), stMark(r, "B"), stMark(r, "C"),
+        ]);
+        styleBody(row, i);
       });
     }
 
+    ws.addRow([]);
+    ws.addRow([]);
+
+    // ── Block 2: payroll figures for everyone ──────────────────────────────
+    sectionTitle("PAYROLL");
+    const payCols = [
+      ["First Name", 16], ["Last Name", 16], ["New Starter", 12], ["Min Rate", 11],
+      ["Wages", 13], ["Salary Term", 14], ["Bank Transfer", 14], ["Cash Paid", 13],
+    ];
+    styleHeader(ws.addRow(payCols.map(c => c[0])));
+    exportable.forEach((r, i) => {
+      const row = ws.addRow([
+        r.firstName || "", r.lastName || "",
+        r.newStarter ? "Yes" : "",
+        // Salaried staff have no hourly floor — show the monthly salary the
+        // pay is derived from, matching the on-screen column.
+        r.salaried
+          ? Number(((r.payType === "annual" ? r.salaryAmount / 12 : r.salaryAmount) || 0).toFixed(2))
+          : (r.nmwRate == null ? "" : Number(r.nmwRate)),
+        Number(r.totalPay.toFixed(2)),
+        r.salaried ? "Monthly Salary" : "Hourly",
+        Number(r.bankAmount.toFixed(2)),
+        Number(r.cashAmount.toFixed(2)),
+      ]);
+      styleBody(row, i, [4, 5, 7, 8]);
+    });
+
+    const totals = ws.addRow(["", "", "TOTAL", "",
+      Number(exportable.reduce((a, r) => a + r.totalPay, 0).toFixed(2)), "",
+      Number(exportable.reduce((a, r) => a + r.bankAmount, 0).toFixed(2)),
+      Number(exportable.reduce((a, r) => a + r.cashAmount, 0).toFixed(2)),
+    ]);
+    totals.font = { bold: true };
+    totals.eachCell((cell, col) => {
+      cell.border = { top: { style: "thin" } };
+      if ([5, 7, 8].includes(col)) { cell.numFmt = "£#,##0.00"; cell.alignment = { horizontal: "right" }; }
+    });
+
+    // Widths: the wider of the two blocks wins per column.
+    const widths = [];
+    starterCols.forEach((c, i) => { widths[i] = Math.max(widths[i] || 0, c[1]); });
+    payCols.forEach((c, i) => { widths[i] = Math.max(widths[i] || 0, c[1]); });
+    widths.forEach((w, i) => { ws.getColumn(i + 1).width = w; });
+
     const buf = await wb.xlsx.writeBuffer();
-    downloadBlob(new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), `payroll_${from}_to_${to}.xlsx`);
+    const blob = new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `payroll_${from}_to_${to}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(a.href);
   };
 
   const totalGross = rows ? rows.filter(r => !r.rowError).reduce((s, r) => s + r.totalPay, 0) : 0;
@@ -33411,6 +33422,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
               <thead>
                 <tr className="text-left text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-800">
                   <th className="py-2 pr-3">Employee</th>
+                  <th className="py-2 pr-3">New</th>
                   <th className="py-2 pr-3">Hours</th>
                   <th className="py-2 pr-3">Gross</th>
                   <th className="py-2 pr-3">Bank transfer</th>
@@ -33432,9 +33444,16 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                       {r.under18 && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-950/60 border border-amber-800 text-amber-300 font-semibold">U18</span>}
                     </td>
                     {r.rowError ? (
-                      <td colSpan={11} className="py-2 pr-3 text-red-300 text-xs">{r.rowError}</td>
+                      <td colSpan={12} className="py-2 pr-3 text-red-300 text-xs">{r.rowError}</td>
                     ) : (
                       <>
+                        <td className="py-2 pr-3">
+                          {/* NEWSTARTER — ticked rows get a full personal-details
+                              block at the top of the export. */}
+                          <input type="checkbox" checked={!!r.newStarter}
+                            onChange={e => updateRow(r.employeeId, { newStarter: e.target.checked })}
+                            title="New starter — include full details in the export" />
+                        </td>
                         <td className="py-2 pr-3 text-slate-300">{r.totalHours.toFixed(2)}</td>
                         <td className="py-2 pr-3 text-slate-100 font-semibold">{fmtGBP(r.totalPay)}</td>
                         <td className="py-2 pr-3">
@@ -62233,7 +62252,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: SALMIN 2026-07-28ad");
+      console.log("CB build: NEWSTARTER 2026-07-28ae");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
