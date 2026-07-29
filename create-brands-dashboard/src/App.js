@@ -32712,6 +32712,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
   const [err, setErr] = useState("");
   const [savedMsg, setSavedMsg] = useState("");
   const [overlapWarn, setOverlapWarn] = useState("");
+  const [locFilter, setLocFilter] = useState("all");   // PAYROLLLOC
 
   const inputCls = "px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
   const fmtGBP = (n) => `£${Number(n || 0).toFixed(2)}`;
@@ -32724,6 +32725,31 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
   const activeEmployees = useMemo(
     () => (opsTeam || []).filter(e => e.status !== "archived" && !e.archivedAt),
     [opsTeam]
+  );
+
+  // PAYROLLLOC 2026-07-28o — run payroll for one site at a time. Scoped by
+  // PAYROLL location (the PAYE entity), not by where shifts happened: someone
+  // based at one site who covers a shift at another still belongs on their own
+  // site's payroll. Same field the saved record and the Excel export already
+  // use, with the same fallback to their first assigned store.
+  const empPayrollLoc = useCallback(
+    (e) => e.payrollLocation || (e.storeIds?.[0] || ""),
+    []
+  );
+  const payrollLocations = useMemo(() => {
+    const ids = [...new Set(activeEmployees.map(empPayrollLoc).filter(Boolean))];
+    return ids
+      .map(id => ({ id, name: storeName(id) || id, count: activeEmployees.filter(e => empPayrollLoc(e) === id).length }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeEmployees, empPayrollLoc, stores]);
+  const unassignedCount = useMemo(
+    () => activeEmployees.filter(e => !empPayrollLoc(e)).length,
+    [activeEmployees, empPayrollLoc]
+  );
+  const scopedEmployees = useMemo(
+    () => locFilter === "all" ? activeEmployees : activeEmployees.filter(e => empPayrollLoc(e) === locFilter),
+    [activeEmployees, locFilter, empPayrollLoc]
   );
 
   const run = async () => {
@@ -32746,7 +32772,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
         setOverlapWarn(`A payroll run for ${from} → ${to} was already saved (${existing.length} record${existing.length > 1 ? "s" : ""}). Saving again will overwrite those records.`);
       }
 
-      const computed = activeEmployees.map(emp => {
+      const computed = scopedEmployees.map(emp => {
         // approved punches for this employee in range
         const empPunches = (punches || []).filter(
           p => p.employeeId === emp.id && p.approved && p.hoursWorked
@@ -32988,6 +33014,17 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
         from their profile and can be overridden per row here. Loans are never included.
       </div>
 
+      {locFilter !== "all" && (
+        <div className="rounded-xl border border-indigo-500/30 bg-indigo-950/20 px-3 py-2 text-xs text-slate-300">
+          Running for <span className="font-semibold text-white">{storeName(locFilter) || locFilter}</span> only — {scopedEmployees.length} employee{scopedEmployees.length === 1 ? "" : "s"}. Everyone else is excluded from this run and its export.
+        </div>
+      )}
+      {locFilter === "all" && unassignedCount > 0 && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-xs text-amber-300">
+          {unassignedCount} employee{unassignedCount === 1 ? " has" : "s have"} no payroll location set — they appear under All locations but will be missed by every per-location run. Set it on their Job &amp; Pay tab.
+        </div>
+      )}
+
       {/* Controls */}
       <div className="flex flex-wrap items-end gap-3 bg-slate-900/60 border border-slate-800 rounded-2xl p-4">
         <div>
@@ -32997,6 +33034,13 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
         <div>
           <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Period end</label>
           <input type="date" value={to} onChange={e => setTo(e.target.value)} className={inputCls} />
+        </div>
+        <div>
+          <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Payroll location</label>
+          <select value={locFilter} onChange={e => { setLocFilter(e.target.value); setRows(null); setSavedMsg(""); }} className={inputCls}>
+            <option value="all">All locations ({activeEmployees.length})</option>
+            {payrollLocations.map(l => <option key={l.id} value={l.id}>{l.name} ({l.count})</option>)}
+          </select>
         </div>
         <button onClick={run} disabled={running}
           className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl px-4 py-2 text-sm font-semibold transition-colors">
@@ -61792,7 +61836,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: PAYBREAKS 2026-07-28n");
+      console.log("CB build: PAYROLLLOC 2026-07-28o");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
