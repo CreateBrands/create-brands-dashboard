@@ -33401,7 +33401,8 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                   <th className="py-2 pr-3">Gross</th>
                   <th className="py-2 pr-3">Bank transfer</th>
                   <th className="py-2 pr-3">Cash paid</th>
-                  <th className="py-2 pr-3">Age / min rate</th>
+                  <th className="py-2 pr-3">Age</th>
+                  <th className="py-2 pr-3">Min rate</th>
                   <th className="py-2 pr-3">Note</th>
                   <th className="py-2 pr-3">{locModeLabel}</th>
                   <th className="py-2 pr-3">Working</th>
@@ -33439,15 +33440,20 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                         <td className="py-2 pr-3 text-slate-300 font-medium">
                           {fmtGBP(r.cashAmount)}
                         </td>
+                        {/* MINRATE 2026-07-28y — age and the statutory floor split
+                            into their own columns so each can be scanned down. */}
+                        <td className="py-2 pr-3 whitespace-nowrap">
+                          {r.ageAtEnd == null
+                            ? <span className="text-[11px] text-amber-400" title="No date of birth on file">no DOB</span>
+                            : <span className="text-[11px] text-slate-200">{r.ageAtEnd}</span>}
+                        </td>
                         <td className="py-2 pr-3 whitespace-nowrap">
                           {r.salaried ? (
-                            <span className="text-[11px] text-slate-500">{r.ageAtEnd != null ? `${r.ageAtEnd} · salaried` : "salaried"}</span>
-                          ) : r.ageAtEnd == null ? (
-                            <span className="text-[11px] text-amber-400" title="No date of birth on file — the statutory band cannot be determined">no DOB</span>
+                            <span className="text-[11px] text-slate-500">salaried</span>
+                          ) : r.nmwRate != null ? (
+                            <span className="text-[11px] text-slate-200">{fmtGBP(r.nmwRate)}</span>
                           ) : (
-                            <span className="text-[11px] text-slate-200">
-                              {r.ageAtEnd} @ {r.nmwRate != null ? fmtGBP(r.nmwRate) : <span className="text-amber-400">rate not set</span>}
-                            </span>
+                            <span className="text-[11px] text-amber-400" title="No minimum wage rate configured for this band and date">not set</span>
                           )}
                         </td>
                         <td className="py-2 pr-3">
@@ -62174,7 +62180,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: PAYNOTES2 2026-07-28x");
+      console.log("CB build: MINRATE 2026-07-28y");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
