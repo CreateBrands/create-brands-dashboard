@@ -33101,7 +33101,8 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
       { header: "Starter Statement A", key: "stA",       width: 10, kind: "center" },
       { header: "Starter Statement B", key: "stB",       width: 10, kind: "center" },
       { header: "Starter Statement C", key: "stC",       width: 10, kind: "center" },
-      { header: "Salary Term",         key: "term",      width: 12 },
+      { header: "Salary Term",         key: "term",      width: 14 },
+      { header: "Min Rate",            key: "minRate",   width: 11, kind: "money" },
       { header: "Gross Pay",           key: "gross",     width: 13, kind: "money" },
       { header: "Bank Transfer",       key: "bank",      width: 14, kind: "money" },
       { header: "Cash Paid",           key: "cash",      width: 13, kind: "money" },
@@ -33147,7 +33148,14 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
         stA: stMark(r, "A"),
         stB: stMark(r, "B"),
         stC: stMark(r, "C"),
-        term: r.basis === "minimum_wage" ? "Hourly" : "Fixed",
+        // EXPTERM 2026-07-28ab — was `basis === "minimum_wage" ? "Hourly" : "Fixed"`,
+        // so every salaried employee exported as "Fixed" alongside the hourly
+        // staff. The accountant needs to see which figures are a monthly salary
+        // and which are hours × rate.
+        term: r.salaried ? "Monthly Salary" : "Hourly",
+        // Statutory floor for their age band. Blank for salaried — no hourly
+        // rate to compare against.
+        minRate: r.salaried || r.nmwRate == null ? "" : Number(r.nmwRate),
         gross: Number(r.totalPay.toFixed(2)),
         bank: Number(r.bankAmount.toFixed(2)),
         cash: Number(r.cashAmount.toFixed(2)),
@@ -62202,7 +62210,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: LOANCOL 2026-07-28aa");
+      console.log("CB build: EXPTERM 2026-07-28ab");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
