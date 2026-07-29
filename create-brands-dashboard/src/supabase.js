@@ -3774,6 +3774,30 @@ export async function addEmployeeNote({ employeeId, content, authorId, authorNam
   return data ? dbEmployeeNoteToApp(data) : dbEmployeeNoteToApp(row);
 }
 
+// PAYNOTES2 2026-07-28x — edit and delete for profile notes. The payroll
+// screen surfaces an employee's note history inline, so notes need to be
+// correctable in place rather than append-only.
+export async function updateEmployeeNote(id, content, editorName = "") {
+  if (!id) throw new Error("note id required");
+  if (!content?.trim()) throw new Error("Note content cannot be empty");
+  const { data, error } = await supabase
+    .from("employee_notes")
+    .update({ content: content.trim() })
+    .eq("id", id)
+    .select()
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error("Note could not be updated — it may have been removed.");
+  return dbEmployeeNoteToApp(data);
+}
+
+export async function deleteEmployeeNote(id) {
+  if (!id) throw new Error("note id required");
+  const { error } = await supabase.from("employee_notes").delete().eq("id", id);
+  if (error) throw error;
+  return id;
+}
+
 // Fetch the job_application linked to an employee, if any. Returns null
 // for legacy/manual employees with no application history.
 export async function fetchLinkedApplication(employeeId) {
