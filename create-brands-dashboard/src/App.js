@@ -61704,7 +61704,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: SOMERGE 2026-07-28j");
+      console.log("CB build: CROSSENTITY 2026-07-28k");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -62591,6 +62591,26 @@ export default function App() {
     const narrowed = visibleStoreIds.filter(id => ids.has(id));
     return narrowed.length ? narrowed : visibleStoreIds; // never blank everything
   }, [visibleStoreIds, resolveDefaultStoreId]);
+
+  // CROSSENTITY 2026-07-28k — Operations and Team run estate-wide. The same
+  // people are managed, rota'd and audited across Chocoberry, Tove, CK and
+  // Distribution, so making someone re-enter each entity to see their own team
+  // was busywork. These two modules use the set below instead of the
+  // entity-narrowed one; every other module stays scoped as before.
+  //
+  // This WIDENS nothing a person could not already reach: HQ still passes
+  // through canAccessStore, managers and staff still see only their assigned
+  // stores, and entity-level permission is applied on top. It removes the
+  // switching, not the gate.
+  const crossEntityStores = useMemo(() => {
+    if (!currentUser) return [];
+    const nonArchived = stores.filter(s => !s.archivedAt);
+    const base = isHQ
+      ? nonArchived.filter(s => canAccessStore(s))
+      : nonArchived.filter(s => (currentUser.storeIds || []).includes(s.id));
+    return base.filter(s => canAccessEntity(`entity.${s.brandId}`));
+  }, [currentUser, stores, isHQ, canAccessStore, canAccessEntity]);
+  const crossEntityStoreIds = useMemo(() => crossEntityStores.map(s => s.id), [crossEntityStores]);
 
   // Brands the user can step into (those they have at least one store in).
   // Defined here (top-level, before any early return) to satisfy rules-of-hooks.
@@ -63548,20 +63568,25 @@ export default function App() {
               const effOpsTab = OPS_TAB_KEYS.includes(opsTab) ? opsTab : "ops-network";
               return (
                 <div>
-                  {effOpsTab === "issues" && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
-                  {effOpsTab === "ops-tasks" && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle} onTempLog={handleTempLog} currentUser={currentUser} storeRoles={storeRoles} opsTeam={opsTeam} punchRecords={punchRecords} schedules={schedules}/>}
-                  {effOpsTab === "ops-temps" && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog} assignments={assignments} onSignOff={handleSignOff}/>}
-                  {effOpsTab === "ops-deliveries" && <DeliveriesHub brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
-                  {effOpsTab === "ops-network" && <OpsNetworkDashboard brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} checklistStates={checklistStates}/>}
+                  {crossEntityStoreIds.length > visibleStoreIds.length && (
+                    <div className="mb-3 rounded-xl border border-indigo-500/30 bg-indigo-950/20 px-3 py-2 text-[11px] text-slate-300">
+                      Showing all entities you have access to — {crossEntityStoreIds.length} sites. Use the filters below to narrow to one.
+                    </div>
+                  )}
+                  {effOpsTab === "issues" && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
+                  {effOpsTab === "ops-tasks" && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle} onTempLog={handleTempLog} currentUser={currentUser} storeRoles={storeRoles} opsTeam={opsTeam} punchRecords={punchRecords} schedules={schedules}/>}
+                  {effOpsTab === "ops-temps" && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog} assignments={assignments} onSignOff={handleSignOff}/>}
+                  {effOpsTab === "ops-deliveries" && <DeliveriesHub brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
+                  {effOpsTab === "ops-network" && <OpsNetworkDashboard brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} checklistStates={checklistStates}/>}
                   {effOpsTab === "ops-assigns" && <AssignmentsView brands={visibleBrands} stores={stores} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} storeRoles={storeRoles} storeDepartments={storeDepartments} auditTrail={auditTrail} onAdd={addAssignment} onAddMany={addAssignments} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
-                  {effOpsTab === "smallware" && <SmallwareView brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} opsTeam={opsTeam} currentUser={currentUser} isManagerView={isHqOrAbove(currentUser.role) || currentUser.role === "manager"}/>}
+                  {effOpsTab === "smallware" && <SmallwareView brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds} opsTeam={opsTeam} currentUser={currentUser} isManagerView={isHqOrAbove(currentUser.role) || currentUser.role === "manager"}/>}
                 </div>
               );
             })()}
             {effectiveActiveView === "dist-order" && <DistOrderPortalView currentUser={currentUser} onNavigate={setActiveView}/>}
             {effectiveActiveView === "agent-inbox" && <AgentInboxView currentUser={currentUser} onNavigate={setActiveView}/>}
-            {effectiveActiveView === "ops-compliance" && <ComplianceView brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} assignments={assignments} auditTrail={auditTrail} checklistStates={checklistStates}/>}
-            {effectiveActiveView === "ops-audit"      && <AuditTrailView brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} auditTrail={auditTrail} onClear={handleClearAudit}/>}
+            {effectiveActiveView === "ops-compliance" && <ComplianceView brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds} assignments={assignments} auditTrail={auditTrail} checklistStates={checklistStates}/>}
+            {effectiveActiveView === "ops-audit"      && <AuditTrailView brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds} auditTrail={auditTrail} onClear={handleClearAudit}/>}
             {effectiveActiveView === "employee-profile" && selectedEmployeeId && <EmployeeProfileView
               employeeId={selectedEmployeeId}
               brands={visibleBrands} stores={stores}
@@ -63576,8 +63601,13 @@ export default function App() {
               const effTeamTab = allowed(teamTab) ? teamTab : "team";
               return (
                 <div>
+                  {crossEntityStoreIds.length > visibleStoreIds.length && (
+                    <div className="mb-3 rounded-xl border border-indigo-500/30 bg-indigo-950/20 px-3 py-2 text-[11px] text-slate-300">
+                      Showing all entities you have access to — {crossEntityStoreIds.length} sites. Use the filters below to narrow to one.
+                    </div>
+                  )}
                   {effTeamTab === "team" && <OpsTeamView
-                    brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds}
+                    brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds}
                     storeDepartments={storeDepartments} storeRoles={storeRoles}
                     opsTeam={opsTeam} users={users}
                     customRoles={customRoles}
@@ -63586,7 +63616,7 @@ export default function App() {
                     currentUser={currentUser}
                   />}
                   {effTeamTab === "hiring" && <HiringView
-                    brands={visibleBrands} stores={stores} storeRoles={storeRoles} storeDepartments={storeDepartments} visibleStoreIds={scopedVisibleStoreIds}
+                    brands={visibleBrands} stores={stores} storeRoles={storeRoles} storeDepartments={storeDepartments} visibleStoreIds={crossEntityStoreIds}
                     applications={applications} opsTeam={opsTeam} currentUser={currentUser}
                     onAdd={addApplication} onUpdate={updateApplicationRow}
                     onSetStatus={setApplicationStatus} onDelete={deleteApplicationRow}
@@ -63596,14 +63626,14 @@ export default function App() {
                     onAddAdvertisedRole={addAdvertisedRole} onUpdateAdvertisedRole={updateAdvertisedRoleRow} onArchiveAdvertisedRole={archiveAdvertisedRoleRow}
                   />}
                   {effTeamTab === "training" && <TrainingAdminView
-                    brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds}
+                    brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds}
                     opsTeam={opsTeam} currentUser={currentUser}
                   />}
                   {effTeamTab === "contracts" && <ContractsAdminView
                     stores={stores} opsTeam={opsTeam} currentUser={currentUser}
                   />}
                   {effTeamTab === "time-attend" && <TimeAttendanceView
-                    brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} opsTeam={opsTeam} schedules={schedules}
+                    brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds} opsTeam={opsTeam} schedules={schedules}
                     punchRecords={punchRecords} currentUser={currentUser}
                     onUpdate={handleAmendPunch} onAdd={handlePunchIn} onDelete={removeSchedulePunchRecord}
                     onAddComment={handleAddPunchComment}
@@ -63611,7 +63641,7 @@ export default function App() {
                     paySchedule={paySchedule} payPeriodLocations={payPeriodLocations} onPeriodsChanged={reloadPayPeriodData}
                     onApprovePunch={approveOnePunch} onApproveAllPunches={approveAllPunchesInPeriod}
                   />}
-                  {effTeamTab === "onboarding-board" && canSeeView("onboarding-board") && <OnboardingBoard stores={stores.filter(s => scopedVisibleStoreIds.includes(s.id))} opsTeam={opsTeam}/>}
+                  {effTeamTab === "onboarding-board" && canSeeView("onboarding-board") && <OnboardingBoard stores={stores.filter(s => crossEntityStoreIds.includes(s.id))} opsTeam={opsTeam}/>}
                 </div>
               );
             })()}
