@@ -32725,6 +32725,15 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
   // reviewing payroll isn't lost the moment the screen is left.
   const [noteDrafts, setNoteDrafts] = useState({});
   const [bankTouched, setBankTouched] = useState({});
+  // BANKFIX 2026-07-28w — the row's bankAmount is CLAMPED to the period's gross
+  // (a £2,580 default on a £44 part-period row shows as £44). Saving that back
+  // as the employee's default silently rewrote it downwards. Keep the raw typed
+  // value here and save THAT, so a default can exceed the current run's pay.
+  const [bankInput, setBankInput] = useState({});
+  // Locally remember what we've written, because the opsTeam prop isn't
+  // refetched — without this a re-run reads the stale profile value and the
+  // change looks like it never saved.
+  const [bankDefaults, setBankDefaults] = useState({});
   const [savedFlag, setSavedFlag] = useState({});
   const flash = (id, key) => {
     setSavedFlag(s => ({ ...s, [id + ":" + key]: true }));
@@ -32747,8 +32756,19 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
   // £2,580 default with whatever this short period happened to compute.
   const saveBankDefault = async (r) => {
     if (!bankTouched[r.employeeId]) return;
+    const raw = bankInput[r.employeeId];
+    const value = raw === "" || raw == null ? null : Number(raw);
+    if (value != null && !Number.isFinite(value)) { setErr("Bank amount must be a number."); return; }
     try {
-      await updateOpsTeamMember(r.employeeId, { defaultBankAmount: Number(r.bankAmount) || 0 });
+      const saved = await updateOpsTeamMember(r.employeeId, { defaultBankAmount: value });
+      // Confirm the write rather than trusting the absence of an exception —
+      // an RLS-blocked update returns no rows and no error.
+      const got = saved?.defaultBankAmount ?? null;
+      if (value != null && Number(got) !== Number(value)) {
+        setErr(`${r.name}: bank amount did not save (server still has ${got == null ? "no value" : fmtGBP(Number(got))}).`);
+        return;
+      }
+      setBankDefaults(d => ({ ...d, [r.employeeId]: value }));
       setBankTouched(t => { const n = { ...t }; delete n[r.employeeId]; return n; });
       flash(r.employeeId, "bank");
     } catch (e) { setErr(e.message); }
@@ -32921,7 +32941,9 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
         // sum exactly to the gross (no sub-penny floating-point drift on payslips).
         totalPay = Math.round(totalPay * 100) / 100;
         if (rowError) totalPay = 0;   // never export a figure we've flagged as wrong
-        const defBank = emp.defaultBankAmount != null ? Number(emp.defaultBankAmount) : totalPay;
+        const savedDefault = bankDefaults[emp.id];
+        const defBank = savedDefault != null ? Number(savedDefault)
+          : emp.defaultBankAmount != null ? Number(emp.defaultBankAmount) : totalPay;
         const bankAmount = Math.min(defBank, totalPay);
         const cashAmount = Math.max(0, totalPay - bankAmount);
         return {
@@ -33291,10 +33313,15 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                         <td className="py-2 pr-3">
                           <div className="flex items-center gap-1">
                             <span className="text-slate-500 text-xs">£</span>
-                            <input type="number" step="0.01" min="0" max={r.totalPay} value={Number(r.bankAmount.toFixed(2))}
-                              onChange={e => { updateRow(r.employeeId, { bankAmount: e.target.value }); setBankTouched(t => ({ ...t, [r.employeeId]: true })); }}
+                            <input type="number" step="0.01" min="0"
+                              value={bankInput[r.employeeId] ?? Number(r.bankAmount.toFixed(2))}
+                              onChange={e => {
+                                setBankInput(b => ({ ...b, [r.employeeId]: e.target.value }));
+                                updateRow(r.employeeId, { bankAmount: e.target.value });
+                                setBankTouched(t => ({ ...t, [r.employeeId]: true }));
+                              }}
                               onBlur={() => saveBankDefault(r)}
-                              title="Editing this saves it as the employee's default bank amount"
+                              title="Saved as this employee's default bank amount. May exceed this period's gross — the run itself is still capped at gross."
                               className="w-24 px-2 py-1 bg-slate-900 border border-slate-800 rounded text-slate-200 text-xs" />
                             {savedFlag[r.employeeId + ":bank"] && <span className="text-[10px] text-emerald-400">saved</span>}
                           </div>
@@ -62043,7 +62070,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: PAYNOTES 2026-07-28v");
+      console.log("CB build: BANKFIX 2026-07-28w");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
