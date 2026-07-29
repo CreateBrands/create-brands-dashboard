@@ -32782,11 +32782,34 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
         let rowError = "";
         let beforeEffectiveHours = 0;          // hours on shifts before the employee's earliest effective rate
         const beforeEffectiveDates = [];
-        for (const p of empPunches) {
+        // SALARYPAY 2026-07-28p — salaried staff are paid a fixed monthly amount
+        // regardless of hours. For them ops_team.hourly_rate holds the SALARY
+        // amount, not a rate (the column is reused — see salariedDailyCost), so
+        // running them through resolveHourlyRate multiplied an annual salary by
+        // the month's hours: £30,960 × 72.93h = £2,257,912. Hours are still
+        // totalled for the record, but they never touch the pay.
+        const salaried = isSalaried(emp);
+        if (salaried) {
+          const amount = Number(emp.hourlyRate) || 0;
+          const monthly = emp.payType === "annual" ? amount / 12 : amount;
+          if (!(amount > 0)) {
+            rowError = `Salaried employee (${emp.payType}) has no salary amount set.`;
+          }
+          totalHours = empPunches.reduce((a, p) => a + (Number(p.hoursWorked) || 0), 0);
+          totalPay = Math.round(monthly * 100) / 100;
+          lines.push({ key: `salary|${emp.payType}`, hours: 0, pay: totalPay, rate: null, band: null, basis: emp.payType, age: null });
+        }
+        for (const p of (salaried ? [] : empPunches)) {
           const hrs = Number(p.hoursWorked) || 0;
           const res = resolveHourlyRate(emp, p.date, rates, payRatesByEmp);
           if (res.error) {
             rowError = res.error;
+            continue;
+          }
+          // Guard the class of mistake that produced the £4m payslip: an hourly
+          // rate this large is a salary or a pence value in the wrong field.
+          if (Number(res.rate) > 150) {
+            rowError = `Hourly rate of £${Number(res.rate).toFixed(2)} is not plausible — check the employee's pay type and rate.`;
             continue;
           }
           if (res.beforeEffective) {
@@ -32809,6 +32832,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
         // Round gross to 2dp BEFORE splitting bank/cash, so the two parts always
         // sum exactly to the gross (no sub-penny floating-point drift on payslips).
         totalPay = Math.round(totalPay * 100) / 100;
+        if (rowError) totalPay = 0;   // never export a figure we've flagged as wrong
         const defBank = emp.defaultBankAmount != null ? Number(emp.defaultBankAmount) : totalPay;
         const bankAmount = Math.min(defBank, totalPay);
         const cashAmount = Math.max(0, totalPay - bankAmount);
@@ -32825,7 +32849,8 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
           hireDate: emp.hireDate || "",
           taxStarterStatement: emp.taxStarterStatement || "",
           under18: emp.dob ? (ageOnDate(emp.dob, to) < 18) : false,
-          basis: emp.payBasis || "fixed",
+          basis: salaried ? (emp.payType === "annual" ? "Annual salary" : "Monthly salary") : (emp.payBasis || "fixed"),
+          salaried,
           totalHours, totalPay,
           bankAmount, cashAmount,
           payrollLocation: emp.payrollLocation || (emp.storeIds?.[0] || ""),
@@ -61836,7 +61861,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: PAYROLLLOC 2026-07-28o");
+      console.log("CB build: SALARYPAY 2026-07-28p");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
