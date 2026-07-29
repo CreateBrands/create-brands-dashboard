@@ -15025,7 +15025,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
   const [apprLines, setApprLines] = useState([]);      // [{itemId, name, qty, uom}] of the open order
   const [apprBusy, setApprBusy] = useState(false);
   const [mergeSel, setMergeSel] = useState([]);        // soIds ticked for merge
-  const reloadApprovals = () => fetchPendingApprovalSos(customerId).then(setPendingApprovals).catch(() => {});
+  const reloadApprovals = () => fetchPendingApprovalSos(customerId, currentUser?.id).then(setPendingApprovals).catch(() => {});
   // The store's chosen supplier(s) are recorded in the order note as
   // "Suppliers: A, B". Pull them out to show as their own labelled line.
   const supplierOf = (note) => {
@@ -15065,7 +15065,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
   useEffect(() => { setRoundLoaded(false); reloadRound(activeStoreId); /* eslint-disable-next-line */ }, [activeStoreId]);
   useEffect(() => {
     if (!customerId) return;
-    fetchPendingApprovalSos(customerId).then(setPendingApprovals).catch(() => {});
+    fetchPendingApprovalSos(customerId, currentUser?.id).then(setPendingApprovals).catch(() => {});
   }, [customerId]);
   useEffect(() => {
     if (!activeStoreId) return;
@@ -15725,13 +15725,21 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
                       <button onClick={() => openApproval(p)} className="min-w-0 flex-1 text-left">
                         <div className="text-xs font-semibold truncate" style={{ color: "#3A2E26" }}>{p.soNumber} · {p.lineCount} item{p.lineCount !== 1 ? "s" : ""} <span style={{ color: "#C9945A" }}>{openAppr === p.id ? "▾" : "▸ open"}</span></div>
                         <div className="text-[10px] font-semibold truncate" style={{ color: "#844429" }}>→ {supplierOf(p.note) || "Distribution"}</div>
+                        {/* ORDERWHO — who placed it, and whether it's the manager's own */}
+                        <div className="text-[10px] truncate" style={{ color: p.isOwn ? "#5C9442" : "#7A6A58" }}>
+                          {p.isOwn ? "Your order" : `Placed by ${p.createdByName || "unknown"}`}
+                        </div>
                         <div className="text-[10px] truncate" style={{ color: "#9A8770" }}>{p.orderDate}{noteWithoutSuppliers(p.note) ? ` · ${noteWithoutSuppliers(p.note)}` : ""}</div>
                       </button>
                       <div className="flex gap-1.5 flex-shrink-0">
+                        {p.isOwn ? (
+                          <span className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold" style={{ backgroundColor: "#EAF3E7", color: "#3F6B3A" }}>Approved</span>
+                        ) : (<>
                         <button onClick={async () => { try { await setDistSalesOrderStatus(p.id, "cancelled"); setPendingApprovals(x => x.filter(y => y.id !== p.id)); } catch (ev) { alert(ev.message); } }}
                           className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold" style={{ backgroundColor: "#F3EDE2", color: "#9A8770" }}>Reject</button>
                         <button onClick={async () => { try { await setDistSalesOrderStatus(p.id, "confirmed"); setPendingApprovals(x => x.filter(y => y.id !== p.id)); } catch (ev) { alert(ev.message); } }}
                           className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold" style={{ backgroundColor: "#5C9442", color: "#fff" }}>Approve</button>
+                        </>)}
                       </div>
                     </div>
                     {openAppr === p.id && (
@@ -61655,7 +61663,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: FRESHATTACH 2026-07-28h");
+      console.log("CB build: ORDERWHO 2026-07-28i");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:

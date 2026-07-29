@@ -13063,8 +13063,20 @@ export async function mergePendingOrders(soIds, editorName) {
   if (!sos || sos.length !== ids.length) throw new Error("Some orders not found.");
   const cust = sos[0].customer_id;
   if (!sos.every(o => o.customer_id === cust)) throw new Error("All orders must be for the same store.");
-  if (!sos.every(o => o.status === "pending_approval")) throw new Error("Only pending orders can be merged.");
-  const target = sos.find(o => o.id === ids[0]) || sos[0];
+  // ORDERWHO 2026-07-28i — a manager's own order is "confirmed", not pending,
+  // so allow that too. Anything already picked is off limits: rewriting its
+  // lines would leave the pick referencing quantities that no longer exist.
+  if (!sos.every(o => o.status === "pending_approval" || o.status === "confirmed")) {
+    throw new Error("Only pending or unpicked confirmed orders can be merged.");
+  }
+  const { data: mPicks } = await supabase.from("dist_picks")
+    .select("so_id").in("so_id", ids).neq("status", "cancelled");
+  if ((mPicks || []).length) {
+    throw new Error("One of these orders has already been picked — it can no longer be merged.");
+  }
+  // Merge INTO the manager's own confirmed order when there is one, so the
+  // result keeps its approved status instead of dropping back to pending.
+  const target = sos.find(o => o.status === "confirmed") || sos.find(o => o.id === ids[0]) || sos[0];
   const { data: allLines } = await supabase.from("dist_sales_order_lines").select("*").in("so_id", ids);
   // Sum duplicate items across all orders.
   const merged = new Map();
@@ -15636,13 +15648,54 @@ export async function saveStoreOrderPrefs(storeId, prefs) {
 }
 
 // Staff-submitted orders awaiting a manager's decision for one customer.
-export async function fetchPendingApprovalSos(customerId) {
+// ORDERWHO 2026-07-28i — returns pending staff orders PLUS the viewer's own
+// still-mergeable orders, each carrying the name of whoever placed it.
+// A manager's own order is created "confirmed" (they need no approval), so it
+// never appeared here and could not be merged with the staff orders it was
+// meant to absorb. Own orders are included only while nothing downstream has
+// happened to them — no pick means the lines are still safe to rewrite.
+export async function fetchPendingApprovalSos(customerId, viewerId = null) {
   if (!customerId) return [];
-  const { data } = await supabase.from("dist_sales_orders")
-    .select("id, so_number, order_date, created_by, note, dist_sales_order_lines(id)")
+  const cols = "id, so_number, order_date, created_by, note, status, dist_sales_order_lines(id)";
+  const { data: pending } = await supabase.from("dist_sales_orders")
+    .select(cols)
     .eq("customer_id", customerId).eq("status", "pending_approval")
     .order("created_at", { ascending: true });
-  return (data || []).map(r => ({ id: r.id, soNumber: r.so_number, orderDate: r.order_date, createdBy: r.created_by, note: r.note || "", lineCount: (r.dist_sales_order_lines || []).length }));
+
+  let own = [];
+  if (viewerId) {
+    const { data } = await supabase.from("dist_sales_orders")
+      .select(cols)
+      .eq("customer_id", customerId).eq("status", "confirmed").eq("created_by", viewerId)
+      .order("created_at", { ascending: false }).limit(10);
+    const ids = (data || []).map(o => o.id);
+    if (ids.length) {
+      const { data: picks } = await supabase.from("dist_picks")
+        .select("so_id").in("so_id", ids).neq("status", "cancelled");
+      const picked = new Set((picks || []).map(p => p.so_id));
+      own = (data || []).filter(o => !picked.has(o.id));
+    }
+  }
+
+  const rows = [...(pending || []), ...own];
+  const userIds = [...new Set(rows.map(r => r.created_by).filter(Boolean))];
+  const names = new Map();
+  if (userIds.length) {
+    const [u, t] = await Promise.all([
+      supabase.from("users").select("id, name").in("id", userIds).then(r => r.data || []),
+      supabase.from("ops_team").select("id, first_name, last_name").in("id", userIds).then(r => r.data || []),
+    ]);
+    u.forEach(x => { if (x.name) names.set(x.id, x.name); });
+    t.forEach(x => { if (!names.has(x.id)) names.set(x.id, [x.first_name, x.last_name].filter(Boolean).join(" ")); });
+  }
+
+  return rows.map(r => ({
+    id: r.id, soNumber: r.so_number, orderDate: r.order_date, createdBy: r.created_by,
+    createdByName: names.get(r.created_by) || "",
+    note: r.note || "", status: r.status,
+    isOwn: !!viewerId && r.created_by === viewerId && r.status === "confirmed",
+    lineCount: (r.dist_sales_order_lines || []).length,
+  }));
 }
 
 // Latest fresh-purchase delivery per store (last few days) — lets the fresh
