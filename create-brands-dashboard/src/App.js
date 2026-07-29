@@ -98,7 +98,7 @@ import {
   fetchMinimumWageRates, upsertMinimumWageRate, removeMinimumWageRate,
   fetchPayrollPeriods, upsertPayrollPeriod,
   fetchEmployeeLoans, addLoanEntry, loanBalance, fetchLoanRequests, fetchLoanPayments, createLoanRequest, cancelLoanRequest, approveLoanRequest, attachLoanContract, declineLoanRequest, recordLoanPayment, confirmLoanPayment, rejectLoanPayment,
-  resolveHourlyRate, ageOnDate, bandForAge, computePunchHours, requiredBreakMins,
+  resolveHourlyRate, ageOnDate, bandForAge, rateForBandOnDate, computePunchHours, requiredBreakMins,
   fetchEmployeePayRates, upsertEmployeePayRate, deleteEmployeePayRate,
   uploadInvoiceFile,
   extractInvoice,
@@ -32907,6 +32907,14 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
           salaried,
           totalHours, totalPay,
           punchCount: empPunches.length, openPunches, otPending, notApproved,
+          // NMWCOL 2026-07-28t — age at the period end, the band it puts them in,
+          // and the statutory floor for that band. Read from the Minimum Wage
+          // admin table so it stays right when the rates change each April,
+          // rather than being frozen into the code.
+          ageAtEnd: ageOnDate(emp.dob, to),
+          nmwBand: bandForAge(ageOnDate(emp.dob, to)),
+          nmwRate: rateForBandOnDate(rates, bandForAge(ageOnDate(emp.dob, to)), to),
+          paidRate: totalHours > 0 ? Math.round((totalPay / totalHours) * 100) / 100 : null,
           bankAmount, cashAmount,
           payrollLocation: emp.payrollLocation || (emp.storeIds?.[0] || ""),
           accountingLocation: emp.accountingLocation || (emp.storeIds?.[0] || ""),
@@ -33227,6 +33235,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                   <th className="py-2 pr-3">Gross</th>
                   <th className="py-2 pr-3">Bank transfer</th>
                   <th className="py-2 pr-3">Cash paid</th>
+                  <th className="py-2 pr-3">Age / min rate</th>
                   <th className="py-2 pr-3">{locModeLabel}</th>
                   <th className="py-2 pr-3">Working</th>
                 </tr>
@@ -33254,6 +33263,24 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                         </td>
                         <td className="py-2 pr-3 text-slate-300 font-medium">
                           {fmtGBP(r.cashAmount)}
+                        </td>
+                        <td className="py-2 pr-3 whitespace-nowrap">
+                          {r.salaried ? (
+                            <span className="text-[11px] text-slate-500">{r.ageAtEnd != null ? `${r.ageAtEnd} · salaried` : "salaried"}</span>
+                          ) : r.ageAtEnd == null ? (
+                            <span className="text-[11px] text-amber-400" title="No date of birth on file — the statutory band cannot be determined">no DOB</span>
+                          ) : (
+                            <div className="text-[11px] leading-tight">
+                              <div className="text-slate-200">
+                                {r.ageAtEnd} · {r.nmwRate != null ? fmtGBP(r.nmwRate) : <span className="text-amber-400">rate not set</span>}
+                              </div>
+                              {r.paidRate != null && r.nmwRate != null && (
+                                <div className={r.paidRate + 0.005 < r.nmwRate ? "text-red-400 font-semibold" : "text-emerald-400"}>
+                                  paid {fmtGBP(r.paidRate)}{r.paidRate + 0.005 < r.nmwRate ? ` (short ${fmtGBP(r.nmwRate - r.paidRate)})` : " ok"}
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </td>
                         <td className="py-2 pr-3">
                           {/* LOCMODE — only the basis being run is editable, so a
@@ -61972,7 +61999,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: LOCMODE 2026-07-28s");
+      console.log("CB build: NMWCOL 2026-07-28t");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
