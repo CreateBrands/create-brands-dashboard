@@ -32999,6 +32999,8 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
           under18: emp.dob ? (ageOnDate(emp.dob, to) < 18) : false,
           basis: salaried ? (emp.payType === "annual" ? "Annual salary" : "Monthly salary") : (emp.payBasis || "fixed"),
           salaried,
+          payType: emp.payType || "hourly",
+          salaryAmount: Number(emp.hourlyRate) || 0,
           totalHours, totalPay,
           punchCount: empPunches.length, openPunches, otPending, notApproved,
           // NMWCOL 2026-07-28t — age at the period end, the band it puts them in,
@@ -33493,10 +33495,25 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                           </select>
                         </td>
                         <td className="py-2 pr-3 text-[10px] text-slate-500">
-                          {r.lines.map((l, i) => (
-                            <div key={i}>{l.hours.toFixed(2)}h @ {fmtGBP(l.rate)}{l.band ? ` [${l.band.replace("_", "–")}${l.age != null ? `, age ${l.age}` : ""}]` : " [fixed]"}</div>
-                          ))}
-                          {r.lines.length === 0 && <span className="text-slate-600">no approved hours</span>}
+                          {/* SALWORK 2026-07-28ac — a salaried row has no hours x rate
+                              to show; the generic formatter rendered its salary line
+                              as "0.00h @ £0.00 [fixed]". Describe the basis instead,
+                              with hours noted as worked but not paid on. */}
+                          {r.salaried ? (
+                            <>
+                              <div>
+                                {r.payType === "annual"
+                                  ? `${fmtGBP(r.salaryAmount)}/yr ÷ 12 = ${fmtGBP(r.totalPay)}`
+                                  : `${fmtGBP(r.salaryAmount)}/month`}
+                              </div>
+                              <div className="text-slate-600">{r.totalHours.toFixed(2)}h worked · salary is not hours-based</div>
+                            </>
+                          ) : (<>
+                            {r.lines.map((l, i) => (
+                              <div key={i}>{l.hours.toFixed(2)}h @ {fmtGBP(l.rate)}{l.band ? ` [${l.band.replace("_", "–")}${l.age != null ? `, age ${l.age}` : ""}]` : " [fixed]"}</div>
+                            ))}
+                            {r.lines.length === 0 && <span className="text-slate-600">no approved hours</span>}
+                          </>)}
                         </td>
                         <td className="py-2 pr-3 whitespace-nowrap">
                           {r.ageAtEnd == null
@@ -62210,7 +62227,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: EXPTERM 2026-07-28ab");
+      console.log("CB build: SALWORK 2026-07-28ac");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
