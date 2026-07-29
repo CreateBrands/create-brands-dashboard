@@ -190,7 +190,7 @@ import {
   fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, fetchStoreOrderPrefs, saveStoreOrderPrefs, fetchChatGroups, createChatGroup, updateChatGroup, deleteChatGroup, deleteChatThread, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment, editPendingOrderLines, mergePendingOrders, fetchDeliverySourceReceipt, synthesizeInvoiceFromItems, normalizeReceiptDescription,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
-  fetchFreshOrderCustomers, saveFreshOrderCustomers, freshAccessActive, setSoFreshAttached,
+  fetchFreshOrderCustomers, saveFreshOrderCustomers, freshAccessActive, setSoFreshAttached, deletePayPeriod,
   fetchPaySchedule, savePaySchedule, generatePayPeriods, payPeriodStatus, fetchPayPeriodLocations,
   closePayPeriodStore, reopenPayPeriodStore, overridePayPeriodDates, setPunchApproved, approvePunchesInPeriod,
 } from "./supabase";
@@ -32713,6 +32713,36 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
   const [savedMsg, setSavedMsg] = useState("");
   const [overlapWarn, setOverlapWarn] = useState("");
   const [locFilter, setLocFilter] = useState("all");   // PAYROLLLOC
+  // PAYRUNPERIOD 2026-07-28r — drive the run off the pay-period calendar so a
+  // run can't be made for a range that isn't a real period. Typing dates by
+  // hand is still available, but it is now the deliberate exception.
+  const [periodOpts, setPeriodOpts] = useState([]);
+  const [periodSel, setPeriodSel] = useState("");
+  useEffect(() => {
+    (async () => {
+      const [sched, rows] = await Promise.all([
+        fetchPaySchedule().catch(() => null),
+        fetchPayPeriods().catch(() => []),
+      ]);
+      const gen = generatePayPeriods(sched, { back: 18, forward: 1 });
+      const byId = new Map(gen.map(p => [p.id, p]));
+      (rows || []).forEach(r => {
+        const base = byId.get(r.id);
+        if (base) byId.set(r.id, { ...base, periodStart: r.periodStart, periodEnd: r.periodEnd });
+        else if (r.periodStart) byId.set(r.id, { id: r.id, periodStart: r.periodStart, periodEnd: r.periodEnd });
+      });
+      const today = new Date().toISOString().slice(0, 10);
+      setPeriodOpts([...byId.values()]
+        .filter(p => p.periodStart <= today)
+        .sort((a, b) => b.periodStart.localeCompare(a.periodStart)));
+    })();
+  }, []);
+  const pickPeriod = (id) => {
+    setPeriodSel(id);
+    setRows(null); setSavedMsg("");
+    const p = periodOpts.find(x => x.id === id);
+    if (p) { setFrom(p.periodStart); setTo(p.periodEnd); }
+  };
 
   const inputCls = "px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
   const fmtGBP = (n) => `£${Number(n || 0).toFixed(2)}`;
@@ -33068,12 +33098,23 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
       {/* Controls */}
       <div className="flex flex-wrap items-end gap-3 bg-slate-900/60 border border-slate-800 rounded-2xl p-4">
         <div>
+          <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Pay period</label>
+          <select value={periodSel} onChange={e => pickPeriod(e.target.value)} className={inputCls}>
+            <option value="">Custom range…</option>
+            {periodOpts.map(p => (
+              <option key={p.id} value={p.id}>
+                {ppFmtLong(p.periodStart)} – {ppFmtLong(p.periodEnd)}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
           <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Period start</label>
-          <input type="date" value={from} onChange={e => setFrom(e.target.value)} className={inputCls} />
+          <input type="date" value={from} onChange={e => { setFrom(e.target.value); setPeriodSel(""); }} className={inputCls} />
         </div>
         <div>
           <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Period end</label>
-          <input type="date" value={to} onChange={e => setTo(e.target.value)} className={inputCls} />
+          <input type="date" value={to} onChange={e => { setTo(e.target.value); setPeriodSel(""); }} className={inputCls} />
         </div>
         <div>
           <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Payroll location</label>
@@ -55619,6 +55660,21 @@ function PayPeriodsPanel({
     catch (e) { setErr(e?.message || "Something went wrong."); throw e; }
   };
 
+  // PAYRUNPERIOD 2026-07-28r — periods are generated from the schedule, so
+  // "delete" removes the stored row: any date override and every location
+  // closure go with it. A period that the schedule still produces reappears
+  // with its original dates, open. A stray or one-off row disappears for good.
+  // Punches are never touched.
+  const doDelete = async (p) => {
+    const closed = closuresFor(p.id).length;
+    const generated = generatePayPeriods(paySchedule, { back: 24, forward: 2 }).some(g => g.id === p.id);
+    const msg = generated
+      ? `Delete ${ppRangeLabel(p)}?\n\nThis clears its stored record — ${closed} closed location timesheet${closed === 1 ? "" : "s"} and any date change. The period will come back on the schedule's own dates, open. No punches are deleted.`
+      : `Delete ${ppRangeLabel(p)}?\n\nThis period is not on the current schedule, so it will disappear from the list permanently. ${closed} closed location timesheet${closed === 1 ? "" : "s"} will be released. No punches are deleted.`;
+    if (!window.confirm(msg)) return;
+    await run(() => deletePayPeriod(p.id)).catch(() => {});
+  };
+
   if (detail) {
     return (
       <PayPeriodDetail
@@ -55658,6 +55714,7 @@ function PayPeriodsPanel({
               <div className="absolute right-0 top-full mt-1 z-20 w-56 bg-slate-900 border border-slate-700 rounded-xl overflow-hidden shadow-xl">
                 <button onClick={() => { setEditPeriod(p); setMenuFor(null); }} className="w-full text-left px-3.5 py-2.5 text-xs text-slate-200 hover:bg-slate-800">Edit single pay period</button>
                 <button onClick={() => { setShowSchedule(true); setMenuFor(null); }} className="w-full text-left px-3.5 py-2.5 text-xs text-slate-200 hover:bg-slate-800 border-t border-slate-800">Change pay schedule</button>
+                <button onClick={() => { setMenuFor(null); doDelete(p); }} className="w-full text-left px-3.5 py-2.5 text-xs text-red-300 hover:bg-red-950/40 border-t border-slate-800">Delete pay period</button>
               </div>
             )}
           </div>
@@ -61898,7 +61955,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: PAYALLHOURS 2026-07-28q");
+      console.log("CB build: PAYRUNPERIOD 2026-07-28r");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
