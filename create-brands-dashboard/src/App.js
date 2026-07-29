@@ -33270,16 +33270,9 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                           ) : r.ageAtEnd == null ? (
                             <span className="text-[11px] text-amber-400" title="No date of birth on file — the statutory band cannot be determined">no DOB</span>
                           ) : (
-                            <div className="text-[11px] leading-tight">
-                              <div className="text-slate-200">
-                                {r.ageAtEnd} · {r.nmwRate != null ? fmtGBP(r.nmwRate) : <span className="text-amber-400">rate not set</span>}
-                              </div>
-                              {r.paidRate != null && r.nmwRate != null && (
-                                <div className={r.paidRate + 0.005 < r.nmwRate ? "text-red-400 font-semibold" : "text-emerald-400"}>
-                                  paid {fmtGBP(r.paidRate)}{r.paidRate + 0.005 < r.nmwRate ? ` (short ${fmtGBP(r.nmwRate - r.paidRate)})` : " ok"}
-                                </div>
-                              )}
-                            </div>
+                            <span className="text-[11px] text-slate-200">
+                              {r.ageAtEnd} @ {r.nmwRate != null ? fmtGBP(r.nmwRate) : <span className="text-amber-400">rate not set</span>}
+                            </span>
                           )}
                         </td>
                         <td className="py-2 pr-3">
@@ -61999,7 +61992,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: NMWCOL 2026-07-28t");
+      console.log("CB build: NMWCOL 2026-07-28u");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
