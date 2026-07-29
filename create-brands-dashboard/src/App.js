@@ -32713,6 +32713,12 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
   const [savedMsg, setSavedMsg] = useState("");
   const [overlapWarn, setOverlapWarn] = useState("");
   const [locFilter, setLocFilter] = useState("all");   // PAYROLLLOC
+  // LOCMODE 2026-07-28s — a run is grouped by ONE basis at a time. Payroll
+  // location is the PAYE entity that pays the person; accounting location is
+  // where the cost is booked. They are different questions and mixing them on
+  // one screen is how someone ends up running a site twice or not at all, so
+  // only the chosen basis is shown and only that field is editable.
+  const [locMode, setLocMode] = useState("payroll");   // payroll | accounting
   // PAYRUNPERIOD 2026-07-28r — drive the run off the pay-period calendar so a
   // run can't be made for a range that isn't a real period. Typing dates by
   // hand is still available, but it is now the deliberate exception.
@@ -32763,9 +32769,12 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
   // site's payroll. Same field the saved record and the Excel export already
   // use, with the same fallback to their first assigned store.
   const empPayrollLoc = useCallback(
-    (e) => e.payrollLocation || (e.storeIds?.[0] || ""),
-    []
+    (e) => locMode === "accounting"
+      ? (e.accountingLocation || (e.storeIds?.[0] || ""))
+      : (e.payrollLocation    || (e.storeIds?.[0] || "")),
+    [locMode]
   );
+  const locModeLabel = locMode === "accounting" ? "Accounting location" : "Payroll location";
   const payrollLocations = useMemo(() => {
     const ids = [...new Set(activeEmployees.map(empPayrollLoc).filter(Boolean))];
     return ids
@@ -32781,6 +32790,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
     () => locFilter === "all" ? activeEmployees : activeEmployees.filter(e => empPayrollLoc(e) === locFilter),
     [activeEmployees, locFilter, empPayrollLoc]
   );
+  const switchMode = (m) => { setLocMode(m); setLocFilter("all"); setRows(null); setSavedMsg(""); };
 
   const run = async () => {
     setErr(""); setSavedMsg(""); setOverlapWarn("");
@@ -33086,12 +33096,12 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
 
       {locFilter !== "all" && (
         <div className="rounded-xl border border-indigo-500/30 bg-indigo-950/20 px-3 py-2 text-xs text-slate-300">
-          Running for <span className="font-semibold text-white">{storeName(locFilter) || locFilter}</span> only — {scopedEmployees.length} employee{scopedEmployees.length === 1 ? "" : "s"}. Everyone else is excluded from this run and its export.
+          Running by <span className="font-semibold text-white">{locModeLabel.toLowerCase()}</span> for <span className="font-semibold text-white">{storeName(locFilter) || locFilter}</span> — {scopedEmployees.length} employee{scopedEmployees.length === 1 ? "" : "s"}. Hours worked at any site count here; everyone else is excluded from this run and its export.
         </div>
       )}
       {locFilter === "all" && unassignedCount > 0 && (
         <div className="rounded-xl border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-xs text-amber-300">
-          {unassignedCount} employee{unassignedCount === 1 ? " has" : "s have"} no payroll location set — they appear under All locations but will be missed by every per-location run. Set it on their Job &amp; Pay tab.
+          {unassignedCount} employee{unassignedCount === 1 ? " has" : "s have"} no {locModeLabel.toLowerCase()} set — they appear under All locations but will be missed by every per-location run. Set it in the table below, or on their Job &amp; Pay tab.
         </div>
       )}
 
@@ -33117,7 +33127,16 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
           <input type="date" value={to} onChange={e => { setTo(e.target.value); setPeriodSel(""); }} className={inputCls} />
         </div>
         <div>
-          <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Payroll location</label>
+          <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">Group by</label>
+          <div className="flex gap-1">
+            {[["payroll", "Payroll location"], ["accounting", "Accounting location"]].map(([k, l]) => (
+              <button key={k} onClick={() => switchMode(k)}
+                className={`px-3 py-2 rounded-xl text-xs font-semibold transition-colors ${locMode === k ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-300 hover:bg-slate-700"}`}>{l}</button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">{locModeLabel}</label>
           <select value={locFilter} onChange={e => { setLocFilter(e.target.value); setRows(null); setSavedMsg(""); }} className={inputCls}>
             <option value="all">All locations ({activeEmployees.length})</option>
             {payrollLocations.map(l => <option key={l.id} value={l.id}>{l.name} ({l.count})</option>)}
@@ -33208,8 +33227,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                   <th className="py-2 pr-3">Gross</th>
                   <th className="py-2 pr-3">Bank transfer</th>
                   <th className="py-2 pr-3">Cash paid</th>
-                  <th className="py-2 pr-3">Payroll loc</th>
-                  <th className="py-2 pr-3">Acct loc</th>
+                  <th className="py-2 pr-3">{locModeLabel}</th>
                   <th className="py-2 pr-3">Working</th>
                 </tr>
               </thead>
@@ -33238,14 +33256,13 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                           {fmtGBP(r.cashAmount)}
                         </td>
                         <td className="py-2 pr-3">
-                          <select value={r.payrollLocation} onChange={e => updateRow(r.employeeId, { payrollLocation: e.target.value })}
-                            className="px-2 py-1 bg-slate-900 border border-slate-800 rounded text-slate-200 text-xs max-w-[130px]">
-                            <option value="">—</option>
-                            {stores.filter(s => !s.archivedAt && isShopSite(s)).map(s => <option key={s.id} value={s.id}>{storeName(s.id)}</option>)}
-                          </select>
-                        </td>
-                        <td className="py-2 pr-3">
-                          <select value={r.accountingLocation} onChange={e => updateRow(r.employeeId, { accountingLocation: e.target.value })}
+                          {/* LOCMODE — only the basis being run is editable, so a
+                              correction can't silently move someone off the run. */}
+                          <select
+                            value={locMode === "accounting" ? r.accountingLocation : r.payrollLocation}
+                            onChange={e => updateRow(r.employeeId, locMode === "accounting"
+                              ? { accountingLocation: e.target.value }
+                              : { payrollLocation: e.target.value })}
                             className="px-2 py-1 bg-slate-900 border border-slate-800 rounded text-slate-200 text-xs max-w-[130px]">
                             <option value="">—</option>
                             {stores.filter(s => !s.archivedAt && isShopSite(s)).map(s => <option key={s.id} value={s.id}>{storeName(s.id)}</option>)}
@@ -61955,7 +61972,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: PAYRUNPERIOD 2026-07-28r");
+      console.log("CB build: LOCMODE 2026-07-28s");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
