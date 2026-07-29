@@ -55226,7 +55226,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
                       await onSetBreak(openRecord.id, action);
                       setOverlayView(null);
                       setLastAction({ type: onBreak ? "break_end" : "break_start", name: matched.nickname || matched.firstName, time: new Date() });
-                    } catch (e) { setBreakMsg("Couldn't update break — try again."); }
+                    } catch (e) { setBreakMsg(e?.message || "Couldn't update break — try again."); }
                   }}
                     className="w-full py-4 rounded-2xl text-lg font-bold" style={{backgroundColor: onBreak ? "#6e3621" : "#3D2A1E", color:"#FDF2E0"}}>
                     {onBreak ? "🙌 End my break" : "☕ Take a break"}
@@ -62252,7 +62252,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: NEWSTARTER 2026-07-28ae");
+      console.log("CB build: BREAKGUARD 2026-07-29a");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:

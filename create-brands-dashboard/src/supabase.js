@@ -1469,10 +1469,28 @@ export async function deletePunchRecord(id) {
 
 // Start or end an unpaid break on an open punch. action: "start" | "end".
 // On end, accumulates elapsed minutes into break_minutes.
+// BREAKGUARD 2026-07-29a — "start" used to overwrite break_start and null
+// break_end unconditionally. Because a segment is only written to break_log
+// when a break ENDS, tapping start while already on break silently discarded
+// the running break: the time actually taken disappeared and a 0-minute stub
+// took its place. Nothing stopped a break being set on an already clocked-out
+// punch either, which is how break_start ends up later than punch_out.
 export async function setPunchBreak(id, action) {
   const { data: rows, error: e1 } = await supabase
-    .from("punch_records").select("break_start, break_minutes, break_log").eq("id", id).single();
+    .from("punch_records").select("*").eq("id", id).single();
   if (e1) throw e1;
+
+  if (rows?.punch_out || (rows?.status && rows.status !== "open")) {
+    throw new Error("That shift has already been clocked out — its break can't be changed from the clock. Ask a manager to amend it.");
+  }
+
+  const onBreak = !!rows?.break_start && !rows?.break_end;
+  // Both directions are idempotent: repeating the action you're already in
+  // returns the record untouched, so the screen re-syncs instead of the tap
+  // destroying data.
+  if (action === "start" && onBreak) return dbPunchToApp(rows);
+  if (action !== "start" && !onBreak) return dbPunchToApp(rows);
+
   const nowIso = new Date().toISOString();
   let patch;
   if (action === "start") {
