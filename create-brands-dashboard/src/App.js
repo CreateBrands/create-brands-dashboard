@@ -33403,6 +33403,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                   <th className="py-2 pr-3">Cash paid</th>
                   <th className="py-2 pr-3">Age</th>
                   <th className="py-2 pr-3">Min rate</th>
+                  <th className="py-2 pr-3">Normalized wage</th>
                   <th className="py-2 pr-3">Note</th>
                   <th className="py-2 pr-3">{locModeLabel}</th>
                   <th className="py-2 pr-3">Working</th>
@@ -33455,6 +33456,24 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                           ) : (
                             <span className="text-[11px] text-amber-400" title="No minimum wage rate configured for this band and date">not set</span>
                           )}
+                        </td>
+                        {/* NORMWAGE 2026-07-28z — gross restated at the statutory
+                            rate: round(4 × gross ÷ min rate) ÷ 4 × min rate.
+                            The ×4/÷4 snaps the implied hours to the nearest
+                            quarter hour before re-pricing. Salaried rows have no
+                            hourly floor to normalise against. */}
+                        <td className="py-2 pr-3 whitespace-nowrap">
+                          {(() => {
+                            if (r.salaried) return <span className="text-[11px] text-slate-500">—</span>;
+                            if (!(r.nmwRate > 0)) return <span className="text-[11px] text-amber-400">no min rate</span>;
+                            const qh = Math.round(4 * (r.totalPay / r.nmwRate)) / 4;
+                            const norm = qh * r.nmwRate;
+                            return (
+                              <span className="text-[11px] text-slate-200" title={`${qh.toFixed(2)}h at ${fmtGBP(r.nmwRate)}`}>
+                                {fmtGBP(norm)}
+                              </span>
+                            );
+                          })()}
                         </td>
                         <td className="py-2 pr-3">
                           {/* PAYNOTES2 — opens the employee's full note history. */}
@@ -62180,7 +62199,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: MINRATE 2026-07-28y");
+      console.log("CB build: NORMWAGE 2026-07-28z");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
