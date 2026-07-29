@@ -32744,6 +32744,20 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
   // change looks like it never saved.
   const [bankDefaults, setBankDefaults] = useState({});
   const [savedFlag, setSavedFlag] = useState({});
+  // NORMCHECK 2026-07-29d — two steps, per spec:
+  //   isNormalized    = ((bank / minRate) * 4) mod 1 === 0
+  //   normalizedHours = round(4 * bank / minRate) / 4
+  // An amount already sitting on a quarter-hour boundary is left exactly alone;
+  // only amounts off one are moved onto it. The tolerance guards float error —
+  // 1080.35 / 12.71 * 4 is 339.99999… in binary, not 340.
+  const normalizeBank = (bank, minRate) => {
+    if (!(minRate > 0)) return null;
+    const q = (Number(bank) || 0) / minRate * 4;
+    const isNormalized = Math.abs(q - Math.round(q)) < 1e-6;
+    const hours = Math.round(q) / 4;
+    return { isNormalized, hours, wage: Math.round(hours * minRate * 100) / 100 };
+  };
+
   const flash = (id, key) => {
     setSavedFlag(s => ({ ...s, [id + ":" + key]: true }));
     setTimeout(() => setSavedFlag(s => { const n = { ...s }; delete n[id + ":" + key]; return n; }), 2000);
@@ -33165,7 +33179,8 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
     sectionTitle("PAYROLL");
     const payCols = [
       ["First Name", 16], ["Last Name", 16], ["New Starter", 12], ["Min Rate", 11],
-      ["Wages", 13], ["Salary Term", 14], ["Bank Transfer", 14], ["Cash Paid", 13],
+      ["Wages", 13], ["Salary Term", 14], ["Bank Transfer", 14], ["Normalized Wage", 15],
+      ["Normalized Hours", 16], ["Cash Paid", 13],
     ];
     styleHeader(ws.addRow(payCols.map(c => c[0])));
     exportable.forEach((r, i) => {
@@ -33180,20 +33195,25 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
         Number(r.totalPay.toFixed(2)),
         r.salaried ? "Monthly Salary" : "Hourly",
         Number(r.bankAmount.toFixed(2)),
+        // NORMCHECK — blank for salaried; no hourly floor to normalise against.
+        r.salaried ? "" : (normalizeBank(r.bankAmount, r.nmwRate)?.wage ?? ""),
+        r.salaried ? "" : (normalizeBank(r.bankAmount, r.nmwRate)?.hours ?? ""),
         Number(r.cashAmount.toFixed(2)),
       ]);
-      styleBody(row, i, [4, 5, 7, 8]);
+      styleBody(row, i, [4, 5, 7, 8, 10]);
     });
 
     const totals = ws.addRow(["", "", "TOTAL", "",
       Number(exportable.reduce((a, r) => a + r.totalPay, 0).toFixed(2)), "",
       Number(exportable.reduce((a, r) => a + r.bankAmount, 0).toFixed(2)),
+      Number(exportable.reduce((a, r) => a + (r.salaried ? 0 : (normalizeBank(r.bankAmount, r.nmwRate)?.wage || 0)), 0).toFixed(2)),
+      Number(exportable.reduce((a, r) => a + (r.salaried ? 0 : (normalizeBank(r.bankAmount, r.nmwRate)?.hours || 0)), 0).toFixed(2)),
       Number(exportable.reduce((a, r) => a + r.cashAmount, 0).toFixed(2)),
     ]);
     totals.font = { bold: true };
     totals.eachCell((cell, col) => {
       cell.border = { top: { style: "thin" } };
-      if ([5, 7, 8].includes(col)) { cell.numFmt = "£#,##0.00"; cell.alignment = { horizontal: "right" }; }
+      if ([5, 7, 8, 10].includes(col)) { cell.numFmt = "£#,##0.00"; cell.alignment = { horizontal: "right" }; }
     });
 
     // Widths: the wider of the two blocks wins per column.
@@ -33476,11 +33496,14 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                           {(() => {
                             if (r.salaried) return <span className="text-[11px] text-slate-500">—</span>;
                             if (!(r.nmwRate > 0)) return <span className="text-[11px] text-amber-400">no min rate</span>;
-                            const qh = Math.round(4 * (r.totalPay / r.nmwRate)) / 4;
-                            const norm = qh * r.nmwRate;
+                            // NORMCHECK 2026-07-29d — check first, normalise only if
+                            // the bank amount isn't already on a quarter-hour
+                            // boundary at the statutory rate.
+                            const n = normalizeBank(r.bankAmount, r.nmwRate);
                             return (
-                              <span className="text-[11px] text-slate-200" title={`${qh.toFixed(2)}h at ${fmtGBP(r.nmwRate)}`}>
-                                {fmtGBP(norm)}
+                              <span className={`text-[11px] ${n.isNormalized ? "text-slate-400" : "text-slate-200 font-semibold"}`}
+                                title={`${n.hours.toFixed(2)}h at ${fmtGBP(r.nmwRate)}${n.isNormalized ? " — already normalized" : ` — bank ${fmtGBP(r.bankAmount)}`}`}>
+                                {fmtGBP(n.wage)}{n.isNormalized ? " ✓" : ""}
                               </span>
                             );
                           })()}
@@ -62252,7 +62275,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: NORMGROSS 2026-07-29c");
+      console.log("CB build: NORMCHECK 2026-07-29d");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
