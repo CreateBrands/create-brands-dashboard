@@ -70,7 +70,7 @@ import {
   // Slice 5: hire workflow
   hireApplication, hireApplicationCheck,
   // Slice 6: employee profile
-  fetchEmployeeNotes, addEmployeeNote, updateEmployeeNote, deleteEmployeeNote, fetchLinkedApplication,
+  fetchEmployeeNotes, addEmployeeNote, updateEmployeeNote, deleteEmployeeNote, fetchLoanBalancesFor, fetchLinkedApplication,
   // Slice 6 follow-up: pay history
   fetchPayHistory, addPayHistory,
   // Slice 6 follow-up: certifications
@@ -33017,6 +33017,10 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
           beforeEffectiveDates,
         };
       });
+      // LOANCOL 2026-07-28aa — outstanding loan balance, shown for information.
+      // Never deducted here; the screen's own note says loans are not included.
+      const loanBal = await fetchLoanBalancesFor(computed.map(r => r.employeeId)).catch(() => ({}));
+      computed.forEach(r => { r.loanBalance = Number(loanBal[r.employeeId] || 0); });
       setRows(computed);
     } catch (e) {
       setErr(e?.message || String(e));
@@ -33400,13 +33404,14 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                   <th className="py-2 pr-3">Hours</th>
                   <th className="py-2 pr-3">Gross</th>
                   <th className="py-2 pr-3">Bank transfer</th>
-                  <th className="py-2 pr-3">Cash paid</th>
-                  <th className="py-2 pr-3">Age</th>
-                  <th className="py-2 pr-3">Min rate</th>
                   <th className="py-2 pr-3">Normalized wage</th>
+                  <th className="py-2 pr-3">Cash paid</th>
+                  <th className="py-2 pr-3">Loan</th>
                   <th className="py-2 pr-3">Note</th>
                   <th className="py-2 pr-3">{locModeLabel}</th>
                   <th className="py-2 pr-3">Working</th>
+                  <th className="py-2 pr-3">Age</th>
+                  <th className="py-2 pr-3">Min rate</th>
                 </tr>
               </thead>
               <tbody>
@@ -33417,7 +33422,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                       {r.under18 && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-950/60 border border-amber-800 text-amber-300 font-semibold">U18</span>}
                     </td>
                     {r.rowError ? (
-                      <td colSpan={7} className="py-2 pr-3 text-red-300 text-xs">{r.rowError}</td>
+                      <td colSpan={11} className="py-2 pr-3 text-red-300 text-xs">{r.rowError}</td>
                     ) : (
                       <>
                         <td className="py-2 pr-3 text-slate-300">{r.totalHours.toFixed(2)}</td>
@@ -33438,30 +33443,6 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                             {savedFlag[r.employeeId + ":bank"] && <span className="text-[10px] text-emerald-400">saved</span>}
                           </div>
                         </td>
-                        <td className="py-2 pr-3 text-slate-300 font-medium">
-                          {fmtGBP(r.cashAmount)}
-                        </td>
-                        {/* MINRATE 2026-07-28y — age and the statutory floor split
-                            into their own columns so each can be scanned down. */}
-                        <td className="py-2 pr-3 whitespace-nowrap">
-                          {r.ageAtEnd == null
-                            ? <span className="text-[11px] text-amber-400" title="No date of birth on file">no DOB</span>
-                            : <span className="text-[11px] text-slate-200">{r.ageAtEnd}</span>}
-                        </td>
-                        <td className="py-2 pr-3 whitespace-nowrap">
-                          {r.salaried ? (
-                            <span className="text-[11px] text-slate-500">salaried</span>
-                          ) : r.nmwRate != null ? (
-                            <span className="text-[11px] text-slate-200">{fmtGBP(r.nmwRate)}</span>
-                          ) : (
-                            <span className="text-[11px] text-amber-400" title="No minimum wage rate configured for this band and date">not set</span>
-                          )}
-                        </td>
-                        {/* NORMWAGE 2026-07-28z — gross restated at the statutory
-                            rate: round(4 × gross ÷ min rate) ÷ 4 × min rate.
-                            The ×4/÷4 snaps the implied hours to the nearest
-                            quarter hour before re-pricing. Salaried rows have no
-                            hourly floor to normalise against. */}
                         <td className="py-2 pr-3 whitespace-nowrap">
                           {(() => {
                             if (r.salaried) return <span className="text-[11px] text-slate-500">—</span>;
@@ -33474,6 +33455,14 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                               </span>
                             );
                           })()}
+                        </td>
+                        <td className="py-2 pr-3 text-slate-300 font-medium">
+                          {fmtGBP(r.cashAmount)}
+                        </td>
+                        <td className="py-2 pr-3 whitespace-nowrap">
+                          {r.loanBalance > 0
+                            ? <span className="text-[11px] text-amber-300" title="Outstanding loan balance — shown for information, not deducted from this run">{fmtGBP(r.loanBalance)}</span>
+                            : <span className="text-[11px] text-slate-600">—</span>}
                         </td>
                         <td className="py-2 pr-3">
                           {/* PAYNOTES2 — opens the employee's full note history. */}
@@ -33500,6 +33489,20 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                             <div key={i}>{l.hours.toFixed(2)}h @ {fmtGBP(l.rate)}{l.band ? ` [${l.band.replace("_", "–")}${l.age != null ? `, age ${l.age}` : ""}]` : " [fixed]"}</div>
                           ))}
                           {r.lines.length === 0 && <span className="text-slate-600">no approved hours</span>}
+                        </td>
+                        <td className="py-2 pr-3 whitespace-nowrap">
+                          {r.ageAtEnd == null
+                            ? <span className="text-[11px] text-amber-400" title="No date of birth on file">no DOB</span>
+                            : <span className="text-[11px] text-slate-200">{r.ageAtEnd}</span>}
+                        </td>
+                        <td className="py-2 pr-3 whitespace-nowrap">
+                          {r.salaried ? (
+                            <span className="text-[11px] text-slate-500">salaried</span>
+                          ) : r.nmwRate != null ? (
+                            <span className="text-[11px] text-slate-200">{fmtGBP(r.nmwRate)}</span>
+                          ) : (
+                            <span className="text-[11px] text-amber-400" title="No minimum wage rate configured for this band and date">not set</span>
+                          )}
                         </td>
                       </>
                     )}
@@ -62199,7 +62202,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: NORMWAGE 2026-07-28z");
+      console.log("CB build: LOANCOL 2026-07-28aa");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:

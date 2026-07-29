@@ -5420,6 +5420,25 @@ export async function fetchEmployeeLoans(employeeId) {
   return data || [];
 }
 
+// LOANCOL 2026-07-28aa — outstanding balance for many employees in one query.
+// Per-employee fetches would be one round trip per payroll row.
+export async function fetchLoanBalancesFor(employeeIds = []) {
+  const ids = [...new Set((employeeIds || []).filter(Boolean))];
+  if (!ids.length) return {};
+  const { data, error } = await supabase
+    .from("employee_loans")
+    .select("employee_id, entry_type, amount")
+    .in("employee_id", ids);
+  if (error) throw error;
+  const out = {};
+  (data || []).forEach(e => {
+    const amt = Number(e.amount);
+    if (!Number.isFinite(amt)) return;
+    out[e.employee_id] = (out[e.employee_id] || 0) + (e.entry_type === "advance" ? amt : -amt);
+  });
+  return out;
+}
+
 export async function addLoanEntry(entry) {
   // entry: { employee_id, entry_type: 'advance'|'repayment', amount, entry_date?, note?, created_by?, brand_id? }
   const { data, error } = await supabase.from("employee_loans").insert(entry).select().maybeSingle();
