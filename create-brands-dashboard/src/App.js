@@ -98,7 +98,7 @@ import {
   fetchMinimumWageRates, upsertMinimumWageRate, removeMinimumWageRate,
   fetchPayrollPeriods, upsertPayrollPeriod,
   fetchEmployeeLoans, addLoanEntry, loanBalance, fetchLoanRequests, fetchLoanPayments, createLoanRequest, cancelLoanRequest, approveLoanRequest, attachLoanContract, declineLoanRequest, recordLoanPayment, confirmLoanPayment, rejectLoanPayment,
-  resolveHourlyRate, ageOnDate, bandForAge, computePunchHours,
+  resolveHourlyRate, ageOnDate, bandForAge, computePunchHours, requiredBreakMins,
   fetchEmployeePayRates, upsertEmployeePayRate, deleteEmployeePayRate,
   uploadInvoiceFile,
   extractInvoice,
@@ -55118,6 +55118,7 @@ function PayPeriodDetail({
         id: p.employeeId, name: p.employeeName || "Unknown",
         role: member?.role || member?.department || "",
         stores: new Set(), punches: 0, hours: 0, ot: 0, pay: 0, unapproved: 0, open: 0,
+        breakMins: 0, breakDeducted: 0, breakEnforced: 0, breakPaid: 0, breakClaims: 0,
       };
       cur.stores.add(p.storeId);
       cur.punches += 1;
@@ -55126,6 +55127,17 @@ function PayPeriodDetail({
       cur.pay += Number(p.grossPay) || 0;
       if (!p.punchOut) cur.open += 1;
       else if (!p.approved) cur.unapproved += 1;
+      // Break detail. The stored hoursWorked is already net of break, so report
+      // what was PUNCHED against what the tier REQUIRED — the gap is what got
+      // auto-applied at clock-out, which is the bit people query.
+      const punchedBreak = Number(p.breakMinutes) || 0;
+      const rawHrs = (Number(p.hoursWorked) || 0) + (p.breakPaid ? 0 : Math.max(punchedBreak, 0) / 60);
+      const required = p.punchOut ? requiredBreakMins(rawHrs) : 0;
+      cur.breakMins += punchedBreak;
+      cur.breakDeducted += p.breakPaid ? 0 : Math.max(punchedBreak, required);
+      if (required > punchedBreak) cur.breakEnforced += 1;
+      if (p.breakPaid) cur.breakPaid += 1;
+      if (p.breakClaimApproved === false || p.breakClaimReason) cur.breakClaims += 1;
       byEmp.set(k, cur);
     });
     return {
@@ -55139,10 +55151,14 @@ function PayPeriodDetail({
   // Payroll hands this to the bureau, so give them a file rather than a screen.
   const downloadSummaryCsv = () => {
     const esc = (v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
-    const head = ["Employee", "Role", "Locations", "Punches", "Hours", "Overtime hrs", "Gross pay", "Avg £/hr", "Unapproved", "Still clocked in"];
+    const head = ["Employee", "Role", "Locations", "Punches", "Hours", "Overtime hrs",
+      "Break punched (mins)", "Break deducted (mins)", "Auto-applied breaks", "Paid breaks", "Break claims",
+      "Gross pay", "Avg £/hr", "Unapproved", "Still clocked in"];
     const body = summary.employees.map(e => [
       e.name, e.role, [...e.stores].map(storeName).join(" / "), e.punches,
-      e.hours.toFixed(2), e.ot.toFixed(2), e.pay.toFixed(2),
+      e.hours.toFixed(2), e.ot.toFixed(2),
+      e.breakMins, Math.round(e.breakDeducted), e.breakEnforced, e.breakPaid, e.breakClaims,
+      e.pay.toFixed(2),
       e.hours > 0 ? (e.pay / e.hours).toFixed(2) : "0.00", e.unapproved, e.open,
     ]);
     const csv = [head, ...body].map(r => r.map(esc).join(",")).join("\r\n");
@@ -55409,13 +55425,15 @@ function PayPeriodDetail({
                 <tr>
                   <th>Employee</th><th>Location</th>
                   <th className="text-right">Punches</th><th className="text-right">Hours</th>
-                  <th className="text-right">OT hrs</th><th className="text-right">Avg £/hr</th>
+                  <th className="text-right">OT hrs</th>
+                  <th className="text-right">Break punched</th><th className="text-right">Break deducted</th>
+                  <th className="text-right">Avg £/hr</th>
                   <th className="text-right">Gross pay</th><th className="text-right">Flags</th>
                 </tr>
               </thead>
               <tbody>
                 {summary.employees.length === 0 ? (
-                  <tr><td colSpan={8} className="text-center py-8 text-sm text-slate-500">No punches in this period.</td></tr>
+                  <tr><td colSpan={10} className="text-center py-8 text-sm text-slate-500">No punches in this period.</td></tr>
                 ) : summary.employees.map(e => (
                   <tr key={e.id || e.name}>
                     <td className="px-4">
@@ -55426,6 +55444,12 @@ function PayPeriodDetail({
                     <td className="px-4 text-right tabular-nums text-slate-300">{e.punches}</td>
                     <td className="px-4 text-right tabular-nums text-white font-semibold">{e.hours.toFixed(2)}</td>
                     <td className={`px-4 text-right tabular-nums ${e.ot > 0 ? "text-amber-400" : "text-slate-500"}`}>{e.ot ? e.ot.toFixed(2) : "—"}</td>
+                    <td className="px-4 text-right tabular-nums text-slate-300">{e.breakMins ? `${e.breakMins}m` : "—"}</td>
+                    <td className="px-4 text-right tabular-nums">
+                      <span className={e.breakDeducted ? "text-white" : "text-slate-500"}>{e.breakDeducted ? `${Math.round(e.breakDeducted)}m` : "—"}</span>
+                      {e.breakEnforced > 0 && <span className="ml-1.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300" title="Shifts where the statutory minimum was applied because too little break was punched">{e.breakEnforced} auto</span>}
+                      {e.breakPaid > 0 && <span className="ml-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-sky-500/20 text-sky-300" title="Breaks marked paid — not deducted">{e.breakPaid} paid</span>}
+                    </td>
                     <td className={`px-4 text-right tabular-nums ${e.hours > 0 && e.pay / e.hours < 1 ? "text-red-400" : "text-slate-400"}`}>£{e.hours > 0 ? (e.pay / e.hours).toFixed(2) : "0.00"}</td>
                     <td className="px-4 text-right tabular-nums text-emerald-400 font-semibold">£{e.pay.toFixed(2)}</td>
                     <td className="px-4 text-right">
@@ -61768,7 +61792,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: PAYSUMMARY 2026-07-28m");
+      console.log("CB build: PAYBREAKS 2026-07-28n");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
