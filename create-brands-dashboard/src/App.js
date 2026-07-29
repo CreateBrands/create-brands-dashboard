@@ -56428,7 +56428,6 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
             <button onClick={()=>setTab("records")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="records"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Records</button>
             <button onClick={()=>setTab("summary")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="summary"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Summary</button>
             <button onClick={()=>setTab("breaks")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="breaks"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Breaks</button>
-            <button onClick={()=>setTab("periods")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="periods"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Pay Periods</button>
             <button onClick={()=>setTab("recordings")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="recordings"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Recordings</button>
           </div>
         </div>
@@ -56976,24 +56975,6 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
           )}
         </div>
         </div>
-      )}
-
-      {tab === "periods" && (
-        <PayPeriodsPanel
-          stores={sortedVisibleStores}
-          isHQ={isHqOrAbove(user.role)}
-          punchRecords={punchRecords}
-          opsTeam={opsTeam}
-          schedules={schedules}
-          currentUser={currentUser}
-          paySchedule={paySchedule}
-          periodRows={payPeriods}
-          periodLocations={payPeriodLocations}
-          onPeriodsChanged={onPeriodsChanged}
-          onAmendPunch={setAmendModal}
-          onApprovePunch={onApprovePunch}
-          onApproveAllPunches={onApproveAllPunches}
-        />
       )}
 
       {amendModal && (
@@ -61704,7 +61685,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: CROSSENTITY 2026-07-28k");
+      console.log("CB build: PAYPERIODVIEW 2026-07-28l");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -61732,7 +61713,7 @@ export default function App() {
   // Board, Training, Contracts. Old per-item keys still work via redirect.
   const [teamTab, setTeamTab] = useState("team");
   const [commsTab, setCommsTab] = useState("helpdesk");
-  const TEAM_TAB_KEYS = ["team", "time-attend", "hiring", "onboarding-board", "training", "contracts"];
+  const TEAM_TAB_KEYS = ["team", "time-attend", "pay-periods", "hiring", "onboarding-board", "training", "contracts"];
   useEffect(() => {
     if (TEAM_TAB_KEYS.includes(activeView)) setTeamTab(activeView);
   }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -63286,6 +63267,7 @@ export default function App() {
         { key: "team:team",            view: "team", tab: "team",            label: "Team",              icon: Users },
         { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
         { key: "team:time-attend",     view: "team", tab: "time-attend",     label: "Time & Attendance", icon: Clock },
+        { key: "team:pay-periods",     view: "team", tab: "pay-periods",     label: "Pay Periods",       icon: Calendar },
         { key: "team:hiring",          view: "team", tab: "hiring",          label: "Hiring",            icon: UserPlus, badge: hiringBadge > 0 ? hiringBadge.toString() : null, gateView: "hiring" },
         { key: "team:onboarding-board",view: "team", tab: "onboarding-board",label: "Onboarding Board",  icon: ClipboardList, gateView: "onboarding-board" },
         { key: "team:training",        view: "team", tab: "training",        label: "Training",          icon: GraduationCap },
@@ -63614,6 +63596,25 @@ export default function App() {
                     onAddOpsTeam={addOpsTeam} onUpdateOpsTeam={updateOpsTeam} onDeleteOpsTeam={deleteOpsTeam} onArchiveOpsTeam={archiveOpsTeam} onRestoreOpsTeam={restoreOpsTeam}
                     onOpenEmployeeProfile={openEmployeeProfile}
                     currentUser={currentUser}
+                  />}
+                  {/* PAYPERIODVIEW 2026-07-28l — lifted out of the Time & Attendance
+                      tab strip into its own view. That page already carries records,
+                      summary, breaks and recordings; payroll sign-off is a separate
+                      job done monthly, not another tab on a busy screen. */}
+                  {effTeamTab === "pay-periods" && <PayPeriodsPanel
+                    stores={crossEntityStores}
+                    isHQ={isHqOrAbove(currentUser.role)}
+                    punchRecords={punchRecords}
+                    opsTeam={opsTeam}
+                    schedules={schedules}
+                    currentUser={currentUser}
+                    paySchedule={paySchedule}
+                    periodRows={payPeriods}
+                    periodLocations={payPeriodLocations}
+                    onPeriodsChanged={reloadPayPeriodData}
+                    onAmendPunch={() => setActiveView("time-attend")}
+                    onApprovePunch={approveOnePunch}
+                    onApproveAllPunches={approveAllPunchesInPeriod}
                   />}
                   {effTeamTab === "hiring" && <HiringView
                     brands={visibleBrands} stores={stores} storeRoles={storeRoles} storeDepartments={storeDepartments} visibleStoreIds={crossEntityStoreIds}
