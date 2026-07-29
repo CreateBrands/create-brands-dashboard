@@ -190,7 +190,7 @@ import {
   fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, fetchStoreOrderPrefs, saveStoreOrderPrefs, fetchChatGroups, createChatGroup, updateChatGroup, deleteChatGroup, deleteChatThread, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment, editPendingOrderLines, mergePendingOrders, fetchDeliverySourceReceipt, synthesizeInvoiceFromItems, normalizeReceiptDescription,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
-  fetchFreshOrderCustomers, saveFreshOrderCustomers, freshAccessActive,
+  fetchFreshOrderCustomers, saveFreshOrderCustomers, freshAccessActive, setSoFreshAttached,
   fetchPaySchedule, savePaySchedule, generatePayPeriods, payPeriodStatus, fetchPayPeriodLocations,
   closePayPeriodStore, reopenPayPeriodStore, overridePayPeriodDates, setPunchApproved, approvePunchesInPeriod,
 } from "./supabase";
@@ -9433,6 +9433,18 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
   const [detachedLines, setDetachedLines] = useState(null); // instant local redraw after detach
   const [detachMsg, setDetachMsg] = useState("");
   if (detachedLines) so = { ...so, lines: detachedLines }; // param override: every derived figure recomputes
+  // FRESHATTACH 2026-07-28h — fresh lines are detached from the sales order by
+  // default. Splitting them out of so.lines HERE means every derived figure
+  // below (totals, print rows, the lines table) sees only what Distribution
+  // supplies, with no further changes. Attaching flips attached_to_so and the
+  // lines fall straight back through exactly as before.
+  const freshIdSet = new Set((items || []).filter(i => i.itemType === "fresh").map(i => i.id));
+  const detachedFresh = (so.lines || []).filter(l => freshIdSet.has(l.itemId) && !l.attachedToSo);
+  const attachedFresh = (so.lines || []).filter(l => freshIdSet.has(l.itemId) && l.attachedToSo);
+  if (detachedFresh.length) {
+    const ex = new Set(detachedFresh.map(l => l.id));
+    so = { ...so, lines: (so.lines || []).filter(l => !ex.has(l.id)) };
+  }
   const [vendorNames, setVendorNames] = useState({});
   useEffect(() => {
     if (!detachOpen) return;
@@ -9448,8 +9460,9 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
     // (temporal dead zone: "cannot access before initialization").
     const byId = new Map((items || []).map(it => [it.id, it]));
     const groups = [];
-    const fresh = (so.lines || []).filter(l => byId.get(l.itemId)?.itemType === "fresh");
-    if (fresh.length) groups.push({ key: "fresh", label: "Fresh stock (driver-shopped)", lines: fresh });
+    // FRESHATTACH — fresh is no longer offered here. It is detached by default
+    // via the reversible toggle below, and this modal DELETES lines, which
+    // would wipe the drivers' shopping list (the 2026-07-24 failure).
     const byVendor = new Map();
     (so.lines || []).forEach(l => {
       const it = byId.get(l.itemId);
@@ -9480,6 +9493,13 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
     setDetachBusy(false);
   };
   const currentUserLike = () => ({ name: "Distribution" });
+  const [freshBusy, setFreshBusy] = useState(false);
+  const toggleFreshAttach = async (attach) => {
+    setFreshBusy(true);
+    try { await setSoFreshAttached(so.id, attach); onChanged?.(); }
+    catch (e) { alert(e.message); }
+    setFreshBusy(false);
+  };
   const [amendBusy, setAmendBusy] = useState(false);
   const [err, setErr] = useState("");
   const [freshPrompt, setFreshPrompt] = useState(null); // { lines:[{itemId,name,qty}], costs:{} } before dispatch
@@ -9844,6 +9864,43 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
             </tbody>
           </table>
         </div>
+
+        {/* FRESHATTACH — fresh stock, detached from the order by default */}
+        {(detachedFresh.length > 0 || attachedFresh.length > 0) && (() => {
+          const isAttached = attachedFresh.length > 0;
+          const rows = isAttached ? attachedFresh : detachedFresh;
+          return (
+            <div className={`rounded-xl border p-3 ${isAttached ? "border-emerald-500/30 bg-emerald-950/10" : "border-slate-800 bg-slate-950/40"}`}>
+              <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
+                <div>
+                  <div className="text-xs font-bold text-white">Fresh stock — driver-shopped</div>
+                  <div className="text-[11px] text-slate-500">
+                    {isAttached
+                      ? "Attached: on this order's total, and will be picked, dispatched and invoiced with it."
+                      : "Detached: not supplied by Distribution, so it stays off this order's total and off the invoice. The driver still shops and delivers it."}
+                  </div>
+                </div>
+                <button onClick={() => toggleFreshAttach(!isAttached)} disabled={freshBusy}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold disabled:opacity-40 ${isAttached ? "bg-slate-800 text-slate-200 hover:bg-slate-700" : "bg-indigo-600 text-white hover:bg-indigo-500"}`}>
+                  {freshBusy ? "\u2026" : isAttached ? "Detach from order" : "Attach to order"}
+                </button>
+              </div>
+              <table className="w-full text-xs">
+                <tbody>
+                  {rows.map((l, i) => {
+                    const it = itemById.get(l.itemId);
+                    return (
+                      <tr key={i} className="border-t border-slate-800/60">
+                        <td className="px-2 py-1.5 text-slate-300">{cleanName(it?.name) || l.itemId}</td>
+                        <td className="px-2 py-1.5 text-right text-slate-400 w-20">{Number(l.qty) || 0}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          );
+        })()}
 
         {/* Totals */}
         <div className="flex justify-end">
@@ -61598,7 +61655,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: FRESHACCESS 2026-07-28g");
+      console.log("CB build: FRESHATTACH 2026-07-28h");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:

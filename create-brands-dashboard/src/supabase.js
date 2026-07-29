@@ -12909,7 +12909,7 @@ const mapDistSO = (o) => ({
   shippingCharge: Number(o.shipping_charge) || 0, note: o.note || "", terms: o.terms || "",
   createdBy: o.created_by || null, createdAt: o.created_at, lines: (o.dist_sales_order_lines || []).map(mapDistSOLine),
 });
-const mapDistSOLine = (l) => ({ id: l.id, soId: l.so_id, itemId: l.item_id, qty: Number(l.qty) || 0, fulfilChannel: l.fulfil_channel || null, lineNote: l.line_note || "", uom: l.uom || null, unitPrice: Number(l.unit_price) || 0, discount: Number(l.discount) || 0, discountType: l.discount_type || "percent", taxRateId: l.tax_rate_id || null });
+const mapDistSOLine = (l) => ({ id: l.id, soId: l.so_id, itemId: l.item_id, qty: Number(l.qty) || 0, fulfilChannel: l.fulfil_channel || null, attachedToSo: l.attached_to_so ?? false, lineNote: l.line_note || "", uom: l.uom || null, unitPrice: Number(l.unit_price) || 0, discount: Number(l.discount) || 0, discountType: l.discount_type || "percent", taxRateId: l.tax_rate_id || null });
 
 export async function fetchDistSalesOrders({ customerId, status } = {}) {
   let q = supabase.from("dist_sales_orders").select("*, dist_sales_order_lines(*)").order("created_at", { ascending: false });
@@ -13193,7 +13193,26 @@ export async function createDistPick(pick, lines = []) {
   // Batchless lines are allowed: fresh/CK (nonStock) AND stocked items picked
   // beyond available batches (the negative-stock dispatch override). Picks
   // never touch stock, so storing them is safe; dispatch decides movements.
-  const lr = lines.filter(l => l.itemId && Number(l.qty) > 0).map(l => ({
+  // FRESHATTACH: a fresh line detached from the sales order is not supplied by
+  // Distribution, so it must never reach a pick — and therefore never a
+  // dispatch or an invoice. Filtered here rather than in the UI so every
+  // caller is covered.
+  let usable = lines.filter(l => l.itemId && Number(l.qty) > 0);
+  if (pick.soId && usable.length) {
+    const { data: soLines } = await supabase.from("dist_sales_order_lines")
+      .select("item_id, attached_to_so").eq("so_id", pick.soId);
+    const attachedByItem = new Map((soLines || []).map(x => [x.item_id, x.attached_to_so === true]));
+    const ids = [...new Set(usable.map(l => l.itemId))];
+    const { data: fi } = await supabase.from("dist_items")
+      .select("id").in("id", ids).eq("item_type", "fresh");
+    const freshIds = new Set((fi || []).map(x => x.id));
+    const kept = usable.filter(l => !freshIds.has(l.itemId) || attachedByItem.get(l.itemId) === true);
+    if (!kept.length && usable.length) {
+      throw new Error("Every line on this order is detached fresh stock — attach the fresh items to the order first, or there is nothing for Distribution to pick.");
+    }
+    usable = kept;
+  }
+  const lr = usable.map(l => ({
     id: distId("dpickl"), pick_id: id, item_id: l.itemId, batch_id: l.batchId || null, qty: Number(l.qty) || 0,
     unit_price: Number(l.unitPrice) || 0, tax_rate_id: l.taxRateId || null,
   }));
@@ -15685,6 +15704,29 @@ export async function setLineFulfilChannel(lineId, channel) {
   const { error } = await supabase.from("dist_sales_order_lines")
     .update({ fulfil_channel: val }).eq("id", lineId);
   if (error) throw error;
+}
+
+// ── FRESHATTACH (2026-07-28h) ────────────────────────────────────────────────
+// Fresh lines are DETACHED from the sales order by default: Distribution did
+// not supply them, so they stay off the order's totals, off the pick, off the
+// dispatch and off the invoice — they are billed separately. The lines are
+// never deleted; the driver's fresh board still shops from them either way.
+// Attaching puts them back on the order exactly as before. Fully reversible.
+export async function setSoFreshAttached(soId, attached) {
+  if (!soId) throw new Error("Sales order id required.");
+  const { data: soLines } = await supabase.from("dist_sales_order_lines")
+    .select("id, item_id").eq("so_id", soId);
+  const ids = [...new Set((soLines || []).map(l => l.item_id).filter(Boolean))];
+  if (!ids.length) return 0;
+  const { data: fresh } = await supabase.from("dist_items")
+    .select("id").in("id", ids).eq("item_type", "fresh");
+  const freshIds = new Set((fresh || []).map(f => f.id));
+  const lineIds = (soLines || []).filter(l => freshIds.has(l.item_id)).map(l => l.id);
+  if (!lineIds.length) return 0;
+  const { error } = await supabase.from("dist_sales_order_lines")
+    .update({ attached_to_so: !!attached }).in("id", lineIds);
+  if (error) throw error;
+  return lineIds.length;
 }
 
 export async function fetchOrderAmendment(soId) {
