@@ -33533,7 +33533,9 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                               : { payrollLocation: e.target.value })}
                             className="px-2 py-1 bg-slate-900 border border-slate-800 rounded text-slate-200 text-xs max-w-[130px]">
                             <option value="">—</option>
-                            {stores.filter(s => !s.archivedAt && isShopSite(s)).map(s => <option key={s.id} value={s.id}>{storeName(s.id)}</option>)}
+                            {/* PAYROLLSITES — facilities included: CK and Distribution
+                                payroll their own staff. */}
+                            {stores.filter(s => !s.archivedAt && s.id !== "store-system-non-trading").map(s => <option key={s.id} value={s.id}>{storeName(s.id)}</option>)}
                           </select>
                         </td>
                         <td className="py-2 pr-3 text-[10px] text-slate-500">
@@ -39912,10 +39914,15 @@ function PayrollAttributesTab({ employee, stores, brands, currentUser, onUpdateE
   const labelCls = "block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1";
   const fmtGBP = (n) => `£${Number(n || 0).toFixed(2)}`;
 
-  // Store options (with brand prefix for clarity across the chain)
+  // Store options (with brand prefix for clarity across the chain).
+  // PAYROLLSITES 2026-07-29e — payroll and accounting location are ENTITIES,
+  // not shops: Central Kitchen, Distribution and franchise ops all employ
+  // people and book wage cost. isShopSite() excludes them, which is right for
+  // ordering scope but left CK and Dist staff unable to sit under the entity
+  // that actually payrolls them.
   const brandName = (id) => brands?.find(b => b.id === id)?.name || "";
   const storeOpts = (stores || [])
-    .filter(s => !s.archivedAt && isShopSite(s))
+    .filter(s => !s.archivedAt && s.id !== "store-system-non-trading")
     .sort((a, b) => (a.shortName || a.name || "").localeCompare(b.shortName || b.name || ""));
   const storeLabel = (s) => `${brandName(s.brandId) ? brandName(s.brandId) + " · " : ""}${s.shortName || s.name}`;
 
@@ -62275,7 +62282,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: NORMCHECK 2026-07-29d");
+      console.log("CB build: PAYROLLSITES 2026-07-29e");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
