@@ -1453,9 +1453,31 @@ export async function updatePunchOut(id, punchOut, hoursWorked, grossPay) {
   return dbPunchToApp(data);
 }
 
+// PUNCHSTORE 2026-07-31a — store_id and brand_id are NOT NULL, and this is a
+// full-row upsert: every column in the mapped object is written, including the
+// ones the caller never meant to touch. Callers that build an update by
+// spreading a UI row (Approve OT, Reject OT, approve-shift) can arrive without
+// storeId, which nulled the column and failed the whole approval with
+// "null value in column store_id violates not-null constraint".
+//
+// Fill either field from the stored row when the incoming record omits it, so
+// a partial update can't erase identity columns. Fixed here rather than at each
+// call site so every caller is covered.
 export async function upsertPunchRecord(record) {
+  const row = appPunchToDb(record);
+  if (row.id && (row.store_id == null || row.brand_id == null)) {
+    const { data: existing } = await supabase
+      .from("punch_records").select("store_id, brand_id").eq("id", row.id).maybeSingle();
+    if (existing) {
+      if (row.store_id == null) row.store_id = existing.store_id;
+      if (row.brand_id == null) row.brand_id = existing.brand_id;
+    }
+  }
+  if (row.store_id == null) {
+    throw new Error("This punch record has no store attached — open it in Manual Entry and set the store before approving.");
+  }
   const { data, error } = await supabase
-    .from("punch_records").upsert(appPunchToDb(record), { onConflict: "id" })
+    .from("punch_records").upsert(row, { onConflict: "id" })
     .select().single();
   if (error) throw error;
   return dbPunchToApp(data);
