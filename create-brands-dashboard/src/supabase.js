@@ -1463,18 +1463,26 @@ export async function updatePunchOut(id, punchOut, hoursWorked, grossPay) {
 // Fill either field from the stored row when the incoming record omits it, so
 // a partial update can't erase identity columns. Fixed here rather than at each
 // call site so every caller is covered.
+// PUNCHIDENTITY 2026-07-31b — widened from store_id/brand_id to every column
+// that identifies WHICH shift this is. An update never legitimately blanks any
+// of them, and a caller spreading a UI row can omit any of them, so each one is
+// a latent version of the store_id crash rather than store_id being special —
+// it only surfaced first because the database refuses nulls there.
+const PUNCH_IDENTITY_COLS = [
+  "store_id", "brand_id", "employee_id", "employee_name", "date", "punch_in",
+];
+
 export async function upsertPunchRecord(record) {
   const row = appPunchToDb(record);
-  if (row.id && (row.store_id == null || row.brand_id == null)) {
+  const missing = PUNCH_IDENTITY_COLS.filter(c => row[c] == null);
+  if (row.id && missing.length) {
     const { data: existing } = await supabase
-      .from("punch_records").select("store_id, brand_id").eq("id", row.id).maybeSingle();
-    if (existing) {
-      if (row.store_id == null) row.store_id = existing.store_id;
-      if (row.brand_id == null) row.brand_id = existing.brand_id;
-    }
+      .from("punch_records").select(PUNCH_IDENTITY_COLS.join(", ")).eq("id", row.id).maybeSingle();
+    if (existing) missing.forEach(c => { if (existing[c] != null) row[c] = existing[c]; });
   }
-  if (row.store_id == null) {
-    throw new Error("This punch record has no store attached — open it in Manual Entry and set the store before approving.");
+  const stillMissing = PUNCH_IDENTITY_COLS.filter(c => row[c] == null);
+  if (stillMissing.length) {
+    throw new Error(`This punch record is missing ${stillMissing.join(", ")} and can't be saved. Open it in Manual Entry and complete it first.`);
   }
   const { data, error } = await supabase
     .from("punch_records").upsert(row, { onConflict: "id" })
