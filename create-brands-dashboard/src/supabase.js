@@ -13146,6 +13146,11 @@ export async function updateDistSalesOrder(so, lines = []) {
     delivery_method: so.deliveryMethod || null, salesperson: so.salesperson || null,
     vat_mode: so.vatMode || "exclusive", discount_percent: Number(so.discountPercent) || 0, discount_type: so.discountType || "percent",
     shipping_charge: Number(so.shippingCharge) || 0, note: so.note || null, terms: so.terms || null,
+    // TEAMNOTES — the edit form can set these too, so they must persist here;
+    // without this the fields looked editable and silently discarded.
+    note_kitchen: (so.noteKitchen || "").trim() || null,
+    note_dist: (so.noteDist || "").trim() || null,
+    note_driver: (so.noteDriver || "").trim() || null,
   };
   const { error } = await supabase.from("dist_sales_orders").update(row).eq("id", so.id);
   if (error) throw error;

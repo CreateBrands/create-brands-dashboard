@@ -10718,23 +10718,102 @@ function DistSalesOrderView({ currentUser, setActiveView }) {
       {detail && <DistSalesOrderDetail so={detail} customer={customers.find(c => c.id === detail.customerId)} items={items} taxRates={taxRates} onClose={() => setDetail(null)} onEdit={() => { editSO(detail); setDetail(null); }} onDelete={() => removeSO(detail)} onNavigate={setActiveView} onChanged={load}/>}
       {creating && (
         <Modal onClose={() => setCreating(null)} title={creating.id ? `Edit ${creating.soNumber || "sales order"}` : "New sales order"} maxW="max-w-4xl" fullScreen>
-          <div className="space-y-4">
-            <label className="text-xs text-slate-400 block">Customer name *<select value={creating.customerId || ""} onChange={e => onCustomer(e.target.value)} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="">Select or add a customer</option>{customers.map(c => <option key={c.id} value={c.id}>{c.displayName}</option>)}</select></label>
-            <div className="grid grid-cols-2 gap-4">
-              <label className="text-xs text-slate-400">Reference#<input value={creating.reference || ""} onChange={e => setCreating({ ...creating, reference: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
-              <label className="text-xs text-slate-400">Sales order date *<input type="date" value={creating.orderDate} onChange={e => setCreating({ ...creating, orderDate: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
-              <label className="text-xs text-slate-400">Expected shipment date<input type="date" value={creating.expectedShip || ""} onChange={e => setCreating({ ...creating, expectedShip: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
-              <label className="text-xs text-slate-400">Payment terms<select value={creating.paymentTerms || "due_on_receipt"} onChange={e => setCreating({ ...creating, paymentTerms: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white">{DIST_PAYMENT_TERMS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}</select></label>
-              <label className="text-xs text-slate-400">Delivery method<input value={creating.deliveryMethod || ""} onChange={e => setCreating({ ...creating, deliveryMethod: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
-              <label className="text-xs text-slate-400">Salesperson<input value={creating.salesperson || ""} onChange={e => setCreating({ ...creating, salesperson: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
-            </div>
-            <DistItemTable items={items} taxRates={taxRates} lines={creating.lines} setLines={ls => setCreating({ ...creating, lines: ls })} vatMode={creating.vatMode} setVatMode={m => setCreating({ ...creating, vatMode: m })} discountPercent={creating.discountPercent} setDiscountPercent={d => setCreating({ ...creating, discountPercent: d })} discountType={creating.discountType} setDiscountType={t => setCreating({ ...creating, discountType: t })}/>
-            <div className="grid grid-cols-2 gap-4">
-              <label className="text-xs text-slate-400">Customer notes<textarea value={creating.note || ""} onChange={e => setCreating({ ...creating, note: e.target.value })} rows={2} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
-              <label className="text-xs text-slate-400">Shipping charge (£)<input type="number" value={creating.shippingCharge || ""} onChange={e => setCreating({ ...creating, shippingCharge: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
-            </div>
-            <div className="flex justify-end gap-2"><button onClick={() => setCreating(null)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Cancel</button><button onClick={() => save("draft")} disabled={busy} className="px-3 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-semibold">Save as draft</button><button onClick={() => save("confirmed")} disabled={busy} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold">{busy?"Saving…":"Save and confirm"}</button></div>
-          </div>
+          {/* SOEDITUI 2026-08-01d — was one flat stack of eleven bare labels, so
+              everything read as equally important and nothing was findable.
+              Regrouped into the same bordered cards the sales order DETAIL page
+              uses, with matching eyebrow labels, so editing an order looks like
+              the order you were just reading. Actions pinned to the bottom
+              instead of floating after the notes. */}
+          {(() => {
+            const card = "rounded-xl border border-slate-800 bg-slate-950/40 p-4";
+            const eyebrow = "text-[10px] uppercase tracking-wide text-slate-500 font-semibold mb-3";
+            const lbl = "block text-[11px] text-slate-400 mb-1";
+            const ctl = "w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm text-white focus:border-indigo-500 focus:outline-none";
+            const set = (patch) => setCreating({ ...creating, ...patch });
+            return (
+              <div className="space-y-4 pb-2">
+
+                {/* Who and when — the two things that identify an order. */}
+                <div className={card}>
+                  <div className={eyebrow}>Customer &amp; dates</div>
+                  <div className="grid sm:grid-cols-2 gap-3">
+                    <div className="sm:col-span-2">
+                      <label className={lbl}>Customer <span className="text-red-400">*</span></label>
+                      <select value={creating.customerId || ""} onChange={e => onCustomer(e.target.value)} className={ctl}>
+                        <option value="">Select or add a customer</option>
+                        {customers.map(c => <option key={c.id} value={c.id}>{c.displayName}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className={lbl}>Order date <span className="text-red-400">*</span></label>
+                      <input type="date" value={creating.orderDate} onChange={e => set({ orderDate: e.target.value })} className={ctl}/>
+                    </div>
+                    <div>
+                      <label className={lbl}>Expected shipment</label>
+                      <input type="date" value={creating.expectedShip || ""} onChange={e => set({ expectedShip: e.target.value })} className={ctl}/>
+                    </div>
+                    <div>
+                      <label className={lbl}>Reference</label>
+                      <input value={creating.reference || ""} onChange={e => set({ reference: e.target.value })} placeholder="Your own reference" className={ctl}/>
+                    </div>
+                    <div>
+                      <label className={lbl}>Payment terms</label>
+                      <select value={creating.paymentTerms || "due_on_receipt"} onChange={e => set({ paymentTerms: e.target.value })} className={ctl}>
+                        {DIST_PAYMENT_TERMS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Items — the substance of the order, so it gets the room. */}
+                <div>
+                  <div className={eyebrow}>Items</div>
+                  <DistItemTable items={items} taxRates={taxRates} lines={creating.lines} setLines={ls => set({ lines: ls })} vatMode={creating.vatMode} setVatMode={m => set({ vatMode: m })} discountPercent={creating.discountPercent} setDiscountPercent={d => set({ discountPercent: d })} discountType={creating.discountType} setDiscountType={t => set({ discountType: t })}/>
+                </div>
+
+                {/* Delivery and notes — everything that travels with the order. */}
+                <div className={card}>
+                  <div className={eyebrow}>Delivery &amp; notes</div>
+                  <div className="grid sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className={lbl}>Delivery method</label>
+                      <input value={creating.deliveryMethod || ""} onChange={e => set({ deliveryMethod: e.target.value })} placeholder="e.g. own van" className={ctl}/>
+                    </div>
+                    <div>
+                      <label className={lbl}>Shipping charge (£)</label>
+                      <input type="number" step="0.01" value={creating.shippingCharge || ""} onChange={e => set({ shippingCharge: e.target.value })} placeholder="0.00" className={ctl}/>
+                    </div>
+                    <div>
+                      <label className={lbl}>Salesperson</label>
+                      <input value={creating.salesperson || ""} onChange={e => set({ salesperson: e.target.value })} className={ctl}/>
+                    </div>
+                    <div>
+                      <label className={lbl}>Customer notes</label>
+                      <textarea value={creating.note || ""} onChange={e => set({ note: e.target.value })} rows={2} placeholder="Shown on the order document" className={`${ctl} resize-none`}/>
+                    </div>
+                  </div>
+                  {/* TEAMNOTES — editable here too, so Dist can add or correct a
+                      note the store didn't leave. */}
+                  <div className="grid sm:grid-cols-3 gap-3 mt-3 pt-3 border-t border-slate-800/60">
+                    {[["Kitchen", "noteKitchen"], ["Distribution", "noteDist"], ["Driver", "noteDriver"]].map(([label, key]) => (
+                      <div key={key}>
+                        <label className={lbl}>📌 Note for {label}</label>
+                        <input value={creating[key] || ""} onChange={e => set({ [key]: e.target.value })} className={ctl}/>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Actions last and pinned — the order of a form should end where
+                    the decision is made. */}
+                <div className="sticky bottom-0 -mx-1 px-1 pt-3 pb-1 bg-slate-900 border-t border-slate-800 flex flex-wrap justify-end gap-2">
+                  <button onClick={() => setCreating(null)} className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-semibold">Cancel</button>
+                  <button onClick={() => save("draft")} disabled={busy} className="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-white text-sm font-semibold">Save as draft</button>
+                  <button onClick={() => save("confirmed")} disabled={busy} className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-bold">{busy ? "Saving…" : "Save and confirm"}</button>
+                </div>
+              </div>
+            );
+          })()}
         </Modal>
       )}
     </div>
@@ -62962,7 +63041,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: ISSUEPHOTOS 2026-08-01c");
+      console.log("CB build: SOEDITUI 2026-08-01d");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
