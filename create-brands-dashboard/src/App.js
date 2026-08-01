@@ -10725,40 +10725,50 @@ function DistSalesOrderView({ currentUser, setActiveView }) {
               the order you were just reading. Actions pinned to the bottom
               instead of floating after the notes. */}
           {(() => {
-            const card = "rounded-xl border border-slate-800 bg-slate-950/40 p-4";
-            const eyebrow = "text-[10px] uppercase tracking-wide text-slate-500 font-semibold mb-3";
-            const lbl = "block text-[11px] text-slate-400 mb-1";
-            const ctl = "w-full px-3 py-2 rounded-lg bg-slate-900 border border-slate-700 text-sm text-white focus:border-indigo-500 focus:outline-none";
+            // SOTHEME 2026-08-01e — the modal renders in the cream Distribution
+            // theme, so the slate cards from the previous pass fought it. Same
+            // palette as the sales order LIST: cream card on a warm ground,
+            // #E8DCC6 hairlines, a dark-brown header bar per section echoing the
+            // list's table head, and the brown primary action.
+            const T = { ink: "#3A2E26", faint: "#9A8770", line: "#E8DCC6", head: "#3A2E26", card: "#FDF8EF", field: "#FFFFFF", accent: "#844429" };
+            const card = "rounded-xl overflow-hidden";
+            const cardSty = { background: T.card, border: `1px solid ${T.line}` };
+            const headSty = { background: T.head, color: "#F3E9D8" };
+            const eyebrow = "text-[10px] uppercase tracking-widest font-bold px-4 py-2.5";
+            const lbl = "block text-[11px] font-semibold mb-1";
+            const lblSty = { color: T.faint };
+            const ctl = "w-full px-3 py-2 rounded-lg text-sm focus:outline-none";
+            const ctlSty = { background: T.field, border: `1px solid ${T.line}`, color: T.ink };
             const set = (patch) => setCreating({ ...creating, ...patch });
             return (
               <div className="space-y-4 pb-2">
 
                 {/* Who and when — the two things that identify an order. */}
-                <div className={card}>
-                  <div className={eyebrow}>Customer &amp; dates</div>
-                  <div className="grid sm:grid-cols-2 gap-3">
+                <div className={card} style={cardSty}>
+                  <div className={eyebrow} style={headSty}>Customer &amp; dates</div>
+                  <div className="grid sm:grid-cols-2 gap-3 p-4">
                     <div className="sm:col-span-2">
-                      <label className={lbl}>Customer <span className="text-red-400">*</span></label>
-                      <select value={creating.customerId || ""} onChange={e => onCustomer(e.target.value)} className={ctl}>
+                      <label className={lbl} style={lblSty}>Customer <span style={{ color: "#B3261E" }}>*</span></label>
+                      <select value={creating.customerId || ""} onChange={e => onCustomer(e.target.value)} className={ctl} style={ctlSty}>
                         <option value="">Select or add a customer</option>
                         {customers.map(c => <option key={c.id} value={c.id}>{c.displayName}</option>)}
                       </select>
                     </div>
                     <div>
-                      <label className={lbl}>Order date <span className="text-red-400">*</span></label>
-                      <input type="date" value={creating.orderDate} onChange={e => set({ orderDate: e.target.value })} className={ctl}/>
+                      <label className={lbl} style={lblSty}>Order date <span style={{ color: "#B3261E" }}>*</span></label>
+                      <input type="date" value={creating.orderDate} onChange={e => set({ orderDate: e.target.value })} className={ctl} style={ctlSty}/>
                     </div>
                     <div>
-                      <label className={lbl}>Expected shipment</label>
-                      <input type="date" value={creating.expectedShip || ""} onChange={e => set({ expectedShip: e.target.value })} className={ctl}/>
+                      <label className={lbl} style={lblSty}>Expected shipment</label>
+                      <input type="date" value={creating.expectedShip || ""} onChange={e => set({ expectedShip: e.target.value })} className={ctl} style={ctlSty}/>
                     </div>
                     <div>
-                      <label className={lbl}>Reference</label>
-                      <input value={creating.reference || ""} onChange={e => set({ reference: e.target.value })} placeholder="Your own reference" className={ctl}/>
+                      <label className={lbl} style={lblSty}>Reference</label>
+                      <input value={creating.reference || ""} onChange={e => set({ reference: e.target.value })} placeholder="Your own reference" className={ctl} style={ctlSty}/>
                     </div>
                     <div>
-                      <label className={lbl}>Payment terms</label>
-                      <select value={creating.paymentTerms || "due_on_receipt"} onChange={e => set({ paymentTerms: e.target.value })} className={ctl}>
+                      <label className={lbl} style={lblSty}>Payment terms</label>
+                      <select value={creating.paymentTerms || "due_on_receipt"} onChange={e => set({ paymentTerms: e.target.value })} className={ctl} style={ctlSty}>
                         {DIST_PAYMENT_TERMS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
                       </select>
                     </div>
@@ -10766,39 +10776,41 @@ function DistSalesOrderView({ currentUser, setActiveView }) {
                 </div>
 
                 {/* Items — the substance of the order, so it gets the room. */}
-                <div>
-                  <div className={eyebrow}>Items</div>
+                <div className={card} style={cardSty}>
+                  <div className={eyebrow} style={headSty}>Items</div>
+                  <div className="p-2">
                   <DistItemTable items={items} taxRates={taxRates} lines={creating.lines} setLines={ls => set({ lines: ls })} vatMode={creating.vatMode} setVatMode={m => set({ vatMode: m })} discountPercent={creating.discountPercent} setDiscountPercent={d => set({ discountPercent: d })} discountType={creating.discountType} setDiscountType={t => set({ discountType: t })}/>
+                  </div>
                 </div>
 
                 {/* Delivery and notes — everything that travels with the order. */}
-                <div className={card}>
-                  <div className={eyebrow}>Delivery &amp; notes</div>
-                  <div className="grid sm:grid-cols-2 gap-3">
+                <div className={card} style={cardSty}>
+                  <div className={eyebrow} style={headSty}>Delivery &amp; notes</div>
+                  <div className="grid sm:grid-cols-2 gap-3 p-4 pb-0">
                     <div>
-                      <label className={lbl}>Delivery method</label>
-                      <input value={creating.deliveryMethod || ""} onChange={e => set({ deliveryMethod: e.target.value })} placeholder="e.g. own van" className={ctl}/>
+                      <label className={lbl} style={lblSty}>Delivery method</label>
+                      <input value={creating.deliveryMethod || ""} onChange={e => set({ deliveryMethod: e.target.value })} placeholder="e.g. own van" className={ctl} style={ctlSty}/>
                     </div>
                     <div>
-                      <label className={lbl}>Shipping charge (£)</label>
-                      <input type="number" step="0.01" value={creating.shippingCharge || ""} onChange={e => set({ shippingCharge: e.target.value })} placeholder="0.00" className={ctl}/>
+                      <label className={lbl} style={lblSty}>Shipping charge (£)</label>
+                      <input type="number" step="0.01" value={creating.shippingCharge || ""} onChange={e => set({ shippingCharge: e.target.value })} placeholder="0.00" className={ctl} style={ctlSty}/>
                     </div>
                     <div>
-                      <label className={lbl}>Salesperson</label>
-                      <input value={creating.salesperson || ""} onChange={e => set({ salesperson: e.target.value })} className={ctl}/>
+                      <label className={lbl} style={lblSty}>Salesperson</label>
+                      <input value={creating.salesperson || ""} onChange={e => set({ salesperson: e.target.value })} className={ctl} style={ctlSty}/>
                     </div>
                     <div>
-                      <label className={lbl}>Customer notes</label>
-                      <textarea value={creating.note || ""} onChange={e => set({ note: e.target.value })} rows={2} placeholder="Shown on the order document" className={`${ctl} resize-none`}/>
+                      <label className={lbl} style={lblSty}>Customer notes</label>
+                      <textarea value={creating.note || ""} onChange={e => set({ note: e.target.value })} rows={2} placeholder="Shown on the order document" className={`${ctl} resize-none`} style={ctlSty}/>
                     </div>
                   </div>
                   {/* TEAMNOTES — editable here too, so Dist can add or correct a
                       note the store didn't leave. */}
-                  <div className="grid sm:grid-cols-3 gap-3 mt-3 pt-3 border-t border-slate-800/60">
+                  <div className="grid sm:grid-cols-3 gap-3 m-4 mt-3 pt-3" style={{ borderTop: `1px solid ${T.line}` }}>
                     {[["Kitchen", "noteKitchen"], ["Distribution", "noteDist"], ["Driver", "noteDriver"]].map(([label, key]) => (
                       <div key={key}>
-                        <label className={lbl}>📌 Note for {label}</label>
-                        <input value={creating[key] || ""} onChange={e => set({ [key]: e.target.value })} className={ctl}/>
+                        <label className={lbl} style={{ color: "#8A5A0B" }}>📌 Note for {label}</label>
+                        <input value={creating[key] || ""} onChange={e => set({ [key]: e.target.value })} className={ctl} style={{ background: "#FFF4DC", border: `1px solid #E5B769`, color: T.ink }}/>
                       </div>
                     ))}
                   </div>
@@ -10806,10 +10818,10 @@ function DistSalesOrderView({ currentUser, setActiveView }) {
 
                 {/* Actions last and pinned — the order of a form should end where
                     the decision is made. */}
-                <div className="sticky bottom-0 -mx-1 px-1 pt-3 pb-1 bg-slate-900 border-t border-slate-800 flex flex-wrap justify-end gap-2">
-                  <button onClick={() => setCreating(null)} className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-sm font-semibold">Cancel</button>
-                  <button onClick={() => save("draft")} disabled={busy} className="px-4 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 disabled:opacity-40 text-white text-sm font-semibold">Save as draft</button>
-                  <button onClick={() => save("confirmed")} disabled={busy} className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-bold">{busy ? "Saving…" : "Save and confirm"}</button>
+                <div className="sticky bottom-0 -mx-1 px-1 pt-3 pb-1 flex flex-wrap justify-end gap-2" style={{ background: "#FAF3E6", borderTop: `1px solid ${T.line}` }}>
+                  <button onClick={() => setCreating(null)} className="px-4 py-2 rounded-xl text-sm font-semibold" style={{ background: "#F0E6D2", color: T.ink, border: `1px solid ${T.line}` }}>Cancel</button>
+                  <button onClick={() => save("draft")} disabled={busy} className="px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-40" style={{ background: "#E8DCC6", color: T.ink }}>Save as draft</button>
+                  <button onClick={() => save("confirmed")} disabled={busy} className="px-5 py-2 rounded-xl text-sm font-bold text-white disabled:opacity-40" style={{ background: T.accent }}>{busy ? "Saving…" : "Save and confirm"}</button>
                 </div>
               </div>
             );
@@ -63041,7 +63053,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: SOEDITUI 2026-08-01d");
+      console.log("CB build: SOTHEME 2026-08-01e");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
