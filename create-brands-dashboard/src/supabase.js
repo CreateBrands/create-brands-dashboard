@@ -203,7 +203,7 @@ export async function insertMaintenanceTicket(ticket) {
 export async function updateMaintenanceTicket(ticket) {
   const { data, error } = await supabase
     .from("maintenance_tickets")
-    .update({ done: ticket.done, text: ticket.text, priority: ticket.priority, updated_at: new Date().toISOString() })
+    .update({ done: ticket.done, text: ticket.text, priority: ticket.priority, photos: Array.isArray(ticket.photos) ? ticket.photos : [], updated_at: new Date().toISOString() })
     .eq("id", ticket.id).select().single();
   if (error) throw error;
   return dbTicketToApp(data);
@@ -488,11 +488,36 @@ function dbEntryToApp(e) {
   return { id: e.id, brandId: e.brand_id, brandName: e.brand_name, date: e.date, manager: e.manager, submittedBy: e.submitted_by, netSales: e.net_sales, cardRevenue: e.card_revenue, cashExpected: e.cash_expected, physicalCash: e.physical_cash, cashVariance: e.cash_variance, varianceJustification: e.variance_justification, openingFloat: e.opening_float, closingFloat: e.closing_float, laborCost: e.labor_cost, cogsCost: e.cogs_cost, totalHours: e.total_hours, totalOrders: e.total_orders, atv: e.atv, fiveStarReviews: e.five_star_reviews, midStarReviews: e.mid_star_reviews, oneStarReviews: e.one_star_reviews, notes: e.notes, maintenanceTickets: e.maintenance_tickets ?? [], timestamp: e.timestamp, storeId: e.store_id || null, amendments: e.amendments ?? [], reconciliation: e.reconciliation ?? [], reconStatus: e.recon_status || "open", lopay: e.lopay ?? 0, unreportedExpense: e.unreported_expense ?? 0, unreportedExpenseNote: e.unreported_expense_note ?? "" };
 }
 
-function appIssueToDb(i) { return { id: i.id, brand_id: i.brandId, brand_name: i.brandName, store_id: i.storeId || null, type: i.type || "Issue", title: i.title, description: i.description, category: i.category, priority: i.priority, status: i.status, reported_by: i.reportedBy, assigned_to: i.assignedTo, comments: i.comments, created_at: i.createdAt, updated_at: i.updatedAt }; }
-function dbIssueToApp(i) { return { id: i.id, brandId: i.brand_id, brandName: i.brand_name, storeId: i.store_id || null, type: i.type || "Issue", title: i.title, description: i.description, category: i.category, priority: i.priority, status: i.status, reportedBy: i.reported_by, assignedTo: i.assigned_to, comments: i.comments ?? [], createdAt: i.created_at, updatedAt: i.updated_at }; }
+function appIssueToDb(i) { return { id: i.id, brand_id: i.brandId, brand_name: i.brandName, store_id: i.storeId || null, type: i.type || "Issue", title: i.title, description: i.description, category: i.category, priority: i.priority, status: i.status, reported_by: i.reportedBy, assigned_to: i.assignedTo, comments: i.comments, photos: Array.isArray(i.photos) ? i.photos : [], created_at: i.createdAt, updated_at: i.updatedAt }; }
+// ISSUEPHOTOS 2026-08-01c — photos on issues and maintenance tickets. A picture
+// of the broken thing saves a round of "which fridge?" and gives whoever fixes
+// it something to work from. Stored as an array of public URLs.
+function dbIssueToApp(i) { return { id: i.id, brandId: i.brand_id, brandName: i.brand_name, storeId: i.store_id || null, type: i.type || "Issue", title: i.title, description: i.description, category: i.category, priority: i.priority, status: i.status, reportedBy: i.reported_by, assignedTo: i.assigned_to, comments: i.comments ?? [], photos: Array.isArray(i.photos) ? i.photos : [], createdAt: i.created_at, updatedAt: i.updated_at }; }
 
-function appTicketToDb(t) { return { id: t.id, brand_id: t.brandId, text: t.text, priority: t.priority, done: t.done ?? false }; }
-function dbTicketToApp(t) { return { id: t.id, brandId: t.brand_id, text: t.text, priority: t.priority, done: t.done, createdAt: t.created_at }; }
+// Reuses the smallware-photos bucket: it already exists with working policies,
+// and standing up a new bucket has caused three separate RLS incidents here.
+export async function uploadIssuePhoto(file) {
+  if (!file) throw new Error("No file provided.");
+  const mimeExt = {
+    "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png", "image/gif": "gif",
+    "image/webp": "webp", "image/heic": "heic", "image/heif": "heif", "image/avif": "avif",
+  }[(file.type || "").toLowerCase()];
+  let ext = mimeExt;
+  if (!ext) {
+    const raw = (file.name || "").split("?")[0].split("#")[0];
+    const maybe = raw.includes(".") ? raw.split(".").pop().toLowerCase() : "";
+    ext = /^[a-z0-9]{1,5}$/.test(maybe) ? maybe : "jpg";
+  }
+  const filename = `issues/${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`;
+  const { error } = await supabase.storage.from("smallware-photos")
+    .upload(filename, file, { contentType: file.type || "image/jpeg", upsert: false });
+  if (error) throw error;
+  const { data } = supabase.storage.from("smallware-photos").getPublicUrl(filename);
+  return data.publicUrl;
+}
+
+function appTicketToDb(t) { return { id: t.id, brand_id: t.brandId, text: t.text, priority: t.priority, done: t.done ?? false, photos: Array.isArray(t.photos) ? t.photos : [] }; }
+function dbTicketToApp(t) { return { id: t.id, brandId: t.brand_id, text: t.text, priority: t.priority, done: t.done, photos: Array.isArray(t.photos) ? t.photos : [], createdAt: t.created_at }; }
 
 function appTempUnitToDb(u) { return { id: u.id, brand_id: u.brandId, store_id: u.storeId || null, name: u.name, type: u.type, min_temp: u.min ?? null, max_temp: u.max ?? null, assign_role: u.assignRole || "", assign_type: u.assignType || null, assign_value: u.assignValue || null, updated_at: new Date().toISOString() }; }
 function dbTempUnitToApp(u) { return { id: u.id, brandId: u.brand_id, storeId: u.store_id || null, name: u.name, type: u.type, min: u.min_temp, max: u.max_temp, assignRole: u.assign_role, assignType: u.assign_type || "", assignValue: u.assign_value || "" }; }

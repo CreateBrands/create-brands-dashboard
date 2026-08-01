@@ -190,7 +190,7 @@ import {
   fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, fetchStoreOrderPrefs, saveStoreOrderPrefs, fetchChatGroups, createChatGroup, updateChatGroup, deleteChatGroup, deleteChatThread, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment, editPendingOrderLines, mergePendingOrders, fetchDeliverySourceReceipt, synthesizeInvoiceFromItems, normalizeReceiptDescription,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
-  fetchFreshOrderCustomers, saveFreshOrderCustomers, freshAccessActive, setSoFreshAttached, deletePayPeriod, setSoTeamNotes,
+  fetchFreshOrderCustomers, saveFreshOrderCustomers, freshAccessActive, setSoFreshAttached, deletePayPeriod, setSoTeamNotes, uploadIssuePhoto,
   fetchPaySchedule, savePaySchedule, generatePayPeriods, payPeriodStatus, fetchPayPeriodLocations,
   closePayPeriodStore, reopenPayPeriodStore, overridePayPeriodDates, setPunchApproved, approvePunchesInPeriod,
 } from "./supabase";
@@ -1645,6 +1645,70 @@ function ExcelUploadModal({ brands, entries, onImport, onClose }) {
 }
 
 // ─── Issue Form Modal ─────────────────────────────────────────────────────────
+// ISSUEPHOTOS 2026-08-01c — attach photos to an issue or maintenance ticket.
+// Uploads on selection rather than on save, so the reporter sees it landed and
+// a half-written report that gets abandoned doesn't leave an orphan behind.
+function PhotoAttach({ photos = [], onChange, label = "Photos", max = 6 }) {
+  const ref = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const add = async (files) => {
+    const list = [...(files || [])].slice(0, max - photos.length);
+    if (!list.length) return;
+    setBusy(true); setErr("");
+    try {
+      const urls = [];
+      for (const f of list) urls.push(await uploadIssuePhoto(f));
+      onChange([...photos, ...urls]);
+    } catch (e) { setErr(e?.message || "Couldn't upload that photo."); }
+    setBusy(false);
+  };
+  return (
+    <div>
+      <label className="text-xs text-slate-600 font-semibold mb-1.5 block">{label}{photos.length ? ` (${photos.length})` : ""}</label>
+      <div className="flex flex-wrap gap-2">
+        {photos.map((u, i) => (
+          <div key={i} className="relative w-20 h-20 rounded-xl overflow-hidden border border-slate-700 group">
+            <img src={u} alt="" className="w-full h-full object-cover"/>
+            <button onClick={() => onChange(photos.filter((_, j) => j !== i))}
+              className="absolute top-0.5 right-0.5 w-5 h-5 rounded-full bg-black/70 text-white text-xs flex items-center justify-center"
+              title="Remove">×</button>
+          </div>
+        ))}
+        {photos.length < max && (
+          <>
+            {/* capture= opens the camera directly on a phone, which is where
+                these photos are almost always taken. */}
+            <input ref={ref} type="file" accept="image/*" capture="environment" multiple className="hidden"
+              onChange={e => { add(e.target.files); e.target.value = ""; }}/>
+            <button onClick={() => ref.current?.click()} disabled={busy}
+              className="w-20 h-20 rounded-xl border-2 border-dashed border-slate-700 hover:border-indigo-500 text-slate-500 hover:text-indigo-400 flex flex-col items-center justify-center gap-1 disabled:opacity-40">
+              <Camera size={18}/>
+              <span className="text-[10px] font-semibold">{busy ? "…" : "Add"}</span>
+            </button>
+          </>
+        )}
+      </div>
+      {err && <div className="text-[11px] text-red-400 mt-1">{err}</div>}
+    </div>
+  );
+}
+
+// Thumbnails opening full size in a new tab — whoever fixes the fault usually
+// wants to zoom in on it.
+function PhotoStrip({ photos = [], size = "w-24 h-24" }) {
+  if (!photos.length) return null;
+  return (
+    <div className="flex flex-wrap gap-2">
+      {photos.map((u, i) => (
+        <a key={i} href={u} target="_blank" rel="noreferrer" className={`${size} rounded-xl overflow-hidden border border-slate-700 block hover:border-indigo-500`}>
+          <img src={u} alt="" className="w-full h-full object-cover"/>
+        </a>
+      ))}
+    </div>
+  );
+}
+
 function IssueFormModal({ issue, brands, stores = [], users, currentUser, visibleBrands, defaultType, onSave, onClose }) {
   const isEdit = !!issue;
   const [form, setForm] = useState({
@@ -1657,6 +1721,7 @@ function IssueFormModal({ issue, brands, stores = [], users, currentUser, visibl
     priority: issue?.priority || "Medium",
     status: issue?.status || "Open",
     assignedTo: issue?.assignedTo || "",
+    photos: issue?.photos || [],
   });
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
   const inputCls = "w-full bg-slate-900/60 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none";
@@ -1767,6 +1832,7 @@ function IssueFormModal({ issue, brands, stores = [], users, currentUser, visibl
               </div>
             </>
           )}
+          <PhotoAttach photos={form.photos} onChange={(p) => set("photos", p)} label="Photos of the problem"/>
         </div>
         <div className="flex gap-3 px-5 py-4 border-t border-slate-700">
           <button onClick={onClose} className="flex-1 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700 transition-colors">Cancel</button>
@@ -1832,6 +1898,13 @@ function IssueDetailModal({ issue, brands, users, currentUser, onUpdate, onClose
 
         <div className="flex-1 overflow-y-auto p-5 space-y-5">
           {/* Description */}
+          {/* ISSUEPHOTOS — tap a photo to open it full size. */}
+          {(issue.photos || []).length > 0 && (
+            <div>
+              <div className="text-xs text-slate-600 font-semibold mb-1.5">Photos ({issue.photos.length})</div>
+              <PhotoStrip photos={issue.photos}/>
+            </div>
+          )}
           {issue.description && (
             <div>
               <div className="text-xs text-slate-600 font-semibold mb-2 uppercase tracking-widest">Description</div>
@@ -24018,7 +24091,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
 // Simplified issue reporting for employees — just report + see your own reports.
 function EmployeeIssueReporter({ brands, issues, currentUser, onAdd, onUpdate }) {
   const [showForm, setShowForm] = useState(false);
-  const [form, setFormState] = useState({ brandId: brands[0]?.id || "", title: "", description: "", category: ISSUE_CATEGORIES[0], priority: "Medium" });
+  const [form, setFormState] = useState({ brandId: brands[0]?.id || "", title: "", description: "", category: ISSUE_CATEGORIES[0], priority: "Medium", photos: [] });
   const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
 
   const [submitting, setSubmitting] = useState(false);
@@ -24042,10 +24115,11 @@ function EmployeeIssueReporter({ brands, issues, currentUser, onAdd, onUpdate })
         reportedBy: currentUser.name,
         assignedTo: "",
         comments: [],
+        photos: form.photos || [],   // ISSUEPHOTOS
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       });
-      setFormState({ brandId: brands[0]?.id || "", title: "", description: "", category: ISSUE_CATEGORIES[0], priority: "Medium" });
+      setFormState({ brandId: brands[0]?.id || "", title: "", description: "", category: ISSUE_CATEGORIES[0], priority: "Medium", photos: [] });
       setShowForm(false);
     } catch (e) {
       setSubmitErr(e?.message || "Couldn't save your report. Please try again.");
@@ -24100,6 +24174,8 @@ function EmployeeIssueReporter({ brands, issues, currentUser, onAdd, onUpdate })
             </div>
           </div>
           {submitErr && <div className="text-xs text-red-400 bg-red-950/30 border border-red-500/30 rounded-lg px-3 py-2">{submitErr}</div>}
+          {/* ISSUEPHOTOS — staff report from a phone, so the camera opens directly. */}
+          <PhotoAttach photos={form.photos} onChange={(p) => set("photos", p)} label="Add a photo (optional)"/>
           <button onClick={handleSubmit} disabled={!form.title.trim() || submitting}
             className="w-full py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-semibold text-sm transition-colors">
             {submitting ? "Saving…" : "Submit Report"}
@@ -24121,6 +24197,7 @@ function EmployeeIssueReporter({ brands, issues, currentUser, onAdd, onUpdate })
                   </div>
                   <div className="flex gap-2 flex-shrink-0">
                     <Badge label={issue.priority} color={priorityColor(issue.priority)}/>
+                    {(issue.photos || []).length > 0 && <span className="text-[10px] text-slate-500 flex items-center gap-0.5"><Camera size={11}/>{issue.photos.length}</span>}
                     <Badge label={issue.status} color={statusColor(issue.status)}/>
                   </div>
                 </div>
@@ -62885,7 +62962,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: NOTEVIS 2026-08-01b");
+      console.log("CB build: ISSUEPHOTOS 2026-08-01c");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
