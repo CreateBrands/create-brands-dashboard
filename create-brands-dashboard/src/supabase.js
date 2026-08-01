@@ -13428,9 +13428,15 @@ export async function fetchDistSalesOrderDetail(soId) {
 
 // Stage of an order in the fulfilment pipeline.
 //   confirmed → picked → dispatched → invoiced → paid
+// ORDERVIS 2026-07-31e — pending_approval was missing from this status list, so
+// an order placed by a staff member existed but appeared on NOBODY's screen
+// until a manager approved it. Drivers and CK reported orders showing up
+// inconsistently; the variable was how quickly a manager got to the approval.
+// Now included and flagged `awaitingApproval` so the board can show it as
+// coming without letting anyone act on it.
 export async function fetchDistFulfilmentBoard() {
   const [orders, picks, dispatches, invoices] = await Promise.all([
-    fetchDistSalesOrders({ status: ["confirmed", "picking", "dispatched", "invoiced"] }).catch(() => []),
+    fetchDistSalesOrders({ status: ["pending_approval", "confirmed", "picking", "dispatched", "invoiced"] }).catch(() => []),
     fetchDistPicks({}).catch(() => []),
     fetchDistDispatches({}).catch(() => []),
     fetchDistInvoices({}).catch(() => []),
@@ -13445,21 +13451,22 @@ export async function fetchDistFulfilmentBoard() {
       const gt = i.grandTotal != null && i.grandTotal > 0 ? i.grandTotal : 0;
       const p = paidMap.get(i.id) || 0; return gt > 0 ? p + 0.005 >= gt : false;
     });
-    let stage = "confirmed";
+    const awaitingApproval = so.status === "pending_approval";
+    let stage = awaitingApproval ? "pending" : "confirmed";
     if (fullyPaid) stage = "paid";
     else if (invoice) stage = "invoiced";
     else if (dispatch) stage = "dispatched";
     else if (pick) stage = "picked";
     return {
       soId: so.id, soNumber: so.soNumber, customerId: so.customerId, orderDate: so.orderDate,
-      lineCount: (so.lines || []).length, stage,
+      lineCount: (so.lines || []).length, stage, awaitingApproval,
       pickId: pick?.id || null, pickNumber: pick?.pickNumber || null,
       dispatchId: dispatch?.id || null, dispatchNumber: dispatch?.dispatchNumber || null,
       invoiceId: invoice?.id || null, invoiceNumber: invoice?.invoiceNumber || null,
     };
   });
   // Order by stage (earliest first) then date.
-  const rank = { confirmed: 0, picked: 1, dispatched: 2, invoiced: 3, paid: 4 };
+  const rank = { pending: -1, confirmed: 0, picked: 1, dispatched: 2, invoiced: 3, paid: 4 };
   rows.sort((a, b) => (rank[a.stage] - rank[b.stage]) || (new Date(b.orderDate || 0) - new Date(a.orderDate || 0)));
   return rows;
 }

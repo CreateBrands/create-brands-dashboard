@@ -1301,6 +1301,28 @@ function PeriodFilterBar({ preset, onPreset, customFrom, customTo, onCustomFrom,
   );
 }
 
+// ORDERVIS 2026-07-31e — driver and CK screens loaded once on mount, so an
+// order placed after the screen opened never appeared until someone reloaded.
+// Polls while the tab is visible, refreshes immediately on regaining focus,
+// and skips the poll entirely when hidden so a forgotten tab isn't hammering
+// the database all day.
+function useAutoRefresh(load, ms = 45000) {
+  useEffect(() => {
+    if (!load) return;
+    let t = null;
+    const tick = () => { if (document.visibilityState === "visible") load(); };
+    const onVisible = () => { if (document.visibilityState === "visible") load(); };
+    t = setInterval(tick, ms);
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      if (t) clearInterval(t);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [load, ms]);
+}
+
 // ─── Excel helpers ────────────────────────────────────────────────────────────
 function useXLSX() {
   const [XLSX, setXLSX] = useState(null);
@@ -10692,9 +10714,11 @@ function DistFulfilmentView({ currentUser }) {
     catch (e) { setErr(e.message); } setLoading(false);
   }, []);
   useEffect(() => { load(); }, [load]);
+  useAutoRefresh(load);   // ORDERVIS
   const cName = (id) => customers.find(c => c.id === id)?.displayName || "—";
 
   const STAGES = [
+    { key: "pending",    label: "Awaiting approval" },
     { key: "confirmed",  label: "Confirmed" },
     { key: "picked",     label: "Picked" },
     { key: "dispatched", label: "Dispatched" },
@@ -10721,6 +10745,8 @@ function DistFulfilmentView({ currentUser }) {
     } catch (e) { setErr(e.message); alert(e.message); }
     setBusyId(null);
   };
+  // ORDERVIS — a pending order is visible so drivers and CK can see what's
+  // coming, but has no advance action: a manager must approve it first.
   const nextLabel = (stage) => stage === "confirmed" ? "Pick" : stage === "picked" ? "Dispatch" : stage === "dispatched" ? "Invoice" : stage === "invoiced" ? "Record payment" : null;
 
   const active = rows.filter(r => r.stage !== "paid");
@@ -10743,7 +10769,7 @@ function DistFulfilmentView({ currentUser }) {
   };
 
   const Row = ({ row }) => {
-    const label = nextLabel(row.stage);
+    const label = row.awaitingApproval ? null : nextLabel(row.stage);
     return (
       <div className="px-4 py-3 border-b border-slate-800/50">
         <div className="flex items-center justify-between gap-4">
@@ -10792,11 +10818,18 @@ function DistPicksView({ currentUser, pendingConvert, setPendingConvert }) {
   const [picks, setPicks] = useState([]); const [orders, setOrders] = useState([]); const [batches, setBatches] = useState({}); const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
   const [detailId, setDetailId] = useState(null);
-  const load = useCallback(async () => { setLoading(true); try { const [p, so, it] = await Promise.all([fetchDistPicks(), fetchDistSalesOrders({ status: ["confirmed", "picking"] }), fetchDistItems()]); setPicks(p); setOrders(so); setItems(it); } catch (e) { setErr(e.message); } setLoading(false); }, []);
+  // ORDERVIS — pending_approval included so the order is VISIBLE here too;
+  // startPick refuses to act on one until a manager has approved it.
+  const load = useCallback(async () => { setLoading(true); try { const [p, so, it] = await Promise.all([fetchDistPicks(), fetchDistSalesOrders({ status: ["pending_approval", "confirmed", "picking"] }), fetchDistItems()]); setPicks(p); setOrders(so); setItems(it); } catch (e) { setErr(e.message); } setLoading(false); }, []);
   useEffect(() => { load(); }, [load]);
+  useAutoRefresh(load);   // ORDERVIS
   // Start a pick from a sales order: auto-FEFO each line.
   const startPick = async (so) => {
     setErr("");
+    if (so.status === "pending_approval") {
+      setErr(`${so.soNumber} is still awaiting a manager's approval — it can't be picked yet.`);
+      return;
+    }
     try {
       // Fetch batches once per distinct item, and FEFO all lines, in parallel
       // (was sequential per-line — the source of the load lag).
@@ -62771,7 +62804,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: DISTIMPORT 2026-07-31d");
+      console.log("CB build: ORDERVIS 2026-07-31e");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
