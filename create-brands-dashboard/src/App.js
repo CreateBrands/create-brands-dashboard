@@ -190,7 +190,7 @@ import {
   fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, fetchStoreOrderPrefs, saveStoreOrderPrefs, fetchChatGroups, createChatGroup, updateChatGroup, deleteChatGroup, deleteChatThread, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment, editPendingOrderLines, mergePendingOrders, fetchDeliverySourceReceipt, synthesizeInvoiceFromItems, normalizeReceiptDescription,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
-  fetchFreshOrderCustomers, saveFreshOrderCustomers, freshAccessActive, setSoFreshAttached, deletePayPeriod,
+  fetchFreshOrderCustomers, saveFreshOrderCustomers, freshAccessActive, setSoFreshAttached, deletePayPeriod, setSoTeamNotes,
   fetchPaySchedule, savePaySchedule, generatePayPeriods, payPeriodStatus, fetchPayPeriodLocations,
   closePayPeriodStore, reopenPayPeriodStore, overridePayPeriodDates, setPunchApproved, approvePunchesInPeriod,
 } from "./supabase";
@@ -5257,6 +5257,14 @@ function DistTypedItemsView({ itemType, currentUser }) {
                     <WhPill tone={o.allDone ? "green" : stageTone(o.stage)} icon={o.allDone ? CheckCircle : undefined}>{o.allDone ? "Ready" : stageLabel(o.stage)}</WhPill>
                   </div>
                   <div className="text-xs mt-0.5" style={{ color: WH.inkSoft }}>{o.customerName}{o.orderDate ? ` · ${o.orderDate}` : ""}</div>
+                  {/* TEAMNOTES — fresh board is worked by drivers, every other
+                      typed board by the kitchen. Show only the relevant note. */}
+                  {(itemType === "fresh" ? o.noteDriver : o.noteKitchen) && (
+                    <div className="text-[11px] mt-1 px-2 py-1 rounded-lg inline-block" style={{ backgroundColor: "#FFF6E8", color: "#B45309", border: "1px solid #F0D9B5" }}>
+                      <span className="font-bold uppercase tracking-wide text-[9px] mr-1">{itemType === "fresh" ? "Driver" : "Kitchen"}</span>
+                      {itemType === "fresh" ? o.noteDriver : o.noteKitchen}
+                    </div>
+                  )}
                 </div>
                 <WhButton size="sm" variant={o.allDone ? "ghost" : "primary"} disabled={busy[`order:${o.soId}`]} onClick={() => toggleOrder(o, !o.allDone)}>
                   {o.allDone ? "Undo" : "Mark order ready"}
@@ -5268,6 +5276,9 @@ function DistTypedItemsView({ itemType, currentUser }) {
                     <CheckBox on={l.done} disabled={busy[`${o.soId}:${l.itemId}`]} onClick={() => toggleLine(o.soId, l.itemId, !l.done)}/>
                     <div className="min-w-0 flex-1">
                       <div className="text-sm truncate" style={{ color: WH.ink, textDecoration: l.done ? "line-through" : "none" }}>{cleanName(l.name)}</div>
+                      {/* ITEMNOTES 2026-07-31f — the store's instruction for this
+                          item, now carried through to the people fulfilling it. */}
+                      {l.lineNote && <div className="text-[11px] italic mt-0.5" style={{ color: "#B45309" }}>📝 {l.lineNote}</div>}
                       {l.category && <div className="text-[10px]" style={{ color: WH.inkFaint }}>{l.category}</div>}
                     </div>
                     <div className="text-sm font-bold flex-shrink-0" style={{ color: l.done ? WH.inkFaint : WH.accent }}>{fmtPackQty(l.qty, l)}{l.bought && l.bought.qty != null ? ` · bought ${l.bought.qty} ${l.bought.uom || ""}`.trimEnd() : ""}</div>
@@ -8712,6 +8723,27 @@ function DistGRNView({ currentUser, pendingConvert, setPendingConvert }) {
 // user presses Create, because an OCR misread that posts straight to the
 // ledger is far more expensive than one that has to be eyeballed first.
 
+// TEAMNOTES 2026-07-31f — render only the notes addressed to the team looking
+// at the screen, so nobody has to read past someone else's instructions.
+function TeamNoteBanner({ doc, show = [] }) {
+  const all = [
+    ["kitchen", "Kitchen", doc?.noteKitchen],
+    ["dist", "Distribution", doc?.noteDist],
+    ["driver", "Driver", doc?.noteDriver],
+  ].filter(([k, , v]) => (!show.length || show.includes(k)) && String(v || "").trim());
+  if (!all.length) return null;
+  return (
+    <div className="space-y-1.5">
+      {all.map(([k, label, v]) => (
+        <div key={k} className="flex items-start gap-2 rounded-xl border border-amber-700/40 bg-amber-950/20 px-3 py-2">
+          <span className="text-[10px] font-bold uppercase tracking-wide text-amber-400 mt-0.5 flex-shrink-0">{label}</span>
+          <span className="text-xs text-amber-100">{v}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function DistDocImporter({ currentUser, onClose, onCreated }) {
   const XLSX = useXLSX();
   const fileRef = useRef(null);
@@ -10376,6 +10408,9 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
           </table>
         </div>
 
+        {/* TEAMNOTES — Dist sees the full order, so all three notes show here. */}
+        <TeamNoteBanner doc={so}/>
+
         {/* FRESHATTACH — fresh stock, detached from the order by default */}
         {(detachedFresh.length > 0 || attachedFresh.length > 0) && (() => {
           const isAttached = attachedFresh.length > 0;
@@ -10635,12 +10670,14 @@ function DistPickDetail({ pickId, onClose, onDelete, onEdit }) {
               <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Sales order</div><div className="text-sm font-mono"><DocLink type="so" id={d.soId} className="font-mono">{d.soNumber || "—"}</DocLink></div></div>
               <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Pick date</div><div className="text-sm text-white">{fmtDate(d.pickDate)}</div></div>
             </div>
+            {/* TEAMNOTES — Distribution is the team working this document. */}
+            <TeamNoteBanner doc={d} show={["dist"]}/>
             <div className="rounded-xl border border-slate-800 overflow-hidden">
               <table className="w-full text-xs">
                 <thead className="text-slate-500 bg-slate-950/40"><tr><th className="text-left px-3 py-2">Item</th><th className="text-left px-3 py-2">Batch</th><th className="text-right px-3 py-2">Qty</th></tr></thead>
                 <tbody>{catRows(d.lines, l => l.item?.category, 3, (l, i) => (
                   <tr key={i} className="border-t border-slate-800/60">
-                    <td className="px-3 py-2"><div className="flex items-center gap-2"><div className="w-8 h-8 rounded-lg bg-gradient-to-b from-white to-slate-100 flex items-center justify-center overflow-hidden border border-slate-800 flex-shrink-0">{l.item?.imageUrl ? <img src={l.item.imageUrl} alt="" className="w-full h-full object-contain p-0.5"/> : <Package size={13} className="text-slate-300"/>}</div><span className="text-white">{cleanName(l.item?.name) || l.itemId}</span></div></td>
+                    <td className="px-3 py-2"><div className="flex items-center gap-2"><div className="w-8 h-8 rounded-lg bg-gradient-to-b from-white to-slate-100 flex items-center justify-center overflow-hidden border border-slate-800 flex-shrink-0">{l.item?.imageUrl ? <img src={l.item.imageUrl} alt="" className="w-full h-full object-contain p-0.5"/> : <Package size={13} className="text-slate-300"/>}</div><div className="min-w-0"><span className="text-white">{cleanName(l.item?.name) || l.itemId}</span>{/* ITEMNOTES — per-item instruction from the store */}{l.lineNote && <div className="text-[11px] italic text-amber-400 mt-0.5">📝 {l.lineNote}</div>}</div></div></td>
                     <td className="px-3 py-2 font-mono text-slate-400">{l.batchId || "—"}</td>
                     <td className="px-3 py-2 text-right text-white font-semibold">{l.qty}</td>
                   </tr>))}</tbody>
@@ -15960,6 +15997,10 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
       .map(x => x.item);
   }, [orderHistory, catalogue]);
   const [lineNotes, setLineNotes] = useState({});   // itemId -> instruction for the warehouse
+  // TEAMNOTES 2026-07-31f — a note per team, so each reads only what's for them.
+  const [noteKitchen, setNoteKitchen] = useState("");
+  const [noteDist, setNoteDist] = useState("");
+  const [noteDriver, setNoteDriver] = useState("");
   const [lineUoms, setLineUoms] = useState({});     // itemId -> chosen unit (fresh items)
   const [addDlg, setAddDlg] = useState(null);       // { item, qty, uom } — fresh add-to-order dialog
   const UOM_OPTIONS = ["Kg", "Liter", "Each", "Pack", "Box", "Case"];
@@ -16105,7 +16146,9 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
       }
       // If this order came from a team round, close the round.
       if (roundLoaded && round) { try { await closeOrderRound(round.id, { status: "placed", soId: id }); } catch {} setRoundLoaded(false); reloadRound(activeStoreId); }
+      try { await setSoTeamNotes(id, { noteKitchen, noteDist, noteDriver }); } catch (_) { /* notes are additive; never fail the order over one */ }
       setPlaced({ id, count: cartCount, total: cartTotal, direct: directPlaced }); setCart({}); setLineNotes({}); setLineUoms({}); setConfirmOpen(false); setCartOpen(false); setDeliveryDate(""); setOrderNote("");
+      setNoteKitchen(""); setNoteDist(""); setNoteDriver("");
     } catch (e) { setErr(e.message); setSubmitFailed(e.message || "Your order did not save. Please try again."); }
     setPlacing(false);
   };
@@ -16804,6 +16847,18 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
               <label className="block text-[10px] uppercase tracking-wide font-bold mb-1" style={{ color: "#9A8770" }}>Note for the order (optional)</label>
               <input value={orderNote} onChange={e => setOrderNote(e.target.value)} placeholder="e.g. deliver before 10am" className="w-full px-3 py-2 rounded-lg text-sm" style={{ backgroundColor: "#FFFFFF", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
             </div>
+
+            {/* TEAMNOTES — addressed notes. Each team sees only its own. */}
+            {[
+              ["Note for the Kitchen", noteKitchen, setNoteKitchen, "e.g. prep the sauce mild this week"],
+              ["Note for Distribution", noteDist, setNoteDist, "e.g. pack chilled items last"],
+              ["Note for the Driver", noteDriver, setNoteDriver, "e.g. side door, ring the bell"],
+            ].map(([label, val, set, ph]) => (
+              <div key={label}>
+                <label className="block text-[10px] uppercase tracking-wide font-bold mb-1" style={{ color: "#9A8770" }}>{label} (optional)</label>
+                <input value={val} onChange={e => set(e.target.value)} placeholder={ph} className="w-full px-3 py-2 rounded-lg text-sm" style={{ backgroundColor: "#FFFFFF", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
+              </div>
+            ))}
 
             {err && err !== "no-link" && <div className="text-xs px-3 py-2 rounded-lg" style={{ color: "#B3261E", backgroundColor: "#FBEAEA" }}>{err}</div>}
 
@@ -62804,7 +62859,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: ORDERVIS 2026-07-31e");
+      console.log("CB build: TEAMNOTES 2026-07-31f");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:

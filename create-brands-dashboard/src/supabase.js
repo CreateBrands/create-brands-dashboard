@@ -12998,6 +12998,10 @@ const mapDistSO = (o) => ({
   reference: o.reference || "", deliveryMethod: o.delivery_method || "", salesperson: o.salesperson || "",
   vatMode: o.vat_mode || "exclusive", discountPercent: Number(o.discount_percent) || 0, discountType: o.discount_type || "percent",
   shippingCharge: Number(o.shipping_charge) || 0, note: o.note || "", terms: o.terms || "",
+  // TEAMNOTES 2026-07-31f — one note per team who acts on the order. A single
+  // shared note meant a message for the driver sat in the same box as one for
+  // the kitchen, and each team had to read past the others'.
+  noteKitchen: o.note_kitchen || "", noteDist: o.note_dist || "", noteDriver: o.note_driver || "",
   createdBy: o.created_by || null, createdAt: o.created_at, lines: (o.dist_sales_order_lines || []).map(mapDistSOLine),
 });
 const mapDistSOLine = (l) => ({ id: l.id, soId: l.so_id, itemId: l.item_id, qty: Number(l.qty) || 0, fulfilChannel: l.fulfil_channel || null, attachedToSo: l.attached_to_so ?? false, lineNote: l.line_note || "", uom: l.uom || null, unitPrice: Number(l.unit_price) || 0, discount: Number(l.discount) || 0, discountType: l.discount_type || "percent", taxRateId: l.tax_rate_id || null });
@@ -13076,6 +13080,9 @@ export async function createDistSalesOrder(so, lines = []) {
     delivery_method: so.deliveryMethod || null, salesperson: so.salesperson || null,
     vat_mode: so.vatMode || "exclusive", discount_percent: Number(so.discountPercent) || 0, discount_type: so.discountType || "percent",
     shipping_charge: Number(so.shippingCharge) || 0, note: so.note || null, terms: so.terms || null, created_by: so.createdBy || null,
+    note_kitchen: (so.noteKitchen || "").trim() || null,
+    note_dist: (so.noteDist || "").trim() || null,
+    note_driver: (so.noteDriver || "").trim() || null,
   };
   const { error } = await supabase.from("dist_sales_orders").insert(row);
   if (error) throw error;
@@ -13091,6 +13098,19 @@ export async function createDistSalesOrder(so, lines = []) {
 
 // Update an existing sales order: rewrite header + replace its lines. Safe
 // because committed stock is derived from open SO lines (no movement cleanup).
+export async function setSoTeamNotes(soId, { noteKitchen, noteDist, noteDriver }) {
+  if (!soId) throw new Error("Sales order id required.");
+  const patch = {};
+  if (noteKitchen !== undefined) patch.note_kitchen = (noteKitchen || "").trim() || null;
+  if (noteDist !== undefined) patch.note_dist = (noteDist || "").trim() || null;
+  if (noteDriver !== undefined) patch.note_driver = (noteDriver || "").trim() || null;
+  if (!Object.keys(patch).length) return null;
+  const { data, error } = await supabase.from("dist_sales_orders")
+    .update(patch).eq("id", soId).select().maybeSingle();
+  if (error) throw error;
+  return data ? mapDistSO(data) : null;
+}
+
 export async function updateDistSalesOrder(so, lines = []) {
   if (!so.id) throw new Error("Sales order id required for update.");
   await assertFreshAllowed(so.customerId, lines);   // FRESHACCESS
@@ -13377,10 +13397,16 @@ export async function fetchDistPickDetail(pickId) {
   const itemById = new Map(items.map(i => [i.id, i]));
   const customer = customers.find(c => c.id === head.customer_id) || null;
   const so = sos.find(s => s.id === head.so_id) || null;
+  // ITEMNOTES 2026-07-31f — the pick is what the warehouse actually works from,
+  // so a per-item instruction ("no stalks", "green ones") has to reach it. The
+  // column was written on the pick line already but never mapped back out.
+  const noteBySoItem = new Map((so?.lines || []).filter(l => l.lineNote).map(l => [l.itemId, l.lineNote]));
   const lines = (head.dist_pick_lines || []).map(l => ({ itemId: l.item_id, batchId: l.batch_id, qty: Number(l.qty) || 0,
-    unitPrice: Number(l.unit_price) || 0, item: itemById.get(l.item_id) || null }));
+    unitPrice: Number(l.unit_price) || 0, item: itemById.get(l.item_id) || null,
+    lineNote: l.line_note || noteBySoItem.get(l.item_id) || "" }));
   return { id: head.id, pickNumber: head.pick_number, status: head.status, pickDate: head.pick_date, note: head.note,
-    soId: head.so_id, soNumber: so?.soNumber || null, customer, lines };
+    soId: head.so_id, soNumber: so?.soNumber || null, customer, lines,
+    noteDist: so?.noteDist || "", noteKitchen: so?.noteKitchen || "", noteDriver: so?.noteDriver || "" };
 }
 
 // Detail for a dispatch drill-down.
@@ -15629,7 +15655,10 @@ export async function fetchDistOrdersByItemType(itemType, { includeDone = false 
       })
       .map(l => {
         const it = itemById.get(l.itemId);
-        return { itemId: l.itemId, name: it?.name || l.itemId, sku: it?.sku || "", category: it?.category || "", qty: l.qty, uom: l.uom || null, packUnit: it?.packUnit, packSize: it?.packSize != null ? Number(it.packSize) : null, packCount: it?.packCount != null ? Number(it.packCount) : null || "" };
+        // ITEMNOTES 2026-07-31f — lineNote was dropped here, so a store's
+        // per-item instruction ("ripe", "no stalks") never reached the people
+        // actually buying or making the item.
+        return { itemId: l.itemId, name: it?.name || l.itemId, sku: it?.sku || "", category: it?.category || "", qty: l.qty, uom: l.uom || null, lineNote: l.lineNote || "", packUnit: it?.packUnit, packSize: it?.packSize != null ? Number(it.packSize) : null, packCount: it?.packCount != null ? Number(it.packCount) : null || "" };
       });
     if (!matchLines.length) continue; // order has none of this type — skip
     const withDone = matchLines.map(l => ({ ...l, done: checks.has(`${so.id}:${l.itemId}`), bought: (checks.bought || {})[`${so.id}:${l.itemId}`] || null, doneAt: (checks.doneAt || {})[`${so.id}:${l.itemId}`] || null }));
@@ -15642,6 +15671,9 @@ export async function fetchDistOrdersByItemType(itemType, { includeDone = false 
       customerId: so.customerId, customerName: cust?.displayName || cust?.companyName || "—",
       storeId: cust?.storeId || null,
       stage: stageBySo.get(so.id) || so.status || "confirmed",
+      // TEAMNOTES — carried through so each board can show the note addressed
+      // to the team looking at it.
+      noteKitchen: so.noteKitchen || "", noteDist: so.noteDist || "", noteDriver: so.noteDriver || "",
       lines: withDone,
       allDone: withDone.length > 0 && withDone.every(l => l.done),
       totalUnits: matchLines.reduce((s, l) => s + (Number(l.qty) || 0), 0),
