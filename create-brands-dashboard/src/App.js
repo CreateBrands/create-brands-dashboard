@@ -8448,6 +8448,7 @@ function DistVendorsView({ currentUser, stores = [] }) {
 
 // ── PURCHASE ORDERS ──
 function DistPOView({ currentUser }) {
+  const [importingPo, setImportingPo] = useState(false);   // DISTIMPORT
   const [pos, setPos] = useState([]); const [vendors, setVendors] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]);
   const [poQuery, setPoQuery] = useState(""); const [poStatus, setPoStatus] = useState("all");
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false); const [detailId, setDetailId] = useState(null);
@@ -8475,7 +8476,8 @@ function DistPOView({ currentUser }) {
   const poStatuses = [...new Set(pos.map(p => p.status).filter(Boolean))];
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center gap-3 flex-wrap"><div className="text-sm text-slate-400">{visiblePos.length} of {pos.length} purchase order{pos.length!==1?"s":""}</div><button onClick={newDoc} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New purchase order</button></div>
+      <div className="flex justify-between items-center gap-3 flex-wrap"><div className="text-sm text-slate-400">{visiblePos.length} of {pos.length} purchase order{pos.length!==1?"s":""}</div><div className="flex gap-2"><button onClick={() => setImportingPo(true)} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-semibold flex items-center gap-1.5"><Upload size={14}/> Import</button><button onClick={newDoc} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New purchase order</button></div></div>
+      {importingPo && <DistDocImporter currentUser={currentUser} onClose={() => setImportingPo(false)} onCreated={() => load()}/>}
       <div className="flex gap-2 flex-wrap">
         <input value={poQuery} onChange={e => setPoQuery(e.target.value)} placeholder="Search PO# or vendor…" className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white placeholder-slate-600 focus:border-indigo-500 focus:outline-none w-56"/>
         <select value={poStatus} onChange={e => setPoStatus(e.target.value)} className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-slate-300 focus:outline-none"><option value="all">All statuses</option>{poStatuses.map(s => <option key={s} value={s}>{(s||"").replace(/_/g," ")}</option>)}</select>
@@ -8678,6 +8680,354 @@ function DistGRNView({ currentUser, pendingConvert, setPendingConvert }) {
 }
 
 // ── BILLS (Zoho table format) ──
+// ── DISTIMPORT 2026-07-31d — bill / purchase-order importer ─────────────────
+// Two ways in, one review step:
+//   • OCR   — reuses the CK invoice pipeline (uploadInvoiceFile → extractInvoice
+//             → getInvoiceWithLines) that already runs against
+//             entity "brand-distribution" for fresh receipts.
+//   • Excel — SheetJS, header row auto-detected by name.
+// Both land in the SAME editable review table. Nothing is written until the
+// user presses Create, because an OCR misread that posts straight to the
+// ledger is far more expensive than one that has to be eyeballed first.
+
+function DistDocImporter({ currentUser, onClose, onCreated }) {
+  const XLSX = useXLSX();
+  const fileRef = useRef(null);
+  const xlRef = useRef(null);
+
+  const [docType, setDocType] = useState("bill");     // bill | po
+  const [vendors, setVendors] = useState([]);
+  const [items, setItems] = useState([]);
+  const [vendorId, setVendorId] = useState("");
+  const [docNumber, setDocNumber] = useState("");
+  const [docDate, setDocDate] = useState(new Date().toISOString().slice(0, 10));
+  const [dueDate, setDueDate] = useState("");
+  const [reference, setReference] = useState("");
+  const [vatMode, setVatMode] = useState("exclusive");
+  const [rows, setRows] = useState([]);               // review table
+  const [stage, setStage] = useState("");             // progress text
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const [v, it] = await Promise.all([
+          fetchDistContacts({ kind: "vendor" }).catch(() => []),
+          fetchDistItems().catch(() => []),
+        ]);
+        setVendors(v || []);
+        setItems((it || []).filter(x => x.active !== false));
+      } catch (e) { setErr(e.message); }
+    })();
+  }, []);
+
+  const itemByName = useMemo(() => {
+    const m = new Map();
+    items.forEach(i => {
+      const key = String(i.name || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+      if (key && !m.has(key)) m.set(key, i);
+      if (i.sku) m.set(String(i.sku).toLowerCase(), i);
+    });
+    return m;
+  }, [items]);
+
+  // Word-overlap match, same approach as the fresh-receipt matcher already in
+  // the sales order screen. Deliberately conservative: a wrong auto-match is
+  // worse than none, because it silently prices the wrong product.
+  const matchItem = useCallback((desc, sku) => {
+    if (sku) {
+      const bySku = itemByName.get(String(sku).toLowerCase());
+      if (bySku) return { item: bySku, score: 1 };
+    }
+    const norm = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const target = norm(desc);
+    if (!target) return { item: null, score: 0 };
+    const exact = itemByName.get(target);
+    if (exact) return { item: exact, score: 1 };
+    const words = new Set(target.split(" ").filter(w => w.length > 2));
+    let best = null, bestScore = 0;
+    items.forEach(i => {
+      const nw = norm(i.name).split(" ").filter(w => w.length > 2);
+      if (!nw.length) return;
+      const hits = nw.filter(w => words.has(w)).length;
+      const score = hits / nw.length;
+      if (score > bestScore) { bestScore = score; best = i; }
+    });
+    return bestScore >= 0.5 ? { item: best, score: bestScore } : { item: null, score: bestScore };
+  }, [items, itemByName]);
+
+  const addRows = (incoming) => {
+    setRows(incoming.map((r, i) => {
+      const m = matchItem(r.description, r.sku);
+      return {
+        key: `r${i}-${Date.now()}`,
+        description: r.description || "",
+        sku: r.sku || "",
+        qty: Number(r.qty) || 0,
+        unitPrice: Number(r.unitPrice) || 0,
+        itemId: m.item?.id || "",
+        confidence: m.score,
+      };
+    }));
+  };
+
+  // ── OCR ───────────────────────────────────────────────────────────────────
+  const onScan = async (file) => {
+    if (!file) return;
+    setErr(""); setBusy(true); setStage("Uploading document…");
+    try {
+      const inv = await uploadInvoiceFile(file, "brand-distribution", currentUser?.id || null);
+      setStage("Reading line items…");
+      await extractInvoice(inv.id);
+      let lines = [], head = null;
+      for (let i = 0; i < 12; i++) {
+        const { invoice, lines: ls } = await getInvoiceWithLines(inv.id);
+        if (ls && ls.length) { lines = ls; head = invoice; break; }
+        await new Promise(r => setTimeout(r, 1500));
+      }
+      if (!lines.length) {
+        setStage("");
+        setErr("Couldn't read any lines from that document. Try a clearer scan, or use the Excel template.");
+        return;
+      }
+      if (head?.invoice_number && !docNumber) setDocNumber(head.invoice_number);
+      if (head?.invoice_date) setDocDate(String(head.invoice_date).slice(0, 10));
+      addRows(lines.map(l => ({
+        description: l.raw_description || l.description || "",
+        sku: l.supplier_code || "",
+        qty: l.qty != null ? l.qty : 1,
+        unitPrice: l.pack_price_ex_vat != null ? l.pack_price_ex_vat : (l.unit_price ?? 0),
+      })));
+      setStage(`Read ${lines.length} line${lines.length === 1 ? "" : "s"} — review below before creating.`);
+    } catch (e) { setStage(""); setErr(e?.message || String(e)); }
+    setBusy(false);
+  };
+
+  // ── Excel ─────────────────────────────────────────────────────────────────
+  const onExcel = async (file) => {
+    if (!file || !XLSX) return;
+    setErr(""); setBusy(true); setStage("Reading spreadsheet…");
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const grid = XLSX.utils.sheet_to_json(sheet, { header: 1, blankrows: false });
+      // Find the header row rather than assuming row 1 — exported supplier
+      // sheets usually carry a title block above the table.
+      const want = ["description", "item", "product", "qty", "quantity", "price", "cost", "sku", "code"];
+      let hIdx = grid.findIndex(r => (r || []).filter(c =>
+        want.some(w => String(c || "").toLowerCase().includes(w))).length >= 2);
+      if (hIdx < 0) hIdx = 0;
+      const head = (grid[hIdx] || []).map(c => String(c || "").toLowerCase().trim());
+      const col = (...names) => head.findIndex(h => names.some(n => h.includes(n)));
+      const cDesc = col("description", "item", "product", "name");
+      const cQty = col("qty", "quantity", "units");
+      const cPrice = col("unit price", "price", "cost", "rate");
+      const cSku = col("sku", "code", "ref");
+      if (cDesc < 0) { setStage(""); setErr("Couldn't find a Description/Item column in that sheet."); setBusy(false); return; }
+      const out = [];
+      for (let i = hIdx + 1; i < grid.length; i++) {
+        const r = grid[i] || [];
+        const desc = String(r[cDesc] ?? "").trim();
+        if (!desc) continue;
+        const num = (v) => { const n = parseFloat(String(v ?? "").replace(/[^0-9.-]/g, "")); return Number.isFinite(n) ? n : 0; };
+        out.push({
+          description: desc,
+          sku: cSku >= 0 ? String(r[cSku] ?? "").trim() : "",
+          qty: cQty >= 0 ? num(r[cQty]) : 1,
+          unitPrice: cPrice >= 0 ? num(r[cPrice]) : 0,
+        });
+      }
+      if (!out.length) { setStage(""); setErr("No data rows found under the header."); setBusy(false); return; }
+      addRows(out);
+      setStage(`Read ${out.length} row${out.length === 1 ? "" : "s"} — review below before creating.`);
+    } catch (e) { setStage(""); setErr(e?.message || String(e)); }
+    setBusy(false);
+  };
+
+  const setRow = (key, patch) => setRows(rs => rs.map(r => r.key === key ? { ...r, ...patch } : r));
+  const delRow = (key) => setRows(rs => rs.filter(r => r.key !== key));
+
+  const usable = rows.filter(r => r.itemId && Number(r.qty) !== 0);
+  const unmatched = rows.filter(r => !r.itemId);
+  const total = usable.reduce((s, r) => s + (Number(r.qty) || 0) * (Number(r.unitPrice) || 0), 0);
+
+  const create = async () => {
+    if (!vendorId) { setErr("Pick a supplier first."); return; }
+    if (!usable.length) { setErr("No lines are matched to a catalogue item yet."); return; }
+    setErr(""); setBusy(true);
+    try {
+      const lines = usable.map(r => ({
+        itemId: r.itemId, qty: Number(r.qty) || 0, unitPrice: Number(r.unitPrice) || 0,
+        description: r.description || "",
+      }));
+      if (docType === "bill") {
+        await postDistBill({
+          billNumber: docNumber || undefined, vendorId, billDate: docDate,
+          dueDate: dueDate || null, reference: reference || null, vatMode,
+          createdBy: currentUser?.id || null,
+          note: `Imported ${new Date().toLocaleDateString("en-GB")}`,
+        }, lines);
+      } else {
+        await createDistPurchaseOrder({
+          poNumber: docNumber || undefined, vendorId, orderDate: docDate,
+          reference: reference || null, vatMode, status: "draft",
+          createdBy: currentUser?.id || null,
+          note: `Imported ${new Date().toLocaleDateString("en-GB")}`,
+        }, lines);
+      }
+      onCreated?.(docType);
+      onClose();
+    } catch (e) { setErr(e?.message || String(e)); }
+    setBusy(false);
+  };
+
+  const inp = "px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500";
+
+  return (
+    <Modal onClose={onClose} title="Import bill or purchase order" maxW="max-w-5xl" fullScreen>
+      <div className="space-y-4">
+        {/* Type */}
+        <div className="flex gap-1.5">
+          {[["bill", "Bill"], ["po", "Purchase order"]].map(([k, l]) => (
+            <button key={k} onClick={() => setDocType(k)}
+              className={`px-3.5 py-2 rounded-lg text-xs font-bold ${docType === k ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-300 hover:bg-slate-700"}`}>{l}</button>
+          ))}
+        </div>
+
+        {/* Input */}
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div className="rounded-xl border border-indigo-800/40 bg-indigo-950/20 p-3">
+            <div className="text-xs font-bold text-white mb-1">Scan a document</div>
+            <div className="text-[11px] text-slate-400 mb-2">Photo or PDF of a supplier invoice, receipt or order confirmation.</div>
+            <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden"
+              onChange={e => { const f = e.target.files?.[0]; onScan(f); e.target.value = ""; }}/>
+            <button onClick={() => fileRef.current?.click()} disabled={busy}
+              className="px-3 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold flex items-center gap-1.5">
+              <Upload size={14}/> Scan document
+            </button>
+          </div>
+          <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+            <div className="text-xs font-bold text-white mb-1">Upload a spreadsheet</div>
+            <div className="text-[11px] text-slate-400 mb-2">Needs a Description column; Qty, Unit price and SKU are used when present.</div>
+            <input ref={xlRef} type="file" accept=".xlsx,.xls,.csv" className="hidden"
+              onChange={e => { const f = e.target.files?.[0]; onExcel(f); e.target.value = ""; }}/>
+            <button onClick={() => xlRef.current?.click()} disabled={busy || !XLSX}
+              className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 text-xs font-semibold flex items-center gap-1.5">
+              <Upload size={14}/> {XLSX ? "Choose file" : "Loading…"}
+            </button>
+          </div>
+        </div>
+
+        {stage && <div className="text-xs text-indigo-300">{stage}</div>}
+        {err && <div className="text-xs text-red-400 bg-red-950/30 border border-red-800/40 rounded-lg px-3 py-2">{err}</div>}
+
+        {/* Header fields */}
+        <div className="grid sm:grid-cols-3 lg:grid-cols-6 gap-2">
+          <div className="lg:col-span-2">
+            <label className="block text-[10px] uppercase tracking-wide text-slate-500 mb-1">Supplier *</label>
+            <select value={vendorId} onChange={e => setVendorId(e.target.value)} className={`${inp} w-full`}>
+              <option value="">Select…</option>
+              {vendors.map(v => <option key={v.id} value={v.id}>{v.displayName || v.companyName || v.id}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-[10px] uppercase tracking-wide text-slate-500 mb-1">{docType === "bill" ? "Bill no." : "PO no."}</label>
+            <input value={docNumber} onChange={e => setDocNumber(e.target.value)} placeholder="auto" className={`${inp} w-full`}/>
+          </div>
+          <div>
+            <label className="block text-[10px] uppercase tracking-wide text-slate-500 mb-1">{docType === "bill" ? "Bill date" : "Order date"}</label>
+            <input type="date" value={docDate} onChange={e => setDocDate(e.target.value)} className={`${inp} w-full`}/>
+          </div>
+          {docType === "bill" && (
+            <div>
+              <label className="block text-[10px] uppercase tracking-wide text-slate-500 mb-1">Due date</label>
+              <input type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} className={`${inp} w-full`}/>
+            </div>
+          )}
+          <div>
+            <label className="block text-[10px] uppercase tracking-wide text-slate-500 mb-1">VAT</label>
+            <select value={vatMode} onChange={e => setVatMode(e.target.value)} className={`${inp} w-full`}>
+              <option value="exclusive">Exclusive</option>
+              <option value="inclusive">Inclusive</option>
+            </select>
+          </div>
+        </div>
+
+        {/* Review */}
+        {rows.length > 0 && (
+          <>
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="text-xs text-slate-400">
+                {usable.length} of {rows.length} line{rows.length === 1 ? "" : "s"} matched
+                {unmatched.length > 0 && <span className="text-amber-400"> · {unmatched.length} need an item before they can be imported</span>}
+              </div>
+              <div className="text-sm font-bold text-white">Total {gbp(total)}</div>
+            </div>
+            <div className="border border-slate-800 rounded-xl overflow-x-auto max-h-[45vh]">
+              <table className="w-full text-xs">
+                <thead className="dist-th sticky top-0">
+                  <tr>
+                    <th className="text-left">Scanned description</th>
+                    <th className="text-left">Catalogue item</th>
+                    <th className="text-right w-20">Qty</th>
+                    <th className="text-right w-24">Unit price</th>
+                    <th className="text-right w-24">Amount</th>
+                    <th className="w-8"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map(r => (
+                    <tr key={r.key} className={`border-t border-slate-800/60 ${!r.itemId ? "bg-amber-950/10" : ""}`}>
+                      <td className="px-2 py-1.5 text-slate-300">
+                        {r.description}
+                        {r.sku && <span className="text-slate-600 ml-1">({r.sku})</span>}
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <select value={r.itemId} onChange={e => setRow(r.key, { itemId: e.target.value, confidence: 1 })}
+                          className={`px-2 py-1 bg-slate-900 border rounded text-xs w-full ${r.itemId ? "border-slate-800 text-slate-200" : "border-amber-700/60 text-amber-300"}`}>
+                          <option value="">— not matched —</option>
+                          {items.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
+                        </select>
+                        {r.itemId && r.confidence < 1 && (
+                          <div className="text-[10px] text-amber-400 mt-0.5">auto-matched — check this is right</div>
+                        )}
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <input type="number" step="0.01" value={r.qty} onChange={e => setRow(r.key, { qty: e.target.value })}
+                          className="w-20 px-2 py-1 bg-slate-900 border border-slate-800 rounded text-slate-200 text-xs text-right"/>
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <input type="number" step="0.01" value={r.unitPrice} onChange={e => setRow(r.key, { unitPrice: e.target.value })}
+                          className="w-24 px-2 py-1 bg-slate-900 border border-slate-800 rounded text-slate-200 text-xs text-right"/>
+                      </td>
+                      <td className="px-2 py-1.5 text-right text-slate-200 tabular-nums">
+                        {gbp((Number(r.qty) || 0) * (Number(r.unitPrice) || 0))}
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <button onClick={() => delRow(r.key)} className="text-slate-600 hover:text-red-400"><Trash2 size={13}/></button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+
+        <div className="flex justify-end gap-2 pt-2 border-t border-slate-800/60">
+          <button onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Cancel</button>
+          <button onClick={create} disabled={busy || !usable.length || !vendorId}
+            className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-bold">
+            {busy ? "Creating…" : `Create ${docType === "bill" ? "bill" : "purchase order"}`}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function DistBillsView({ currentUser, pendingConvert, setPendingConvert }) {
   const [bills, setBills] = useState([]); const [vendors, setVendors] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]); const [paidMap, setPaidMap] = useState(new Map()); const [detailId, setDetailId] = useState(null);
   const [billQuery, setBillQuery] = useState(""); const [billStatus, setBillStatus] = useState("all");
@@ -8708,6 +9058,7 @@ function DistBillsView({ currentUser, pendingConvert, setPendingConvert }) {
     }
   }, [pendingConvert, setPendingConvert]);
   const newDoc = () => setCreating({ vendorId: "", billDate: new Date().toISOString().slice(0,10), vatMode: "exclusive", discountPercent: 0, discountType: "percent", lines: [{ itemId:"", accountCode:"", qty:1, unitPrice:"", taxRateId:null }] });
+  const [importing, setImporting] = useState(false);   // DISTIMPORT
   const save = async () => {
     if (!creating?.vendorId) { setErr("Pick a vendor"); return; }
     setBusy(true); setErr("");
@@ -8723,7 +9074,8 @@ function DistBillsView({ currentUser, pendingConvert, setPendingConvert }) {
   const billStatuses = [...new Set(bills.map(b => b.status).filter(Boolean))];
   return (
     <div className="space-y-4">
-      <div className="flex justify-between items-center gap-3 flex-wrap"><div className="text-sm text-slate-400">{visibleBills.length} of {bills.length} bill{bills.length!==1?"s":""}</div><button onClick={newDoc} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New bill</button></div>
+      <div className="flex justify-between items-center gap-3 flex-wrap"><div className="text-sm text-slate-400">{visibleBills.length} of {bills.length} bill{bills.length!==1?"s":""}</div><div className="flex gap-2"><button onClick={() => setImporting(true)} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-semibold flex items-center gap-1.5"><Upload size={14}/> Import</button><button onClick={newDoc} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New bill</button></div></div>
+      {importing && <DistDocImporter currentUser={currentUser} onClose={() => setImporting(false)} onCreated={() => load()}/>}
       {bills.length > 0 && (
         <div className="flex gap-2 flex-wrap">
           <input value={billQuery} onChange={e => setBillQuery(e.target.value)} placeholder="Search bill# or vendor…" className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white placeholder-slate-600 focus:border-indigo-500 focus:outline-none w-56"/>
@@ -9154,14 +9506,14 @@ function DistCustomerDetail({ customer, stores = [], onClose, onEdit }) {
         {data && tab === "statement" && (
           <div className="space-y-3">
             <div className="flex justify-end">
-              <button onClick={() => printDistDoc({
+              <DocActions className="" spec={() => ({
                 docTitle: "CUSTOMER STATEMENT", docNo: customer.displayName,
                 meta: [["Customer", customer.displayName], ["Printed", new Date().toLocaleDateString("en-GB")], ["Invoiced", gbp(data.invoicedTotal)], ["Received", gbp(data.receivedTotal)], ["Balance due", gbp(data.receivables)]],
                 columns: [{ label: "Date" }, { label: "Transaction" }, { label: "Details" }, { label: "Amount", align: "right" }, { label: "Payment", align: "right" }, { label: "Balance", align: "right" }],
                 rows: (data.statement || []).map(e => [fmtDate(e.date), e.type, e.details || "", e.amount ? gbp(e.amount) : "", e.payment ? gbp(e.payment) : "", e.balance != null ? gbp(e.balance) : ""]),
                 totals: [["Balance due", gbp(data.receivables), true]],
                 note: "Please reference invoice numbers with payments. Generated from the Create Brands dashboard.",
-              })} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5"><Printer size={13}/> Print statement</button>
+              })}/>
             </div>
             <div className="grid grid-cols-4 gap-2">
               <div className="rounded-xl border border-slate-800 bg-slate-950/40 px-3 py-2.5 text-center"><div className="text-[10px] uppercase tracking-wide text-slate-500">Opening</div><div className="text-sm font-bold text-white">{gbp(0)}</div></div>
@@ -9389,6 +9741,143 @@ function printDistDoc({ docTitle, docNo, meta = [], columns, rows, totals = [], 
   w.document.write(html); w.document.close();
 }
 
+// DISTPDF 2026-07-31c — save the same document as a real PDF file rather than
+// going through the browser's print dialog. Takes the identical
+// { docTitle, docNo, meta, columns, rows, totals, note } shape as
+// printDistDoc, so a document can never render differently in the two.
+// jsPDF is loaded on demand from the same CDN as ExcelJS; text stays vector
+// (selectable, searchable) because the table is drawn, not screenshotted.
+function loadJsPDF() {
+  if (window.jspdf?.jsPDF) return Promise.resolve(window.jspdf.jsPDF);
+  return new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js";
+    s.onload = () => resolve(window.jspdf?.jsPDF);
+    s.onerror = () => reject(new Error("Couldn't load the PDF library — check your connection."));
+    document.head.appendChild(s);
+  });
+}
+
+async function pdfDistDoc({ docTitle, docNo, meta = [], columns, rows, totals = [], note }) {
+  const jsPDF = await loadJsPDF();
+  if (!jsPDF) throw new Error("PDF library unavailable.");
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const W = doc.internal.pageSize.getWidth();
+  const H = doc.internal.pageSize.getHeight();
+  const M = 40;
+  let y = M;
+
+  const brand = [132, 68, 41];   // #844429, matching the printed document
+  doc.setFont("helvetica", "bold"); doc.setFontSize(17); doc.setTextColor(...brand);
+  doc.text("Create Brands", M, y + 4);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(120);
+  doc.text("Distribution", M, y + 17);
+  doc.setFont("helvetica", "bold"); doc.setFontSize(16); doc.setTextColor(40);
+  doc.text(String(docTitle || "").toUpperCase(), W - M, y + 4, { align: "right" });
+  if (docNo) {
+    doc.setFont("courier", "normal"); doc.setFontSize(10); doc.setTextColor(90);
+    doc.text(String(docNo), W - M, y + 18, { align: "right" });
+  }
+  y += 30;
+  doc.setDrawColor(...brand); doc.setLineWidth(2); doc.line(M, y, W - M, y);
+  y += 18;
+
+  // Meta pairs, three across.
+  if (meta.length) {
+    const colW = (W - M * 2) / 3;
+    meta.forEach(([k, v], i) => {
+      const col = i % 3, rowN = Math.floor(i / 3);
+      const x = M + col * colW, yy = y + rowN * 26;
+      doc.setFont("helvetica", "bold"); doc.setFontSize(6.5); doc.setTextColor(150);
+      doc.text(String(k || "").toUpperCase(), x, yy);
+      doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(50);
+      doc.text(String(v ?? ""), x, yy + 11, { maxWidth: colW - 8 });
+    });
+    y += Math.ceil(meta.length / 3) * 26 + 6;
+  }
+
+  // Table. Right-aligned columns keep money in a readable column.
+  const widths = columns.map(c => c.w || (c.align === "right" ? 70 : null));
+  const flexTotal = (W - M * 2) - widths.reduce((a, w) => a + (w || 0), 0);
+  const flexCount = widths.filter(w => !w).length || 1;
+  const colW = widths.map(w => w || flexTotal / flexCount);
+  const xAt = (i) => M + colW.slice(0, i).reduce((a, b) => a + b, 0);
+
+  const header = () => {
+    doc.setFillColor(245, 243, 240); doc.rect(M, y, W - M * 2, 18, "F");
+    doc.setFont("helvetica", "bold"); doc.setFontSize(8); doc.setTextColor(90);
+    columns.forEach((c, i) => {
+      const right = c.align === "right";
+      doc.text(String(c.label ?? c), right ? xAt(i) + colW[i] - 4 : xAt(i) + 4, y + 12, { align: right ? "right" : "left" });
+    });
+    y += 18;
+  };
+  header();
+
+  doc.setFont("helvetica", "normal"); doc.setFontSize(8.5);
+  (rows || []).forEach(r => {
+    if (y > H - 90) { doc.addPage(); y = M; header(); doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); }
+    // A single-cell row is a category heading in the printed version.
+    if (Array.isArray(r) && r.length === 1) {
+      doc.setFont("helvetica", "bold"); doc.setFontSize(8); doc.setTextColor(...brand);
+      doc.text(String(r[0]), M + 4, y + 11);
+      doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setTextColor(40);
+      y += 16;
+      return;
+    }
+    doc.setTextColor(40);
+    (r || []).forEach((v, i) => {
+      const right = columns[i]?.align === "right";
+      doc.text(String(v ?? ""), right ? xAt(i) + colW[i] - 4 : xAt(i) + 4, y + 11, {
+        align: right ? "right" : "left", maxWidth: colW[i] - 8,
+      });
+    });
+    y += 16;
+    doc.setDrawColor(232); doc.setLineWidth(0.5); doc.line(M, y - 3, W - M, y - 3);
+  });
+
+  if (totals.length) {
+    y += 8;
+    const boxW = 210, x = W - M - boxW;
+    totals.forEach(([k, v, grand]) => {
+      if (y > H - 60) { doc.addPage(); y = M; }
+      doc.setFont("helvetica", grand ? "bold" : "normal");
+      doc.setFontSize(grand ? 11 : 9);
+      doc.setTextColor(grand ? 20 : 90);
+      doc.text(String(k), x, y + 10);
+      doc.text(String(v), W - M, y + 10, { align: "right" });
+      y += grand ? 18 : 14;
+      if (grand) { doc.setDrawColor(...brand); doc.setLineWidth(1); doc.line(x, y - 26, W - M, y - 26); }
+    });
+  }
+
+  if (note) {
+    doc.setFont("helvetica", "italic"); doc.setFontSize(7.5); doc.setTextColor(150);
+    doc.text(String(note), M, H - 28, { maxWidth: W - M * 2 });
+  }
+
+  const safe = String(docNo || docTitle || "document").replace(/[^A-Za-z0-9._-]+/g, "-");
+  doc.save(`${safe}.pdf`);
+}
+
+// One spec, two destinations — Print goes to the browser dialog, PDF downloads
+// a file directly. Sharing the thunk means the two can never disagree.
+function DocActions({ spec, className = "ml-auto" }) {
+  const [busy, setBusy] = useState(false);
+  const btn = "px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 disabled:opacity-40";
+  return (
+    <div className={`${className} flex items-center gap-2`}>
+      <button onClick={() => printDistDoc(spec())} className={btn}><Printer size={13}/> Print</button>
+      <button disabled={busy} onClick={async () => {
+        setBusy(true);
+        try { await pdfDistDoc(spec()); }
+        catch (e) { alert(e?.message || "Couldn't create the PDF."); }
+        setBusy(false);
+      }} className={btn}><Download size={13}/> {busy ? "Saving…" : "PDF"}</button>
+    </div>
+  );
+}
+
 // Category-sorted plain rows for printing (mirrors catRows, but data not JSX).
 function catPrintRows(lines, catOf, toCells) {
   const withCat = (lines || []).map((l, i) => ({ l, i, c: (catOf(l) || "Other") }));
@@ -9532,7 +10021,7 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
         {/* Header actions */}
         <div className="flex items-center gap-2 border-b border-slate-800 pb-3 -mt-1">
           <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${so.status==="dispatched"||so.status==="invoiced"?"bg-emerald-600 text-white":so.status==="cancelled"?"bg-slate-800 text-slate-500":"bg-indigo-600 text-white"}`}>{(so.status||"").toUpperCase()}</span>
-          <button onClick={() => printDistDoc({
+          <DocActions spec={() => ({
             docTitle: "SALES ORDER", docNo: so.soNumber,
             meta: [["Customer", customer?.displayName || ""], ["Order date", fmtDate(so.orderDate)], ["Status", (so.status || "").toUpperCase()], ["VAT mode", so.vatMode === "inclusive" ? "Inclusive" : "Exclusive"]],
             columns: [{ label: "Item" }, { label: "Qty", align: "right" }, { label: "Rate", align: "right" }, { label: "Amount", align: "right" }],
@@ -9544,7 +10033,7 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
             }),
             totals: [["Subtotal", gbp(totals.subTotal)], ["VAT", gbp(totals.taxTotal)], ...(Number(so.shippingCharge) ? [["Shipping", gbp(so.shippingCharge)]] : []), ["Total", gbp(grand), true]],
             note: "Generated from the Create Brands dashboard.",
-          })} className="ml-auto px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5"><Printer size={13}/> Print</button>
+          })}/>
           {detachMsg && (
             <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[80] px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-bold shadow-xl">{detachMsg}</div>
           )}
@@ -10596,14 +11085,14 @@ function DistInvoiceDetail({ invoiceId, onClose, onDelete }) {
                       alert("Sent to the warehouse printer.");
                     } catch (e2) { alert("Could not queue the print: " + e2.message); }
                   }} title="Print on the warehouse Star printer" className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5 mr-2"><Printer size={13}/> Star</button>
-                  <button onClick={() => printDistDoc({
+                  <DocActions className="mt-2" spec={() => ({
                     docTitle: "INVOICE", docNo: d.invoiceNumber,
                     meta: [["Bill to", d.customer?.displayName || ""], ["Invoice date", d.invoiceDate ? new Date(d.invoiceDate).toLocaleDateString("en-GB") : ""], ["Due date", d.dueDate ? new Date(d.dueDate).toLocaleDateString("en-GB") : ""], ["Status", (d.status || "").replace("_", " ").toUpperCase()]],
                     columns: [{ label: "Item" }, { label: "Qty", align: "right" }, { label: "Rate", align: "right" }, { label: "VAT", align: "right" }, { label: "Amount", align: "right" }],
                     rows: catPrintRows(d.lines, l => l.item?.category, l => [l.item?.name || l.itemId, l.qty, gbp(l.rate), gbp(l.vat), gbp(l.amount != null ? l.amount : (Number(l.qty) || 0) * (Number(l.rate) || 0))]),
                     totals: [["Subtotal", gbp(d.net)], ["VAT", gbp(d.vat)], ...(d.shipping > 0 ? [["Shipping", gbp(d.shipping)]] : []), ["Total", gbp(d.grand), true], ...(d.balance > 0.005 ? [["Balance due", gbp(d.balance)]] : [["Paid", gbp(d.grand)]])],
                     note: `Please reference ${d.invoiceNumber} with your payment. Generated from the Create Brands dashboard.`,
-                  })} className="mt-2 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5"><Printer size={13}/> Print invoice</button>
+                  })}/>
                 </div>
               </div>
               <div className="grid grid-cols-4 gap-3 mt-4 pt-3 border-t border-slate-800/60">
@@ -10840,13 +11329,13 @@ function DistReceiptsView({ currentUser, pendingConvert, setPendingConvert }) {
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
           {pays.length === 0 && <div className="px-4 py-8 text-center text-sm text-slate-600">No payments received yet.</div>}
           <div className="flex justify-end px-4 pt-2">
-            <button onClick={() => printDistDoc({
+            <DocActions className="" spec={() => ({
               docTitle: "PAYMENTS RECEIVED", docNo: `${pays.length} payment${pays.length!==1?"s":""}`,
               meta: [["Printed", new Date().toLocaleDateString("en-GB")]],
               columns: [{ label: "Date" }, { label: "Payment #" }, { label: "Customer" }, { label: "Method" }, { label: "Invoices", align: "right" }, { label: "Amount", align: "right" }],
               rows: pays.map(p => [p.payDate, p.paymentNumber, cName(p.customerId), p.method, p.allocations.length, gbp(p.amount)]),
               totals: [["Total received", gbp(pays.reduce((s, p) => s + (Number(p.amount) || 0), 0)), true]],
-            })} className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center gap-1.5"><Printer size={13}/> Print list</button>
+            })}/>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
@@ -62282,7 +62771,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: PUNCHIDENTITY 2026-07-31b");
+      console.log("CB build: DISTIMPORT 2026-07-31d");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
