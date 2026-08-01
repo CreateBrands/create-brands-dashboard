@@ -4987,7 +4987,7 @@ function DistTypedItemsView({ itemType, currentUser }) {
       const cur = m.get(l.itemId) || { itemId: l.itemId, name: l.name, category: l.category, packUnit: l.packUnit, packSize: l.packSize, packCount: l.packCount, qty: 0, doneQty: 0, breakdown: [] };
       cur.qty += Number(l.qty) || 0;
       if (l.done) cur.doneQty += Number(l.qty) || 0;
-      cur.breakdown.push({ soNumber: o.soNumber, customerName: o.customerName, qty: l.qty, soId: o.soId, done: l.done, uom: l.uom || null, bought: l.bought || null });
+      cur.breakdown.push({ soNumber: o.soNumber, customerName: o.customerName, qty: l.qty, soId: o.soId, done: l.done, uom: l.uom || null, bought: l.bought || null, lineNote: l.lineNote || "" });
       if (l.uom) cur.mixedUoms = [...new Set([...(cur.mixedUoms || []), l.uom])];
       m.set(l.itemId, cur);
     }
@@ -5128,6 +5128,14 @@ function DistTypedItemsView({ itemType, currentUser }) {
                   style={{ border: `1.5px solid ${mine ? "#3F6B3A" : other ? WH.line : "#E0A664"}`, background: mine ? "#EAF3E7" : other ? WH.surface : "#FFF6E8" }}>
                   <div>
                     <div className="text-xs font-bold" style={{ color: WH.ink }}>{o.soNumber} · {o.customerName}</div>
+                    {/* TEAMNOTES 2026-08-01a — this card shows in Combined mode
+                        too; the per-order note only rendered in "By order", so
+                        drivers on the default view never saw it. */}
+                    {(itemType === "fresh" ? o.noteDriver : o.noteKitchen) && (
+                      <div className="text-[10px] mt-1 px-1.5 py-0.5 rounded" style={{ background: "#FFF6E8", color: "#B45309", border: "1px solid #F0D9B5" }}>
+                        📝 {itemType === "fresh" ? o.noteDriver : o.noteKitchen}
+                      </div>
+                    )}
                     <div className="text-[10px]" style={{ color: WH.inkFaint }}>
                       <span className="font-bold" style={{ color: o.allDone ? "#3F6B3A" : "#B45309" }}>
                         {o.allDone ? `\u2713 ${fulfilLabel(o)}` : "still to buy"}
@@ -5221,6 +5229,11 @@ function DistTypedItemsView({ itemType, currentUser }) {
                       <span className="min-w-0">
                         <span className="text-sm font-bold truncate block" style={{ color: WH.ink, textDecoration: c.done ? "line-through" : "none" }}>{cleanName(c.name)}</span>
                         <span className="text-[11px]" style={{ color: WH.inkFaint }}>{c.category || "—"} · {c.breakdown.length} order{c.breakdown.length===1?"":"s"}</span>
+                        {/* ITEMNOTES — combining hides which order a note came
+                            from, so name the store alongside each one. */}
+                        {(c.breakdown || []).filter(b => b.lineNote).map((b, bi) => (
+                          <span key={bi} className="block text-[11px] italic mt-0.5" style={{ color: "#B45309" }}>📝 {b.customerName}: {b.lineNote}</span>
+                        ))}
                       </span>
                     </button>
                     <div className="text-right flex-shrink-0 max-w-[38vw] sm:max-w-none">
@@ -6313,6 +6326,8 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                             <div key={o.soId} className={`rounded-lg px-2.5 py-1.5 flex items-center gap-2 border ${mine ? "border-emerald-600/60 bg-emerald-950/20" : other ? "border-slate-700 bg-slate-900/40" : "border-amber-700/50 bg-amber-950/15"}`}>
                               <div>
                                 <div className="text-[11px] font-bold text-slate-200">{o.soNumber} · {o.customerName}</div>
+                                {/* TEAMNOTES — the kitchen works from this card. */}
+                                {o.noteKitchen && <div className="text-[10px] mt-0.5 px-1.5 py-0.5 rounded bg-amber-950/40 text-amber-300 border border-amber-800/40">📝 {o.noteKitchen}</div>}
                                 <div className="text-[9px] text-slate-500">{o.lines.length} item{o.lines.length !== 1 ? "s" : ""}</div>
                               </div>
                               {mine ? (
@@ -62859,7 +62874,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: TEAMNOTES 2026-07-31f");
+      console.log("CB build: TEAMNOTES2 2026-08-01a");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
