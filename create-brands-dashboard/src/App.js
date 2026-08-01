@@ -5132,8 +5132,9 @@ function DistTypedItemsView({ itemType, currentUser }) {
                         too; the per-order note only rendered in "By order", so
                         drivers on the default view never saw it. */}
                     {(itemType === "fresh" ? o.noteDriver : o.noteKitchen) && (
-                      <div className="text-[10px] mt-1 px-1.5 py-0.5 rounded" style={{ background: "#FFF6E8", color: "#B45309", border: "1px solid #F0D9B5" }}>
-                        📝 {itemType === "fresh" ? o.noteDriver : o.noteKitchen}
+                      <div className="text-[12px] font-semibold mt-1.5 px-2.5 py-1.5 rounded-lg"
+                        style={{ background: "#FFF4DC", color: "#3A2E26", border: "1px solid #E5B769", borderLeft: "4px solid #B45309" }}>
+                        📌 {itemType === "fresh" ? o.noteDriver : o.noteKitchen}
                       </div>
                     )}
                     <div className="text-[10px]" style={{ color: WH.inkFaint }}>
@@ -5232,7 +5233,9 @@ function DistTypedItemsView({ itemType, currentUser }) {
                         {/* ITEMNOTES — combining hides which order a note came
                             from, so name the store alongside each one. */}
                         {(c.breakdown || []).filter(b => b.lineNote).map((b, bi) => (
-                          <span key={bi} className="block text-[11px] italic mt-0.5" style={{ color: "#B45309" }}>📝 {b.customerName}: {b.lineNote}</span>
+                          <span key={bi} className="block text-[12px] font-semibold mt-1 px-2 py-1 rounded-md" style={{ background: "#FFF4DC", color: "#3A2E26", border: "1px solid #E5B769" }}>
+                            📌 <span style={{ color: "#8A5A0B" }}>{b.customerName}:</span> {b.lineNote}
+                          </span>
                         ))}
                       </span>
                     </button>
@@ -5273,8 +5276,9 @@ function DistTypedItemsView({ itemType, currentUser }) {
                   {/* TEAMNOTES — fresh board is worked by drivers, every other
                       typed board by the kitchen. Show only the relevant note. */}
                   {(itemType === "fresh" ? o.noteDriver : o.noteKitchen) && (
-                    <div className="text-[11px] mt-1 px-2 py-1 rounded-lg inline-block" style={{ backgroundColor: "#FFF6E8", color: "#B45309", border: "1px solid #F0D9B5" }}>
-                      <span className="font-bold uppercase tracking-wide text-[9px] mr-1">{itemType === "fresh" ? "Driver" : "Kitchen"}</span>
+                    <div className="text-sm font-semibold mt-1.5 px-3 py-2 rounded-lg"
+                      style={{ backgroundColor: "#FFF4DC", color: "#3A2E26", border: "1px solid #E5B769", borderLeft: "5px solid #B45309" }}>
+                      <span className="font-black uppercase tracking-wider text-[10px] mr-1.5" style={{ color: "#8A5A0B" }}>📌 {itemType === "fresh" ? "Driver" : "Kitchen"}</span>
                       {itemType === "fresh" ? o.noteDriver : o.noteKitchen}
                     </div>
                   )}
@@ -5291,7 +5295,7 @@ function DistTypedItemsView({ itemType, currentUser }) {
                       <div className="text-sm truncate" style={{ color: WH.ink, textDecoration: l.done ? "line-through" : "none" }}>{cleanName(l.name)}</div>
                       {/* ITEMNOTES 2026-07-31f — the store's instruction for this
                           item, now carried through to the people fulfilling it. */}
-                      {l.lineNote && <div className="text-[11px] italic mt-0.5" style={{ color: "#B45309" }}>📝 {l.lineNote}</div>}
+                      {l.lineNote && <div className="text-[12px] font-semibold mt-1 px-2 py-1 rounded-md inline-block" style={{ background: "#FFF4DC", color: "#3A2E26", border: "1px solid #E5B769" }}>📌 {l.lineNote}</div>}
                       {l.category && <div className="text-[10px]" style={{ color: WH.inkFaint }}>{l.category}</div>}
                     </div>
                     <div className="text-sm font-bold flex-shrink-0" style={{ color: l.done ? WH.inkFaint : WH.accent }}>{fmtPackQty(l.qty, l)}{l.bought && l.bought.qty != null ? ` · bought ${l.bought.qty} ${l.bought.uom || ""}`.trimEnd() : ""}</div>
@@ -6327,7 +6331,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                               <div>
                                 <div className="text-[11px] font-bold text-slate-200">{o.soNumber} · {o.customerName}</div>
                                 {/* TEAMNOTES — the kitchen works from this card. */}
-                                {o.noteKitchen && <div className="text-[10px] mt-0.5 px-1.5 py-0.5 rounded bg-amber-950/40 text-amber-300 border border-amber-800/40">📝 {o.noteKitchen}</div>}
+                                {o.noteKitchen && <div className="text-[12px] font-bold mt-1 px-2 py-1 rounded-md bg-amber-500/25 text-amber-100 border border-amber-500/60 border-l-4 border-l-amber-400">📌 {o.noteKitchen}</div>}
                                 <div className="text-[9px] text-slate-500">{o.lines.length} item{o.lines.length !== 1 ? "s" : ""}</div>
                               </div>
                               {mine ? (
@@ -8747,12 +8751,17 @@ function TeamNoteBanner({ doc, show = [] }) {
     ["driver", "Driver", doc?.noteDriver],
   ].filter(([k, , v]) => (!show.length || show.includes(k)) && String(v || "").trim());
   if (!all.length) return null;
+  // NOTEVIS 2026-08-01b — was Tailwind dark-theme classes (amber-100 on
+  // amber-950/20). These views render in the cream theme, so the text came out
+  // near-white on cream and read as placeholder. Explicit colours only, plus a
+  // thick left bar and larger type so a note can't be scrolled past.
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-2">
       {all.map(([k, label, v]) => (
-        <div key={k} className="flex items-start gap-2 rounded-xl border border-amber-700/40 bg-amber-950/20 px-3 py-2">
-          <span className="text-[10px] font-bold uppercase tracking-wide text-amber-400 mt-0.5 flex-shrink-0">{label}</span>
-          <span className="text-xs text-amber-100">{v}</span>
+        <div key={k} className="flex items-start gap-2.5 rounded-xl px-3.5 py-2.5"
+          style={{ background: "#FFF4DC", border: "1px solid #E5B769", borderLeft: "5px solid #B45309" }}>
+          <span className="text-[10px] font-black uppercase tracking-wider mt-0.5 flex-shrink-0" style={{ color: "#8A5A0B" }}>📌 {label}</span>
+          <span className="text-sm font-semibold" style={{ color: "#3A2E26" }}>{v}</span>
         </div>
       ))}
     </div>
@@ -10408,7 +10417,9 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
                         <div>
                           <div className="text-white">{cleanName(it?.name) || l.itemId}</div>
                           {it && (it.packCount || it.packSize) && <div className="text-[10px] text-slate-500">{it.packCount && it.packCount !== 1 ? `${it.packCount}× ` : ""}{it.packSize || ""}{it.packUnit || ""}</div>}
-                          {l.lineNote && <div className="text-[11px] italic text-amber-400 mt-0.5">📝 {l.lineNote}</div>}
+                          {/* NOTEVIS — was amber-400 italic, which vanished against
+                              the cream row. Solid chip, dark text. */}
+                          {l.lineNote && <div className="text-[12px] font-semibold mt-1 inline-block px-2 py-0.5 rounded-md" style={{ background: "#FFF4DC", color: "#8A5A0B", border: "1px solid #E5B769" }}>📝 {l.lineNote}</div>}
                         </div>
                       </div>
                     </td>
@@ -10692,7 +10703,7 @@ function DistPickDetail({ pickId, onClose, onDelete, onEdit }) {
                 <thead className="text-slate-500 bg-slate-950/40"><tr><th className="text-left px-3 py-2">Item</th><th className="text-left px-3 py-2">Batch</th><th className="text-right px-3 py-2">Qty</th></tr></thead>
                 <tbody>{catRows(d.lines, l => l.item?.category, 3, (l, i) => (
                   <tr key={i} className="border-t border-slate-800/60">
-                    <td className="px-3 py-2"><div className="flex items-center gap-2"><div className="w-8 h-8 rounded-lg bg-gradient-to-b from-white to-slate-100 flex items-center justify-center overflow-hidden border border-slate-800 flex-shrink-0">{l.item?.imageUrl ? <img src={l.item.imageUrl} alt="" className="w-full h-full object-contain p-0.5"/> : <Package size={13} className="text-slate-300"/>}</div><div className="min-w-0"><span className="text-white">{cleanName(l.item?.name) || l.itemId}</span>{/* ITEMNOTES — per-item instruction from the store */}{l.lineNote && <div className="text-[11px] italic text-amber-400 mt-0.5">📝 {l.lineNote}</div>}</div></div></td>
+                    <td className="px-3 py-2"><div className="flex items-center gap-2"><div className="w-8 h-8 rounded-lg bg-gradient-to-b from-white to-slate-100 flex items-center justify-center overflow-hidden border border-slate-800 flex-shrink-0">{l.item?.imageUrl ? <img src={l.item.imageUrl} alt="" className="w-full h-full object-contain p-0.5"/> : <Package size={13} className="text-slate-300"/>}</div><div className="min-w-0"><span className="text-white">{cleanName(l.item?.name) || l.itemId}</span>{/* ITEMNOTES — per-item instruction from the store */}{l.lineNote && <div className="text-[12px] font-bold mt-1 inline-block px-2 py-0.5 rounded-md bg-amber-500/25 text-amber-200 border border-amber-600/50">📝 {l.lineNote}</div>}</div></div></td>
                     <td className="px-3 py-2 font-mono text-slate-400">{l.batchId || "—"}</td>
                     <td className="px-3 py-2 text-right text-white font-semibold">{l.qty}</td>
                   </tr>))}</tbody>
@@ -62874,7 +62885,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: TEAMNOTES2 2026-08-01a");
+      console.log("CB build: NOTEVIS 2026-08-01b");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
