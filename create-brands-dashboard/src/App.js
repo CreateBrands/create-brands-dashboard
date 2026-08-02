@@ -8868,7 +8868,14 @@ function fmtBytes(n) {
 }
 
 function StoreDocumentsView({ stores = [], visibleStoreIds = [], currentUser, brands = [] }) {
-  const T = { ink: "#3A2E26", soft: "#7A6A58", faint: "#9A8770", line: "#E8DCC6", card: "#FDF8EF", head: "#3A2E26", field: "#FFFFFF", accent: "#844429", ground: "#FAF3E6" };
+  // STOREDOCSUI 2026-08-01g — rebuilt as a REGISTER, not a card wall. The first
+  // pass wrapped categories into two rows of pills and pushed the documents
+  // below the fold. The pattern the established document systems settled on is
+  // a persistent category rail plus a sortable table: sorting lives on the
+  // column headers where it's visible, and each row shows only what's needed to
+  // pick the right file. Compliance counters stay pinned at the top because
+  // "what's expired or missing" is the question this screen exists to answer.
+  const T = { ink: "#3A2E26", soft: "#7A6A58", faint: "#9A8770", line: "#E8DCC6", card: "#FDF8EF", head: "#3A2E26", field: "#FFFFFF", accent: "#844429", ground: "#FAF3E6", rail: "#F5EDDF" };
   const scoped = useMemo(
     () => stores.filter(s => !s.archivedAt && visibleStoreIds.includes(s.id))
       .sort((a, b) => (a.shortName || a.name || "").localeCompare(b.shortName || b.name || "")),
@@ -8878,12 +8885,16 @@ function StoreDocumentsView({ stores = [], visibleStoreIds = [], currentUser, br
   const [cats, setCats] = useState([]);
   const [docs, setDocs] = useState([]);
   const [catFilter, setCatFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");   // all|expired|expiring|valid
   const [q, setQ] = useState("");
+  const [sort, setSort] = useState({ key: "status", dir: "asc" });
+  const [view, setView] = useState("list");                  // list|grid
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
-  const [editing, setEditing] = useState(null);      // document form
+  const [editing, setEditing] = useState(null);
   const [manageCats, setManageCats] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
 
   useEffect(() => { if (!storeId && scoped.length) setStoreId(scoped[0].id); }, [scoped, storeId]);
 
@@ -8902,15 +8913,10 @@ function StoreDocumentsView({ stores = [], visibleStoreIds = [], currentUser, br
   useEffect(() => { load(); }, [load]);
 
   const store = scoped.find(s => s.id === storeId) || null;
-
-  // A category applies to this store if it isn't brand- or site-type-scoped
-  // away from it. Lets a brand run its own compliance set without cluttering
-  // everyone else's.
   const applicable = useMemo(() => cats.filter(c =>
     (!c.brandId || c.brandId === store?.brandId) &&
     (!c.siteTypes?.length || c.siteTypes.includes(store?.siteType || "shop"))
   ), [cats, store]);
-
   const catById = useMemo(() => new Map(cats.map(c => [c.id, c])), [cats]);
 
   const enriched = useMemo(() => docs.map(d => {
@@ -8919,164 +8925,274 @@ function StoreDocumentsView({ stores = [], visibleStoreIds = [], currentUser, br
     return { ...d, cat, status, days };
   }), [docs, catById]);
 
-  const visible = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    return enriched
-      .filter(d => catFilter === "all" || d.categoryId === catFilter)
-      .filter(d => !needle || [d.title, d.reference, d.issuer, d.notes, d.cat?.label].some(v => String(v || "").toLowerCase().includes(needle)))
-      .sort((a, b) => {
-        const rank = { expired: 0, expiring: 1, valid: 2, no_expiry: 3 };
-        return (rank[a.status] - rank[b.status]) || (a.title || "").localeCompare(b.title || "");
-      });
-  }, [enriched, catFilter, q]);
-
   const expired = enriched.filter(d => d.status === "expired" && !d.archivedAt);
   const expiring = enriched.filter(d => d.status === "expiring" && !d.archivedAt);
   const gaps = applicable.filter(c => c.isRequired && !docs.some(d => d.categoryId === c.id && !d.archivedAt));
 
-  const card = { background: T.card, border: `1px solid ${T.line}` };
-  const headSty = { background: T.head, color: "#F3E9D8" };
+  const visible = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    const rank = { expired: 0, expiring: 1, valid: 2, no_expiry: 3 };
+    const rows = enriched
+      .filter(d => catFilter === "all" || d.categoryId === catFilter)
+      .filter(d => statusFilter === "all" || d.status === statusFilter)
+      .filter(d => !needle || [d.title, d.reference, d.issuer, d.notes, d.cat?.label].some(v => String(v || "").toLowerCase().includes(needle)));
+    const dir = sort.dir === "asc" ? 1 : -1;
+    return rows.sort((a, b) => {
+      let r = 0;
+      if (sort.key === "status") r = (rank[a.status] - rank[b.status]) || ((a.days ?? 9e9) - (b.days ?? 9e9));
+      else if (sort.key === "title") r = (a.title || "").localeCompare(b.title || "");
+      else if (sort.key === "category") r = (a.cat?.label || "").localeCompare(b.cat?.label || "");
+      else if (sort.key === "expiry") r = (a.expiryDate || "9999").localeCompare(b.expiryDate || "9999");
+      else if (sort.key === "issued") r = (a.issuedDate || "").localeCompare(b.issuedDate || "");
+      return r * dir;
+    });
+  }, [enriched, catFilter, statusFilter, q, sort]);
+
+  const toggleSort = (key) => setSort(s => s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" });
+
+  const onDrop = (e) => {
+    e.preventDefault(); setDragOver(false);
+    const f = e.dataTransfer?.files?.[0];
+    if (f) setEditing({ storeId, title: f.name.replace(/\.[^.]+$/, ""), categoryId: applicable[0]?.id || "", _drop: f });
+  };
+
   const ctl = "px-3 py-2 rounded-lg text-sm focus:outline-none";
   const ctlSty = { background: T.field, border: `1px solid ${T.line}`, color: T.ink };
+  const card = { background: T.card, border: `1px solid ${T.line}` };
+
+  const Th = ({ k, children, align = "left" }) => (
+    <th onClick={() => toggleSort(k)}
+      className={`px-3 py-2.5 text-[10px] uppercase tracking-wider font-bold cursor-pointer select-none whitespace-nowrap text-${align}`}
+      style={{ color: "#F3E9D8" }}>
+      {children}
+      <span style={{ opacity: sort.key === k ? 1 : 0.25 }}> {sort.key === k && sort.dir === "desc" ? "↓" : "↑"}</span>
+    </th>
+  );
 
   return (
-    <div className="space-y-4">
-      {/* Store picker + actions */}
+    <div className="space-y-3">
+      {/* Toolbar — store, search, view, actions. One row, no wrapping pills. */}
       <div className="flex flex-wrap items-center gap-2">
-        <select value={storeId} onChange={e => setStoreId(e.target.value)} className={ctl} style={ctlSty}>
+        <select value={storeId} onChange={e => setStoreId(e.target.value)} className={`${ctl} font-semibold`} style={ctlSty}>
           {scoped.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
         </select>
-        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search documents…" className={`${ctl} w-64`} style={ctlSty}/>
-        <label className="flex items-center gap-1.5 text-xs font-semibold cursor-pointer" style={{ color: T.soft }}>
-          <input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)}/>
-          Show superseded
-        </label>
-        <div className="ml-auto flex gap-2">
-          <button onClick={() => setManageCats(true)} className="px-3 py-2 rounded-xl text-sm font-semibold" style={{ background: "#F0E6D2", color: T.ink, border: `1px solid ${T.line}` }}>
-            <Settings size={14} className="inline mr-1"/> Categories
-          </button>
-          <button onClick={() => setEditing({ storeId, title: "", categoryId: applicable[0]?.id || "" })}
-            className="px-3 py-2 rounded-xl text-sm font-bold text-white" style={{ background: T.accent }}>
-            <Plus size={14} className="inline mr-1"/> Add document
-          </button>
+        <div className="relative flex-1 min-w-[200px] max-w-md">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2" style={{ color: T.faint }}/>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search by name, reference or issuer…"
+            className={`${ctl} w-full pl-9`} style={ctlSty}/>
         </div>
+        <div className="flex rounded-lg overflow-hidden" style={{ border: `1px solid ${T.line}` }}>
+          {[["list", List], ["grid", LayoutGrid]].map(([k, Icon]) => (
+            <button key={k} onClick={() => setView(k)} className="px-2.5 py-2"
+              style={view === k ? { background: T.accent, color: "#fff" } : { background: T.field, color: T.faint }}>
+              <Icon size={14}/>
+            </button>
+          ))}
+        </div>
+        <button onClick={() => setManageCats(true)} className="px-3 py-2 rounded-lg text-sm font-semibold" style={{ background: "#F0E6D2", color: T.ink, border: `1px solid ${T.line}` }}>
+          <Settings size={14} className="inline mr-1"/> Categories
+        </button>
+        <button onClick={() => setEditing({ storeId, title: "", categoryId: applicable[0]?.id || "" })}
+          className="px-3.5 py-2 rounded-lg text-sm font-bold text-white" style={{ background: T.accent }}>
+          <Plus size={14} className="inline mr-1"/> Add document
+        </button>
       </div>
 
       {err && <div className="text-xs px-3 py-2 rounded-lg" style={{ background: "#FBEAEA", color: "#B3261E", border: "1px solid #E8A9A9" }}>{err}</div>}
 
-      {/* Compliance first — this is the question people open the screen with. */}
-      {(expired.length > 0 || expiring.length > 0 || gaps.length > 0) && (
-        <div className="grid sm:grid-cols-3 gap-3">
-          {[
-            ["Expired", expired.length, "#FBEAEA", "#B3261E", "#E8A9A9", "needs replacing now"],
-            ["Expiring soon", expiring.length, "#FFF4DC", "#8A5A0B", "#E5B769", "renew before it lapses"],
-            ["Missing", gaps.length, "#F3EDE2", "#5C5346", "#E8DCC6", "required, nothing on file"],
-          ].filter(([, n]) => n > 0).map(([label, n, bg, fg, bd, sub]) => (
-            <div key={label} className="rounded-xl px-4 py-3" style={{ background: bg, border: `1px solid ${bd}` }}>
-              <div className="text-[10px] uppercase tracking-widest font-bold" style={{ color: fg }}>{label}</div>
-              <div className="text-2xl font-bold" style={{ color: fg }}>{n}</div>
-              <div className="text-[11px]" style={{ color: fg, opacity: 0.75 }}>{sub}</div>
-            </div>
-          ))}
-        </div>
-      )}
+      {/* Compliance strip — the reason anyone opens this screen. Clickable, so
+          a count is also the filter that shows you what it counted. */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        {[
+          ["Expired", expired.length, "#FBEAEA", "#B3261E", "#E8A9A9", () => { setStatusFilter("expired"); setCatFilter("all"); }],
+          ["Expiring soon", expiring.length, "#FFF4DC", "#8A5A0B", "#E5B769", () => { setStatusFilter("expiring"); setCatFilter("all"); }],
+          ["Missing", gaps.length, "#F3EDE2", "#5C5346", "#E8DCC6", null],
+          ["On file", enriched.filter(d => !d.archivedAt).length, "#EAF3E7", "#3F6B3A", "#BBD6B4", () => { setStatusFilter("all"); setCatFilter("all"); }],
+        ].map(([label, n, bg, fg, bd, onClick]) => (
+          <button key={label} onClick={onClick || undefined} disabled={!onClick}
+            className="rounded-xl px-3.5 py-2.5 text-left" style={{ background: bg, border: `1px solid ${bd}`, cursor: onClick ? "pointer" : "default" }}>
+            <div className="text-[9px] uppercase tracking-widest font-bold" style={{ color: fg }}>{label}</div>
+            <div className="text-xl font-bold leading-tight" style={{ color: fg }}>{n}</div>
+          </button>
+        ))}
+      </div>
 
       {gaps.length > 0 && (
-        <div className="rounded-xl px-4 py-3" style={{ background: T.card, border: `1px solid ${T.line}` }}>
-          <div className="text-[10px] uppercase tracking-widest font-bold mb-2" style={{ color: T.faint }}>Required but not on file</div>
-          <div className="flex flex-wrap gap-2">
+        <div className="rounded-xl px-3.5 py-3" style={card}>
+          <div className="text-[10px] uppercase tracking-widest font-bold mb-2" style={{ color: T.faint }}>Required but not on file — click to upload</div>
+          <div className="flex flex-wrap gap-1.5">
             {gaps.map(c => (
               <button key={c.id} onClick={() => setEditing({ storeId, title: "", categoryId: c.id })}
-                className="px-2.5 py-1.5 rounded-lg text-xs font-semibold" style={{ background: "#F3EDE2", color: T.ink, border: `1px dashed ${T.line}` }}>
-                + {c.label}
+                className="px-2.5 py-1.5 rounded-lg text-xs font-semibold flex items-center gap-1.5"
+                style={{ background: "#F3EDE2", color: T.ink, border: `1px dashed ${c.color}` }}>
+                <span className="w-2 h-2 rounded-full" style={{ background: c.color }}/> {c.label}
               </button>
             ))}
           </div>
         </div>
       )}
 
-      {/* Category filter */}
-      <div className="flex flex-wrap gap-1.5">
-        <button onClick={() => setCatFilter("all")}
-          className="px-3 py-1.5 rounded-lg text-xs font-bold"
-          style={catFilter === "all" ? { background: T.accent, color: "#fff" } : { background: "#F0E6D2", color: T.ink, border: `1px solid ${T.line}` }}>
-          All ({enriched.length})
-        </button>
-        {applicable.map(c => {
-          const n = enriched.filter(d => d.categoryId === c.id).length;
-          const on = catFilter === c.id;
-          return (
-            <button key={c.id} onClick={() => setCatFilter(c.id)}
-              className="px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5"
-              style={on ? { background: c.color, color: "#fff" } : { background: "#F0E6D2", color: T.ink, border: `1px solid ${T.line}` }}>
-              <span className="w-2 h-2 rounded-full" style={{ background: on ? "rgba(255,255,255,.7)" : c.color }}/>
-              {c.label} {n > 0 && <span style={{ opacity: 0.7 }}>({n})</span>}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Library */}
-      {loading ? (
-        <div className="text-center py-12 text-sm" style={{ color: T.faint }}>Loading…</div>
-      ) : visible.length === 0 ? (
-        <div className="rounded-xl text-center py-14" style={card}>
-          <FileText size={30} className="mx-auto mb-2" style={{ color: T.faint }}/>
-          <div className="text-sm font-semibold" style={{ color: T.ink }}>
-            {q || catFilter !== "all" ? "Nothing matches that." : `No documents yet for ${store?.shortName || store?.name || "this store"}.`}
-          </div>
-          <div className="text-xs mt-1" style={{ color: T.faint }}>Insurance, food-safety certificates, the lease, gas and electrical certs.</div>
-        </div>
-      ) : (
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {visible.map(d => {
-            const chip = docStatusChip(d.status, d.days);
+      {/* Rail + register */}
+      <div className="flex gap-3 items-start">
+        {/* Persistent category rail — replaces the wrapping pill rows. */}
+        <div className="hidden md:block w-56 flex-shrink-0 rounded-xl overflow-hidden" style={card}>
+          <div className="px-3 py-2 text-[10px] uppercase tracking-widest font-bold" style={{ background: T.head, color: "#F3E9D8" }}>Categories</div>
+          <button onClick={() => { setCatFilter("all"); setStatusFilter("all"); }}
+            className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs font-semibold"
+            style={catFilter === "all" ? { background: T.rail, color: T.ink } : { color: T.soft }}>
+            <FolderOpen size={13}/> All documents
+            <span className="ml-auto tabular-nums" style={{ color: T.faint }}>{enriched.length}</span>
+          </button>
+          {applicable.map(c => {
+            const list = enriched.filter(d => d.categoryId === c.id);
+            const bad = list.filter(d => d.status === "expired").length;
+            const soon = list.filter(d => d.status === "expiring").length;
+            const on = catFilter === c.id;
             return (
-              <div key={d.id} className="rounded-xl overflow-hidden flex flex-col" style={{ ...card, opacity: d.archivedAt ? 0.6 : 1 }}>
-                <div className="h-1" style={{ background: d.cat?.color || T.accent }}/>
-                <div className="p-3.5 flex-1">
-                  <div className="flex items-start justify-between gap-2 mb-1.5">
-                    <span className="text-[10px] uppercase tracking-wide font-bold" style={{ color: d.cat?.color || T.faint }}>
-                      {d.cat?.label || "Uncategorised"}
-                    </span>
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap"
-                      style={{ background: chip.bg, color: chip.fg, border: `1px solid ${chip.bd}` }}>{chip.label}</span>
-                  </div>
-                  <div className="text-sm font-bold leading-snug" style={{ color: T.ink }}>{d.title}</div>
-                  {(d.issuer || d.reference) && (
-                    <div className="text-[11px] mt-0.5" style={{ color: T.soft }}>
-                      {d.issuer}{d.issuer && d.reference ? " · " : ""}{d.reference}
-                    </div>
-                  )}
-                  <div className="text-[11px] mt-2 space-y-0.5" style={{ color: T.faint }}>
-                    {d.issuedDate && <div>Issued {new Date(d.issuedDate).toLocaleDateString("en-GB")}</div>}
-                    {d.expiryDate && <div>Expires {new Date(d.expiryDate).toLocaleDateString("en-GB")}</div>}
-                    {d.version > 1 && <div>Version {d.version}</div>}
-                    {d.archivedAt && <div style={{ color: "#B3261E" }}>Superseded</div>}
-                  </div>
-                  {d.notes && <div className="text-[11px] mt-2 italic" style={{ color: T.soft }}>{d.notes}</div>}
-                </div>
-                <div className="flex items-center gap-1 px-3 py-2" style={{ borderTop: `1px solid ${T.line}` }}>
-                  <a href={d.fileUrl} target="_blank" rel="noreferrer"
-                    className="px-2.5 py-1 rounded-lg text-[11px] font-bold" style={{ background: "#F0E6D2", color: T.ink }}>Open</a>
-                  <span className="text-[10px]" style={{ color: T.faint }}>{fmtBytes(d.fileSize)}</span>
-                  <div className="ml-auto flex gap-1">
-                    <button onClick={() => setEditing({ ...d })} title="Edit details"
-                      className="p-1.5 rounded-lg" style={{ color: T.faint }}><Pencil size={13}/></button>
-                    <button onClick={() => setEditing({ storeId, categoryId: d.categoryId, title: d.title, issuer: d.issuer, reference: d.reference, _supersedes: d })}
-                      title="Upload a replacement — keeps this one on file"
-                      className="p-1.5 rounded-lg" style={{ color: T.faint }}><RotateCcw size={13}/></button>
-                    <button onClick={async () => {
-                      if (!window.confirm(`Delete "${d.title}"? This can't be undone — use Replace if a newer version has arrived.`)) return;
-                      try { await deleteStoreDocument(d.id); await load(); } catch (e) { setErr(e.message); }
-                    }} title="Delete" className="p-1.5 rounded-lg" style={{ color: "#B3261E" }}><Trash2 size={13}/></button>
-                  </div>
-                </div>
-              </div>
+              <button key={c.id} onClick={() => { setCatFilter(c.id); setStatusFilter("all"); }}
+                className="w-full flex items-center gap-2 px-3 py-2 text-left text-xs"
+                style={{ ...(on ? { background: T.rail } : {}), borderTop: `1px solid ${T.line}`, color: on ? T.ink : T.soft, fontWeight: on ? 700 : 500 }}>
+                <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: c.color }}/>
+                <span className="truncate">{c.label}</span>
+                <span className="ml-auto flex items-center gap-1">
+                  {bad > 0 && <span className="text-[9px] font-bold px-1 rounded" style={{ background: "#FBEAEA", color: "#B3261E" }}>{bad}</span>}
+                  {soon > 0 && <span className="text-[9px] font-bold px-1 rounded" style={{ background: "#FFF4DC", color: "#8A5A0B" }}>{soon}</span>}
+                  <span className="tabular-nums" style={{ color: T.faint }}>{list.length}</span>
+                </span>
+              </button>
             );
           })}
+          <label className="flex items-center gap-2 px-3 py-2.5 text-[11px] font-semibold cursor-pointer" style={{ borderTop: `1px solid ${T.line}`, color: T.soft }}>
+            <input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)}/>
+            Show superseded
+          </label>
         </div>
-      )}
+
+        {/* Register */}
+        <div className="flex-1 min-w-0 rounded-xl overflow-hidden"
+          style={{ ...card, outline: dragOver ? `2px dashed ${T.accent}` : "none", outlineOffset: -2 }}
+          onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={onDrop}>
+
+          {(catFilter !== "all" || statusFilter !== "all" || q) && (
+            <div className="flex items-center gap-2 px-3 py-2 text-xs" style={{ background: T.rail, borderBottom: `1px solid ${T.line}`, color: T.soft }}>
+              <span>Showing {visible.length} of {enriched.length}</span>
+              <button onClick={() => { setCatFilter("all"); setStatusFilter("all"); setQ(""); }}
+                className="ml-auto font-bold" style={{ color: T.accent }}>Clear filters</button>
+            </div>
+          )}
+
+          {loading ? (
+            <div className="text-center py-16 text-sm" style={{ color: T.faint }}>Loading…</div>
+          ) : visible.length === 0 ? (
+            <div className="text-center py-16 px-6">
+              <FileText size={28} className="mx-auto mb-2" style={{ color: T.faint }}/>
+              <div className="text-sm font-bold" style={{ color: T.ink }}>
+                {q || catFilter !== "all" || statusFilter !== "all"
+                  ? "No documents match these filters."
+                  : `Nothing filed yet for ${store?.shortName || store?.name || "this store"}.`}
+              </div>
+              <div className="text-xs mt-1" style={{ color: T.faint }}>
+                {q || catFilter !== "all" || statusFilter !== "all"
+                  ? "Clear the filters to see everything on file."
+                  : "Drag a file here, or use Add document. Start with the required categories above."}
+              </div>
+            </div>
+          ) : view === "list" ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead style={{ background: T.head }}>
+                  <tr>
+                    <Th k="title">Document</Th>
+                    <Th k="category">Category</Th>
+                    <th className="px-3 py-2.5 text-[10px] uppercase tracking-wider font-bold text-left whitespace-nowrap" style={{ color: "#F3E9D8" }}>Reference</th>
+                    <Th k="issued">Issued</Th>
+                    <Th k="expiry">Expires</Th>
+                    <Th k="status">Status</Th>
+                    <th className="px-3 py-2.5" style={{ width: 110 }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visible.map((d, i) => {
+                    const chip = docStatusChip(d.status, d.days);
+                    return (
+                      <tr key={d.id} style={{ background: i % 2 ? "#FAF4E9" : "transparent", borderTop: `1px solid ${T.line}`, opacity: d.archivedAt ? 0.55 : 1 }}>
+                        <td className="px-3 py-2.5">
+                          <div className="font-semibold" style={{ color: T.ink }}>{d.title}</div>
+                          <div className="text-[11px] flex items-center gap-1.5" style={{ color: T.faint }}>
+                            {d.issuer && <span>{d.issuer}</span>}
+                            {d.fileSize ? <span>· {fmtBytes(d.fileSize)}</span> : null}
+                            {d.version > 1 && <span>· v{d.version}</span>}
+                            {d.archivedAt && <span style={{ color: "#B3261E" }}>· superseded</span>}
+                          </div>
+                        </td>
+                        <td className="px-3 py-2.5 whitespace-nowrap">
+                          <span className="inline-flex items-center gap-1.5 text-xs" style={{ color: T.soft }}>
+                            <span className="w-2 h-2 rounded-full" style={{ background: d.cat?.color || T.faint }}/>
+                            {d.cat?.label || "Uncategorised"}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2.5 text-xs whitespace-nowrap" style={{ color: T.soft }}>{d.reference || "—"}</td>
+                        <td className="px-3 py-2.5 text-xs whitespace-nowrap tabular-nums" style={{ color: T.soft }}>
+                          {d.issuedDate ? new Date(d.issuedDate).toLocaleDateString("en-GB") : "—"}
+                        </td>
+                        <td className="px-3 py-2.5 text-xs whitespace-nowrap tabular-nums" style={{ color: T.soft }}>
+                          {d.expiryDate ? new Date(d.expiryDate).toLocaleDateString("en-GB") : "—"}
+                        </td>
+                        <td className="px-3 py-2.5 whitespace-nowrap">
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: chip.bg, color: chip.fg, border: `1px solid ${chip.bd}` }}>{chip.label}</span>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <div className="flex items-center justify-end gap-0.5">
+                            <a href={d.fileUrl} target="_blank" rel="noreferrer" title="Open" className="p-1.5 rounded-lg" style={{ color: T.accent }}><Eye size={14}/></a>
+                            <button onClick={() => setEditing({ ...d })} title="Edit details" className="p-1.5 rounded-lg" style={{ color: T.faint }}><Pencil size={13}/></button>
+                            <button onClick={() => setEditing({ storeId, categoryId: d.categoryId, title: d.title, issuer: d.issuer, reference: d.reference, _supersedes: d })}
+                              title="Upload a replacement" className="p-1.5 rounded-lg" style={{ color: T.faint }}><RotateCcw size={13}/></button>
+                            <button onClick={async () => {
+                              if (!window.confirm(`Delete "${d.title}"? This can't be undone — use Replace if a newer version has arrived.`)) return;
+                              try { await deleteStoreDocument(d.id); await load(); } catch (e) { setErr(e.message); }
+                            }} title="Delete" className="p-1.5 rounded-lg" style={{ color: "#B3261E" }}><Trash2 size={13}/></button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3 p-3">
+              {visible.map(d => {
+                const chip = docStatusChip(d.status, d.days);
+                return (
+                  <div key={d.id} className="rounded-xl overflow-hidden flex flex-col" style={{ background: T.field, border: `1px solid ${T.line}`, opacity: d.archivedAt ? 0.6 : 1 }}>
+                    <div className="h-1" style={{ background: d.cat?.color || T.accent }}/>
+                    <div className="p-3 flex-1">
+                      <div className="flex items-start justify-between gap-2 mb-1">
+                        <span className="text-[10px] uppercase tracking-wide font-bold" style={{ color: d.cat?.color || T.faint }}>{d.cat?.label || "Uncategorised"}</span>
+                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap" style={{ background: chip.bg, color: chip.fg, border: `1px solid ${chip.bd}` }}>{chip.label}</span>
+                      </div>
+                      <div className="text-sm font-bold leading-snug" style={{ color: T.ink }}>{d.title}</div>
+                      <div className="text-[11px] mt-1.5 space-y-0.5" style={{ color: T.faint }}>
+                        {d.issuer && <div>{d.issuer}{d.reference ? ` · ${d.reference}` : ""}</div>}
+                        {d.expiryDate && <div>Expires {new Date(d.expiryDate).toLocaleDateString("en-GB")}</div>}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 px-3 py-2" style={{ borderTop: `1px solid ${T.line}` }}>
+                      <a href={d.fileUrl} target="_blank" rel="noreferrer" className="px-2.5 py-1 rounded-lg text-[11px] font-bold" style={{ background: "#F0E6D2", color: T.ink }}>Open</a>
+                      <div className="ml-auto flex gap-0.5">
+                        <button onClick={() => setEditing({ ...d })} className="p-1.5" style={{ color: T.faint }}><Pencil size={13}/></button>
+                        <button onClick={() => setEditing({ storeId, categoryId: d.categoryId, title: d.title, issuer: d.issuer, reference: d.reference, _supersedes: d })} className="p-1.5" style={{ color: T.faint }}><RotateCcw size={13}/></button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
 
       {editing && (
         <StoreDocFormModal doc={editing} store={store} categories={applicable} currentUser={currentUser}
@@ -9104,6 +9220,10 @@ function StoreDocFormModal({ doc, store, categories, currentUser, onClose, onSav
   const fileRef = useRef(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // STOREDOCSUI — a file dropped on the register opens this form with the file
+  // already in hand; upload it rather than making them choose it again.
+  const dropped = doc._drop;
+  useEffect(() => { if (dropped) pick(dropped); /* eslint-disable-next-line */ }, [dropped]);
 
   const cat = categories.find(c => c.id === f.categoryId);
   const ctl = "w-full px-3 py-2 rounded-lg text-sm focus:outline-none";
@@ -63553,7 +63673,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: STOREDOCS 2026-08-01f");
+      console.log("CB build: STOREDOCSUI 2026-08-01g");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
