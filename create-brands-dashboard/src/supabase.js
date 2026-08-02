@@ -6274,6 +6274,224 @@ export async function approvePunchesInPeriod({ from, to, storeIds = null, approv
   return (data || []).length;
 }
 
+// ── STOREDOCS 2026-08-01f — per-store document vault ────────────────────────
+// Insurance, food-safety certificates, leases, licences, gas and electrical
+// certs. Three things make this different from a folder of PDFs:
+//
+//   • Categories are DATA, not code. Every brand adds its own over time, so a
+//     hardcoded enum would need a deploy each time.
+//   • Expiry is first-class. Most of these documents are worthless the day
+//     after they lapse, and nobody notices until an inspector asks.
+//   • Superseding, not overwriting. When this year's certificate arrives, last
+//     year's stays readable — you have to be able to prove what was valid in
+//     March even after it's been replaced.
+
+export const DOC_STATUS = {
+  VALID: "valid", EXPIRING: "expiring", EXPIRED: "expired", NO_EXPIRY: "no_expiry",
+};
+
+// Derived, never stored — a stored status is wrong the moment the clock ticks.
+export function docExpiryStatus(doc, noticeDays = 30, today = null) {
+  if (!doc?.expiryDate) return { status: DOC_STATUS.NO_EXPIRY, days: null };
+  const t = today ? new Date(today) : new Date();
+  t.setHours(0, 0, 0, 0);
+  const exp = new Date(doc.expiryDate + "T00:00:00");
+  const days = Math.round((exp - t) / 86400000);
+  if (days < 0) return { status: DOC_STATUS.EXPIRED, days };
+  if (days <= (noticeDays ?? 30)) return { status: DOC_STATUS.EXPIRING, days };
+  return { status: DOC_STATUS.VALID, days };
+}
+
+function dbDocCatToApp(c) {
+  return {
+    id: c.id, label: c.label, icon: c.icon || "FileText", color: c.color || "#844429",
+    description: c.description || "",
+    brandId: c.brand_id || null,
+    siteTypes: Array.isArray(c.site_types) ? c.site_types : [],
+    requiresExpiry: c.requires_expiry ?? false,
+    isRequired: c.is_required ?? false,
+    noticeDays: c.notice_days ?? 30,
+    sortOrder: c.sort_order ?? 0,
+    archived: c.archived ?? false,
+  };
+}
+function appDocCatToDb(c) {
+  return {
+    id: c.id, label: c.label, icon: c.icon || null, color: c.color || null,
+    description: c.description || null,
+    brand_id: c.brandId || null,
+    site_types: Array.isArray(c.siteTypes) ? c.siteTypes : [],
+    requires_expiry: !!c.requiresExpiry,
+    is_required: !!c.isRequired,
+    notice_days: Number(c.noticeDays) || 30,
+    sort_order: Number(c.sortOrder) || 0,
+    archived: !!c.archived,
+  };
+}
+
+function dbStoreDocToApp(d) {
+  return {
+    id: d.id, storeId: d.store_id, categoryId: d.category_id,
+    title: d.title, fileUrl: d.file_url, fileName: d.file_name || "",
+    fileSize: d.file_size != null ? Number(d.file_size) : null,
+    mimeType: d.mime_type || "",
+    issuedDate: d.issued_date || null, expiryDate: d.expiry_date || null,
+    reference: d.reference || "", issuer: d.issuer || "", notes: d.notes || "",
+    tags: Array.isArray(d.tags) ? d.tags : [],
+    version: d.version ?? 1, supersedesId: d.supersedes_id || null,
+    archivedAt: d.archived_at || null,
+    uploadedBy: d.uploaded_by || "", uploadedByName: d.uploaded_by_name || "",
+    createdAt: d.created_at,
+  };
+}
+
+export async function fetchStoreDocCategories({ includeArchived = false } = {}) {
+  let q = supabase.from("store_doc_categories").select("*").order("sort_order").order("label");
+  if (!includeArchived) q = q.eq("archived", false);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(dbDocCatToApp);
+}
+
+export async function upsertStoreDocCategory(cat) {
+  const row = appDocCatToDb({ ...cat, id: cat.id || `sdc-${Date.now()}-${Math.random().toString(36).slice(2, 7)}` });
+  const { data, error } = await supabase.from("store_doc_categories")
+    .upsert(row, { onConflict: "id" }).select().single();
+  if (error) throw error;
+  return dbDocCatToApp(data);
+}
+
+// Archive rather than delete: documents point at the category, and losing the
+// label would make an old certificate unfilable.
+export async function archiveStoreDocCategory(id, archived = true) {
+  const { error } = await supabase.from("store_doc_categories").update({ archived }).eq("id", id);
+  if (error) throw error;
+  return id;
+}
+
+export async function fetchStoreDocuments({ storeId, storeIds, categoryId, includeArchived = false } = {}) {
+  let q = supabase.from("store_documents").select("*").order("created_at", { ascending: false });
+  if (storeId) q = q.eq("store_id", storeId);
+  if (Array.isArray(storeIds) && storeIds.length) q = q.in("store_id", storeIds);
+  if (categoryId) q = q.eq("category_id", categoryId);
+  if (!includeArchived) q = q.is("archived_at", null);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(dbStoreDocToApp);
+}
+
+const DOC_EXT_BY_TYPE = {
+  "application/pdf": "pdf",
+  "image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png", "image/webp": "webp",
+  "image/heic": "heic", "image/heif": "heif",
+  "application/msword": "doc",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+  "application/vnd.ms-excel": "xls",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+};
+
+export async function uploadStoreDocumentFile(file, storeId) {
+  if (!file) throw new Error("No file provided.");
+  const MAX = 25 * 1024 * 1024;
+  if (file.size > MAX) {
+    throw new Error(`That file is ${(file.size / 1024 / 1024).toFixed(1)} MB. The limit is 25 MB — try compressing the PDF or scanning at a lower resolution.`);
+  }
+  let ext = DOC_EXT_BY_TYPE[(file.type || "").toLowerCase()];
+  if (!ext) {
+    const raw = (file.name || "").split("?")[0];
+    const maybe = raw.includes(".") ? raw.split(".").pop().toLowerCase() : "";
+    ext = /^[a-z0-9]{1,5}$/.test(maybe) ? maybe : null;
+  }
+  if (!ext) throw new Error("That file type isn't supported. Use PDF, an image, Word or Excel.");
+  const token = Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  const path = `${storeId || "unassigned"}/${token}.${ext}`;
+  const { error } = await supabase.storage.from("store-documents")
+    .upload(path, file, { upsert: false, contentType: file.type || "application/octet-stream" });
+  if (error) throw error;
+  const { data } = supabase.storage.from("store-documents").getPublicUrl(path);
+  return { url: data.publicUrl, fileName: file.name || `document.${ext}`, fileSize: file.size, mimeType: file.type || "" };
+}
+
+export async function saveStoreDocument(doc) {
+  if (!doc.storeId) throw new Error("A store is required.");
+  if (!doc.fileUrl) throw new Error("Upload the file first.");
+  if (!String(doc.title || "").trim()) throw new Error("Give the document a name.");
+  const row = {
+    id: doc.id || `sd-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+    store_id: doc.storeId, category_id: doc.categoryId || null,
+    title: String(doc.title).trim(), file_url: doc.fileUrl,
+    file_name: doc.fileName || null, file_size: doc.fileSize ?? null, mime_type: doc.mimeType || null,
+    issued_date: doc.issuedDate || null, expiry_date: doc.expiryDate || null,
+    reference: (doc.reference || "").trim() || null, issuer: (doc.issuer || "").trim() || null,
+    notes: (doc.notes || "").trim() || null,
+    tags: Array.isArray(doc.tags) ? doc.tags : [],
+    version: doc.version ?? 1, supersedes_id: doc.supersedesId || null,
+    uploaded_by: doc.uploadedBy || null, uploaded_by_name: doc.uploadedByName || null,
+  };
+  const { data, error } = await supabase.from("store_documents")
+    .upsert(row, { onConflict: "id" }).select().single();
+  if (error) throw error;
+  return dbStoreDocToApp(data);
+}
+
+// Replacing a document keeps the old one readable and linked, so you can still
+// prove what was valid on a past date.
+export async function supersedeStoreDocument(oldDoc, newDoc) {
+  const saved = await saveStoreDocument({
+    ...newDoc, version: (oldDoc.version || 1) + 1, supersedesId: oldDoc.id,
+  });
+  const { error } = await supabase.from("store_documents")
+    .update({ archived_at: new Date().toISOString() }).eq("id", oldDoc.id);
+  if (error) throw error;
+  return saved;
+}
+
+export async function archiveStoreDocument(id, archived = true) {
+  const { error } = await supabase.from("store_documents")
+    .update({ archived_at: archived ? new Date().toISOString() : null }).eq("id", id);
+  if (error) throw error;
+  return id;
+}
+
+export async function deleteStoreDocument(id) {
+  const { error } = await supabase.from("store_documents").delete().eq("id", id);
+  if (error) throw error;
+  return id;
+}
+
+// Compliance roll-up: what's expiring, what's expired, and which required
+// categories have no document at all. The last one is the case that quietly
+// costs you an inspection.
+export async function fetchStoreDocCompliance(storeIds = []) {
+  const [cats, docs] = await Promise.all([
+    fetchStoreDocCategories(),
+    fetchStoreDocuments({ storeIds: storeIds.length ? storeIds : undefined }),
+  ]);
+  const byStoreCat = new Map();
+  docs.forEach(d => {
+    const k = `${d.storeId}|${d.categoryId}`;
+    const cur = byStoreCat.get(k);
+    if (!cur || (d.expiryDate || "") > (cur.expiryDate || "")) byStoreCat.set(k, d);
+  });
+  const required = cats.filter(c => c.isRequired);
+  const gaps = [];
+  storeIds.forEach(sid => {
+    required.forEach(c => {
+      if (!byStoreCat.get(`${sid}|${c.id}`)) gaps.push({ storeId: sid, categoryId: c.id, categoryLabel: c.label });
+    });
+  });
+  const expiring = [], expired = [];
+  docs.forEach(d => {
+    const cat = cats.find(c => c.id === d.categoryId);
+    const { status, days } = docExpiryStatus(d, cat?.noticeDays ?? 30);
+    if (status === DOC_STATUS.EXPIRED) expired.push({ ...d, days });
+    else if (status === DOC_STATUS.EXPIRING) expiring.push({ ...d, days });
+  });
+  expiring.sort((a, b) => a.days - b.days);
+  expired.sort((a, b) => b.days - a.days);
+  return { categories: cats, documents: docs, gaps, expiring, expired };
+}
+
 export async function fetchAppSettings() {
   const { data, error } = await supabase.from("app_settings").select("key, value");
   if (error) throw error;

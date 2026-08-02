@@ -191,6 +191,9 @@ import {
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
   fetchFreshOrderCustomers, saveFreshOrderCustomers, freshAccessActive, setSoFreshAttached, deletePayPeriod, setSoTeamNotes, uploadIssuePhoto,
+  fetchStoreDocCategories, upsertStoreDocCategory, archiveStoreDocCategory,
+  fetchStoreDocuments, uploadStoreDocumentFile, saveStoreDocument, supersedeStoreDocument,
+  archiveStoreDocument, deleteStoreDocument, docExpiryStatus,
   fetchPaySchedule, savePaySchedule, generatePayPeriods, payPeriodStatus, fetchPayPeriodLocations,
   closePayPeriodStore, reopenPayPeriodStore, overridePayPeriodDates, setPunchApproved, approvePunchesInPeriod,
 } from "./supabase";
@@ -8838,6 +8841,503 @@ function TeamNoteBanner({ doc, show = [] }) {
         </div>
       ))}
     </div>
+  );
+}
+
+// ── STOREDOCS 2026-08-01f — per-store document vault ────────────────────────
+// Cream theme, matching the Distribution surfaces. Layout is deliberately
+// compliance-led rather than folder-led: what's expired or missing sits above
+// the library, because that is the question anyone opening this screen is
+// actually asking.
+
+const DOC_ICON_CHOICES = ["FileText", "Shield", "Flame", "Zap", "Home", "Award", "Truck", "Users", "Wrench", "Thermometer"];
+const DOC_COLOR_CHOICES = ["#844429", "#B45309", "#3F6B3A", "#1E5F8C", "#7A3B6B", "#B3261E", "#5C5346"];
+
+function docStatusChip(status, days) {
+  if (status === "expired") return { label: days === -1 ? "Expired yesterday" : `Expired ${Math.abs(days)}d ago`, bg: "#FBEAEA", fg: "#B3261E", bd: "#E8A9A9" };
+  if (status === "expiring") return { label: days === 0 ? "Expires today" : `${days}d left`, bg: "#FFF4DC", fg: "#8A5A0B", bd: "#E5B769" };
+  if (status === "valid") return { label: "Valid", bg: "#EAF3E7", fg: "#3F6B3A", bd: "#BBD6B4" };
+  return { label: "No expiry", bg: "#F0E6D2", fg: "#7A6A58", bd: "#E8DCC6" };
+}
+
+function fmtBytes(n) {
+  if (!n) return "";
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function StoreDocumentsView({ stores = [], visibleStoreIds = [], currentUser, brands = [] }) {
+  const T = { ink: "#3A2E26", soft: "#7A6A58", faint: "#9A8770", line: "#E8DCC6", card: "#FDF8EF", head: "#3A2E26", field: "#FFFFFF", accent: "#844429", ground: "#FAF3E6" };
+  const scoped = useMemo(
+    () => stores.filter(s => !s.archivedAt && visibleStoreIds.includes(s.id))
+      .sort((a, b) => (a.shortName || a.name || "").localeCompare(b.shortName || b.name || "")),
+    [stores, visibleStoreIds]);
+
+  const [storeId, setStoreId] = useState("");
+  const [cats, setCats] = useState([]);
+  const [docs, setDocs] = useState([]);
+  const [catFilter, setCatFilter] = useState("all");
+  const [q, setQ] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [editing, setEditing] = useState(null);      // document form
+  const [manageCats, setManageCats] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+
+  useEffect(() => { if (!storeId && scoped.length) setStoreId(scoped[0].id); }, [scoped, storeId]);
+
+  const load = useCallback(async () => {
+    if (!storeId) return;
+    setLoading(true); setErr("");
+    try {
+      const [c, d] = await Promise.all([
+        fetchStoreDocCategories(),
+        fetchStoreDocuments({ storeId, includeArchived: showArchived }),
+      ]);
+      setCats(c); setDocs(d);
+    } catch (e) { setErr(e.message); }
+    setLoading(false);
+  }, [storeId, showArchived]);
+  useEffect(() => { load(); }, [load]);
+
+  const store = scoped.find(s => s.id === storeId) || null;
+
+  // A category applies to this store if it isn't brand- or site-type-scoped
+  // away from it. Lets a brand run its own compliance set without cluttering
+  // everyone else's.
+  const applicable = useMemo(() => cats.filter(c =>
+    (!c.brandId || c.brandId === store?.brandId) &&
+    (!c.siteTypes?.length || c.siteTypes.includes(store?.siteType || "shop"))
+  ), [cats, store]);
+
+  const catById = useMemo(() => new Map(cats.map(c => [c.id, c])), [cats]);
+
+  const enriched = useMemo(() => docs.map(d => {
+    const cat = catById.get(d.categoryId);
+    const { status, days } = docExpiryStatus(d, cat?.noticeDays ?? 30);
+    return { ...d, cat, status, days };
+  }), [docs, catById]);
+
+  const visible = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return enriched
+      .filter(d => catFilter === "all" || d.categoryId === catFilter)
+      .filter(d => !needle || [d.title, d.reference, d.issuer, d.notes, d.cat?.label].some(v => String(v || "").toLowerCase().includes(needle)))
+      .sort((a, b) => {
+        const rank = { expired: 0, expiring: 1, valid: 2, no_expiry: 3 };
+        return (rank[a.status] - rank[b.status]) || (a.title || "").localeCompare(b.title || "");
+      });
+  }, [enriched, catFilter, q]);
+
+  const expired = enriched.filter(d => d.status === "expired" && !d.archivedAt);
+  const expiring = enriched.filter(d => d.status === "expiring" && !d.archivedAt);
+  const gaps = applicable.filter(c => c.isRequired && !docs.some(d => d.categoryId === c.id && !d.archivedAt));
+
+  const card = { background: T.card, border: `1px solid ${T.line}` };
+  const headSty = { background: T.head, color: "#F3E9D8" };
+  const ctl = "px-3 py-2 rounded-lg text-sm focus:outline-none";
+  const ctlSty = { background: T.field, border: `1px solid ${T.line}`, color: T.ink };
+
+  return (
+    <div className="space-y-4">
+      {/* Store picker + actions */}
+      <div className="flex flex-wrap items-center gap-2">
+        <select value={storeId} onChange={e => setStoreId(e.target.value)} className={ctl} style={ctlSty}>
+          {scoped.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+        </select>
+        <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search documents…" className={`${ctl} w-64`} style={ctlSty}/>
+        <label className="flex items-center gap-1.5 text-xs font-semibold cursor-pointer" style={{ color: T.soft }}>
+          <input type="checkbox" checked={showArchived} onChange={e => setShowArchived(e.target.checked)}/>
+          Show superseded
+        </label>
+        <div className="ml-auto flex gap-2">
+          <button onClick={() => setManageCats(true)} className="px-3 py-2 rounded-xl text-sm font-semibold" style={{ background: "#F0E6D2", color: T.ink, border: `1px solid ${T.line}` }}>
+            <Settings size={14} className="inline mr-1"/> Categories
+          </button>
+          <button onClick={() => setEditing({ storeId, title: "", categoryId: applicable[0]?.id || "" })}
+            className="px-3 py-2 rounded-xl text-sm font-bold text-white" style={{ background: T.accent }}>
+            <Plus size={14} className="inline mr-1"/> Add document
+          </button>
+        </div>
+      </div>
+
+      {err && <div className="text-xs px-3 py-2 rounded-lg" style={{ background: "#FBEAEA", color: "#B3261E", border: "1px solid #E8A9A9" }}>{err}</div>}
+
+      {/* Compliance first — this is the question people open the screen with. */}
+      {(expired.length > 0 || expiring.length > 0 || gaps.length > 0) && (
+        <div className="grid sm:grid-cols-3 gap-3">
+          {[
+            ["Expired", expired.length, "#FBEAEA", "#B3261E", "#E8A9A9", "needs replacing now"],
+            ["Expiring soon", expiring.length, "#FFF4DC", "#8A5A0B", "#E5B769", "renew before it lapses"],
+            ["Missing", gaps.length, "#F3EDE2", "#5C5346", "#E8DCC6", "required, nothing on file"],
+          ].filter(([, n]) => n > 0).map(([label, n, bg, fg, bd, sub]) => (
+            <div key={label} className="rounded-xl px-4 py-3" style={{ background: bg, border: `1px solid ${bd}` }}>
+              <div className="text-[10px] uppercase tracking-widest font-bold" style={{ color: fg }}>{label}</div>
+              <div className="text-2xl font-bold" style={{ color: fg }}>{n}</div>
+              <div className="text-[11px]" style={{ color: fg, opacity: 0.75 }}>{sub}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {gaps.length > 0 && (
+        <div className="rounded-xl px-4 py-3" style={{ background: T.card, border: `1px solid ${T.line}` }}>
+          <div className="text-[10px] uppercase tracking-widest font-bold mb-2" style={{ color: T.faint }}>Required but not on file</div>
+          <div className="flex flex-wrap gap-2">
+            {gaps.map(c => (
+              <button key={c.id} onClick={() => setEditing({ storeId, title: "", categoryId: c.id })}
+                className="px-2.5 py-1.5 rounded-lg text-xs font-semibold" style={{ background: "#F3EDE2", color: T.ink, border: `1px dashed ${T.line}` }}>
+                + {c.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Category filter */}
+      <div className="flex flex-wrap gap-1.5">
+        <button onClick={() => setCatFilter("all")}
+          className="px-3 py-1.5 rounded-lg text-xs font-bold"
+          style={catFilter === "all" ? { background: T.accent, color: "#fff" } : { background: "#F0E6D2", color: T.ink, border: `1px solid ${T.line}` }}>
+          All ({enriched.length})
+        </button>
+        {applicable.map(c => {
+          const n = enriched.filter(d => d.categoryId === c.id).length;
+          const on = catFilter === c.id;
+          return (
+            <button key={c.id} onClick={() => setCatFilter(c.id)}
+              className="px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5"
+              style={on ? { background: c.color, color: "#fff" } : { background: "#F0E6D2", color: T.ink, border: `1px solid ${T.line}` }}>
+              <span className="w-2 h-2 rounded-full" style={{ background: on ? "rgba(255,255,255,.7)" : c.color }}/>
+              {c.label} {n > 0 && <span style={{ opacity: 0.7 }}>({n})</span>}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Library */}
+      {loading ? (
+        <div className="text-center py-12 text-sm" style={{ color: T.faint }}>Loading…</div>
+      ) : visible.length === 0 ? (
+        <div className="rounded-xl text-center py-14" style={card}>
+          <FileText size={30} className="mx-auto mb-2" style={{ color: T.faint }}/>
+          <div className="text-sm font-semibold" style={{ color: T.ink }}>
+            {q || catFilter !== "all" ? "Nothing matches that." : `No documents yet for ${store?.shortName || store?.name || "this store"}.`}
+          </div>
+          <div className="text-xs mt-1" style={{ color: T.faint }}>Insurance, food-safety certificates, the lease, gas and electrical certs.</div>
+        </div>
+      ) : (
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          {visible.map(d => {
+            const chip = docStatusChip(d.status, d.days);
+            return (
+              <div key={d.id} className="rounded-xl overflow-hidden flex flex-col" style={{ ...card, opacity: d.archivedAt ? 0.6 : 1 }}>
+                <div className="h-1" style={{ background: d.cat?.color || T.accent }}/>
+                <div className="p-3.5 flex-1">
+                  <div className="flex items-start justify-between gap-2 mb-1.5">
+                    <span className="text-[10px] uppercase tracking-wide font-bold" style={{ color: d.cat?.color || T.faint }}>
+                      {d.cat?.label || "Uncategorised"}
+                    </span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap"
+                      style={{ background: chip.bg, color: chip.fg, border: `1px solid ${chip.bd}` }}>{chip.label}</span>
+                  </div>
+                  <div className="text-sm font-bold leading-snug" style={{ color: T.ink }}>{d.title}</div>
+                  {(d.issuer || d.reference) && (
+                    <div className="text-[11px] mt-0.5" style={{ color: T.soft }}>
+                      {d.issuer}{d.issuer && d.reference ? " · " : ""}{d.reference}
+                    </div>
+                  )}
+                  <div className="text-[11px] mt-2 space-y-0.5" style={{ color: T.faint }}>
+                    {d.issuedDate && <div>Issued {new Date(d.issuedDate).toLocaleDateString("en-GB")}</div>}
+                    {d.expiryDate && <div>Expires {new Date(d.expiryDate).toLocaleDateString("en-GB")}</div>}
+                    {d.version > 1 && <div>Version {d.version}</div>}
+                    {d.archivedAt && <div style={{ color: "#B3261E" }}>Superseded</div>}
+                  </div>
+                  {d.notes && <div className="text-[11px] mt-2 italic" style={{ color: T.soft }}>{d.notes}</div>}
+                </div>
+                <div className="flex items-center gap-1 px-3 py-2" style={{ borderTop: `1px solid ${T.line}` }}>
+                  <a href={d.fileUrl} target="_blank" rel="noreferrer"
+                    className="px-2.5 py-1 rounded-lg text-[11px] font-bold" style={{ background: "#F0E6D2", color: T.ink }}>Open</a>
+                  <span className="text-[10px]" style={{ color: T.faint }}>{fmtBytes(d.fileSize)}</span>
+                  <div className="ml-auto flex gap-1">
+                    <button onClick={() => setEditing({ ...d })} title="Edit details"
+                      className="p-1.5 rounded-lg" style={{ color: T.faint }}><Pencil size={13}/></button>
+                    <button onClick={() => setEditing({ storeId, categoryId: d.categoryId, title: d.title, issuer: d.issuer, reference: d.reference, _supersedes: d })}
+                      title="Upload a replacement — keeps this one on file"
+                      className="p-1.5 rounded-lg" style={{ color: T.faint }}><RotateCcw size={13}/></button>
+                    <button onClick={async () => {
+                      if (!window.confirm(`Delete "${d.title}"? This can't be undone — use Replace if a newer version has arrived.`)) return;
+                      try { await deleteStoreDocument(d.id); await load(); } catch (e) { setErr(e.message); }
+                    }} title="Delete" className="p-1.5 rounded-lg" style={{ color: "#B3261E" }}><Trash2 size={13}/></button>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {editing && (
+        <StoreDocFormModal doc={editing} store={store} categories={applicable} currentUser={currentUser}
+          onClose={() => setEditing(null)} onSaved={async () => { setEditing(null); await load(); }}/>
+      )}
+      {manageCats && (
+        <StoreDocCategoriesModal categories={cats} brands={brands}
+          onClose={() => setManageCats(false)} onChanged={load}/>
+      )}
+    </div>
+  );
+}
+
+function StoreDocFormModal({ doc, store, categories, currentUser, onClose, onSaved }) {
+  const T = { ink: "#3A2E26", faint: "#9A8770", line: "#E8DCC6", field: "#FFFFFF", accent: "#844429" };
+  const isReplace = !!doc._supersedes;
+  const [f, setF] = useState({
+    id: doc.id, storeId: doc.storeId, categoryId: doc.categoryId || "",
+    title: doc.title || "", issuer: doc.issuer || "", reference: doc.reference || "",
+    issuedDate: doc.issuedDate || "", expiryDate: doc.expiryDate || "", notes: doc.notes || "",
+    fileUrl: isReplace ? "" : (doc.fileUrl || ""), fileName: isReplace ? "" : (doc.fileName || ""),
+    fileSize: isReplace ? null : doc.fileSize, mimeType: isReplace ? "" : doc.mimeType,
+  });
+  const set = (patch) => setF(x => ({ ...x, ...patch }));
+  const fileRef = useRef(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const cat = categories.find(c => c.id === f.categoryId);
+  const ctl = "w-full px-3 py-2 rounded-lg text-sm focus:outline-none";
+  const ctlSty = { background: T.field, border: `1px solid ${T.line}`, color: T.ink };
+  const lbl = "block text-[11px] font-semibold mb-1";
+
+  const pick = async (file) => {
+    if (!file) return;
+    setBusy(true); setErr("");
+    try {
+      const up = await uploadStoreDocumentFile(file, f.storeId);
+      set({ fileUrl: up.url, fileName: up.fileName, fileSize: up.fileSize, mimeType: up.mimeType });
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  };
+
+  const save = async () => {
+    setBusy(true); setErr("");
+    try {
+      const payload = { ...f, uploadedBy: currentUser?.id || "", uploadedByName: currentUser?.name || "" };
+      if (isReplace) await supersedeStoreDocument(doc._supersedes, { ...payload, id: undefined });
+      else await saveStoreDocument(payload);
+      onSaved();
+    } catch (e) { setErr(e.message); setBusy(false); }
+  };
+
+  return (
+    <Modal onClose={onClose} title={isReplace ? `Replace — ${doc._supersedes.title}` : doc.id ? "Edit document" : `Add document · ${store?.shortName || store?.name || ""}`} maxW="max-w-2xl">
+      <div className="space-y-3">
+        {isReplace && (
+          <div className="text-xs px-3 py-2 rounded-lg" style={{ background: "#FFF4DC", color: "#8A5A0B", border: "1px solid #E5B769" }}>
+            The current version stays on file marked superseded, so you can still show what was valid on a past date.
+          </div>
+        )}
+
+        {/* File first — everything else describes it. */}
+        <div className="rounded-xl p-3" style={{ background: f.fileUrl ? "#EAF3E7" : "#F3EDE2", border: `1px solid ${f.fileUrl ? "#BBD6B4" : T.line}` }}>
+          <input ref={fileRef} type="file" className="hidden"
+            accept=".pdf,.jpg,.jpeg,.png,.webp,.heic,.doc,.docx,.xls,.xlsx"
+            onChange={e => { pick(e.target.files?.[0]); e.target.value = ""; }}/>
+          {f.fileUrl ? (
+            <div className="flex items-center gap-2 flex-wrap">
+              <FileText size={16} style={{ color: "#3F6B3A" }}/>
+              <span className="text-sm font-semibold" style={{ color: T.ink }}>{f.fileName}</span>
+              <span className="text-[11px]" style={{ color: T.faint }}>{fmtBytes(f.fileSize)}</span>
+              <button onClick={() => fileRef.current?.click()} className="ml-auto text-xs font-bold" style={{ color: T.accent }}>Change</button>
+            </div>
+          ) : (
+            <button onClick={() => fileRef.current?.click()} disabled={busy}
+              className="w-full py-4 text-sm font-semibold flex flex-col items-center gap-1" style={{ color: T.faint }}>
+              <Upload size={20}/>
+              {busy ? "Uploading…" : "Choose a file — PDF, image, Word or Excel (max 25 MB)"}
+            </button>
+          )}
+        </div>
+
+        <div className="grid sm:grid-cols-2 gap-3">
+          <div className="sm:col-span-2">
+            <label className={lbl} style={{ color: T.faint }}>Document name <span style={{ color: "#B3261E" }}>*</span></label>
+            <input value={f.title} onChange={e => set({ title: e.target.value })} placeholder="e.g. Employers' liability insurance 2026/27" className={ctl} style={ctlSty}/>
+          </div>
+          <div>
+            <label className={lbl} style={{ color: T.faint }}>Category</label>
+            <select value={f.categoryId} onChange={e => set({ categoryId: e.target.value })} className={ctl} style={ctlSty}>
+              <option value="">Uncategorised</option>
+              {categories.map(c => <option key={c.id} value={c.id}>{c.label}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className={lbl} style={{ color: T.faint }}>Issued by</label>
+            <input value={f.issuer} onChange={e => set({ issuer: e.target.value })} placeholder="Insurer, council, engineer…" className={ctl} style={ctlSty}/>
+          </div>
+          <div>
+            <label className={lbl} style={{ color: T.faint }}>Reference / policy no.</label>
+            <input value={f.reference} onChange={e => set({ reference: e.target.value })} className={ctl} style={ctlSty}/>
+          </div>
+          <div>
+            <label className={lbl} style={{ color: T.faint }}>Issued on</label>
+            <input type="date" value={f.issuedDate} onChange={e => set({ issuedDate: e.target.value })} className={ctl} style={ctlSty}/>
+          </div>
+          <div className="sm:col-span-2">
+            <label className={lbl} style={{ color: cat?.requiresExpiry ? "#8A5A0B" : T.faint }}>
+              Expires on {cat?.requiresExpiry && <span style={{ color: "#B3261E" }}>*</span>}
+            </label>
+            <input type="date" value={f.expiryDate} onChange={e => set({ expiryDate: e.target.value })} className={ctl} style={ctlSty}/>
+            {cat?.requiresExpiry && !f.expiryDate && (
+              <div className="text-[11px] mt-1" style={{ color: "#8A5A0B" }}>{cat.label} documents expire — without a date this won't be chased.</div>
+            )}
+          </div>
+          <div className="sm:col-span-2">
+            <label className={lbl} style={{ color: T.faint }}>Notes</label>
+            <textarea value={f.notes} onChange={e => set({ notes: e.target.value })} rows={2} className={`${ctl} resize-none`} style={ctlSty}/>
+          </div>
+        </div>
+
+        {err && <div className="text-xs px-3 py-2 rounded-lg" style={{ background: "#FBEAEA", color: "#B3261E", border: "1px solid #E8A9A9" }}>{err}</div>}
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button onClick={onClose} className="px-4 py-2 rounded-xl text-sm font-semibold" style={{ background: "#F0E6D2", color: T.ink, border: `1px solid ${T.line}` }}>Cancel</button>
+          <button onClick={save} disabled={busy || !f.fileUrl || !f.title.trim()}
+            className="px-5 py-2 rounded-xl text-sm font-bold text-white disabled:opacity-40" style={{ background: T.accent }}>
+            {busy ? "Saving…" : isReplace ? "Save replacement" : "Save document"}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function StoreDocCategoriesModal({ categories, brands = [], onClose, onChanged }) {
+  const T = { ink: "#3A2E26", faint: "#9A8770", line: "#E8DCC6", field: "#FFFFFF", accent: "#844429" };
+  const [list, setList] = useState(categories);
+  const [edit, setEdit] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const ctl = "w-full px-3 py-2 rounded-lg text-sm focus:outline-none";
+  const ctlSty = { background: T.field, border: `1px solid ${T.line}`, color: T.ink };
+  const lbl = "block text-[11px] font-semibold mb-1";
+
+  const save = async () => {
+    setBusy(true); setErr("");
+    try {
+      const saved = await upsertStoreDocCategory(edit);
+      setList(l => l.some(c => c.id === saved.id) ? l.map(c => c.id === saved.id ? saved : c) : [...l, saved]);
+      setEdit(null); onChanged();
+    } catch (e) { setErr(e.message); }
+    setBusy(false);
+  };
+
+  return (
+    <Modal onClose={onClose} title="Document categories" maxW="max-w-2xl">
+      <div className="space-y-3">
+        <p className="text-xs" style={{ color: T.faint }}>
+          Categories are shared across stores. Mark one <b>required</b> and every store missing it is flagged; mark it <b>expiring</b> and documents in it get chased before they lapse.
+        </p>
+
+        {!edit && (
+          <>
+            <div className="rounded-xl overflow-hidden" style={{ border: `1px solid ${T.line}` }}>
+              {list.filter(c => !c.archived).map(c => (
+                <div key={c.id} className="flex items-center gap-2.5 px-3 py-2.5" style={{ borderTop: `1px solid ${T.line}`, background: "#FDF8EF" }}>
+                  <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: c.color }}/>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-sm font-semibold" style={{ color: T.ink }}>{c.label}</div>
+                    <div className="text-[11px]" style={{ color: T.faint }}>
+                      {[c.isRequired && "required", c.requiresExpiry && `expires · ${c.noticeDays}d notice`,
+                        c.brandId && (brands.find(b => b.id === c.brandId)?.name || "one brand"),
+                        c.siteTypes?.length && c.siteTypes.join(", ")].filter(Boolean).join(" · ") || "optional"}
+                    </div>
+                  </div>
+                  <button onClick={() => setEdit({ ...c })} className="p-1.5" style={{ color: T.faint }}><Pencil size={13}/></button>
+                  <button onClick={async () => {
+                    if (!window.confirm(`Archive "${c.label}"? Existing documents keep the label but it won't be offered for new ones.`)) return;
+                    try { await archiveStoreDocCategory(c.id, true); setList(l => l.map(x => x.id === c.id ? { ...x, archived: true } : x)); onChanged(); }
+                    catch (e) { setErr(e.message); }
+                  }} className="p-1.5" style={{ color: "#B3261E" }}><Trash2 size={13}/></button>
+                </div>
+              ))}
+              {list.filter(c => !c.archived).length === 0 && (
+                <div className="text-center py-8 text-sm" style={{ color: T.faint }}>No categories yet.</div>
+              )}
+            </div>
+            <button onClick={() => setEdit({ label: "", color: DOC_COLOR_CHOICES[0], icon: "FileText", noticeDays: 30, siteTypes: [], sortOrder: list.length })}
+              className="px-4 py-2 rounded-xl text-sm font-bold text-white" style={{ background: T.accent }}>
+              <Plus size={14} className="inline mr-1"/> New category
+            </button>
+          </>
+        )}
+
+        {edit && (
+          <div className="space-y-3 rounded-xl p-3" style={{ background: "#FDF8EF", border: `1px solid ${T.line}` }}>
+            <div>
+              <label className={lbl} style={{ color: T.faint }}>Name</label>
+              <input value={edit.label} onChange={e => setEdit({ ...edit, label: e.target.value })} placeholder="e.g. Food hygiene certificate" className={ctl} style={ctlSty}/>
+            </div>
+            <div>
+              <label className={lbl} style={{ color: T.faint }}>Colour</label>
+              <div className="flex gap-1.5">
+                {DOC_COLOR_CHOICES.map(c => (
+                  <button key={c} onClick={() => setEdit({ ...edit, color: c })}
+                    className="w-7 h-7 rounded-lg" style={{ background: c, outline: edit.color === c ? `2px solid ${T.ink}` : "none", outlineOffset: 2 }}/>
+                ))}
+              </div>
+            </div>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <div>
+                <label className={lbl} style={{ color: T.faint }}>Applies to brand</label>
+                <select value={edit.brandId || ""} onChange={e => setEdit({ ...edit, brandId: e.target.value || null })} className={ctl} style={ctlSty}>
+                  <option value="">All brands</option>
+                  {brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className={lbl} style={{ color: T.faint }}>Renewal notice (days)</label>
+                <input type="number" min="1" max="365" value={edit.noticeDays} onChange={e => setEdit({ ...edit, noticeDays: e.target.value })} className={ctl} style={ctlSty}/>
+              </div>
+            </div>
+            <div>
+              <label className={lbl} style={{ color: T.faint }}>Applies to site types</label>
+              <div className="flex flex-wrap gap-1.5">
+                {["shop", "central_kitchen", "distribution", "franchise_ops"].map(t => {
+                  const on = (edit.siteTypes || []).includes(t);
+                  return (
+                    <button key={t} onClick={() => setEdit({ ...edit, siteTypes: on ? edit.siteTypes.filter(x => x !== t) : [...(edit.siteTypes || []), t] })}
+                      className="px-2.5 py-1 rounded-lg text-[11px] font-semibold"
+                      style={on ? { background: T.accent, color: "#fff" } : { background: "#F0E6D2", color: T.ink, border: `1px solid ${T.line}` }}>
+                      {t.replace(/_/g, " ")}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="text-[10px] mt-1" style={{ color: T.faint }}>None selected means every site type.</div>
+            </div>
+            <div className="flex flex-wrap gap-4">
+              <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer" style={{ color: T.ink }}>
+                <input type="checkbox" checked={!!edit.isRequired} onChange={e => setEdit({ ...edit, isRequired: e.target.checked })}/>
+                Required — flag stores that don't have one
+              </label>
+              <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer" style={{ color: T.ink }}>
+                <input type="checkbox" checked={!!edit.requiresExpiry} onChange={e => setEdit({ ...edit, requiresExpiry: e.target.checked })}/>
+                Has an expiry date
+              </label>
+            </div>
+            {err && <div className="text-xs" style={{ color: "#B3261E" }}>{err}</div>}
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setEdit(null)} className="px-3 py-1.5 rounded-lg text-xs font-semibold" style={{ background: "#F0E6D2", color: T.ink }}>Cancel</button>
+              <button onClick={save} disabled={busy || !edit.label.trim()} className="px-4 py-1.5 rounded-lg text-xs font-bold text-white disabled:opacity-40" style={{ background: T.accent }}>
+                {busy ? "Saving…" : "Save category"}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }
 
@@ -63053,7 +63553,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: SOTHEME 2026-08-01e");
+      console.log("CB build: STOREDOCS 2026-08-01f");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -63073,7 +63573,7 @@ export default function App() {
   // Tasks, Temperatures, Deliveries, Issues, Assignments. The old per-item nav
   // keys still work and redirect into the matching tab.
   const [opsTab, setOpsTab] = useState("ops-network");
-  const OPS_TAB_KEYS = ["ops-network", "ops-tasks", "ops-temps", "ops-deliveries", "issues", "ops-assigns", "smallware"];
+  const OPS_TAB_KEYS = ["ops-network", "ops-tasks", "ops-temps", "ops-deliveries", "issues", "ops-assigns", "smallware", "store-docs"];
   useEffect(() => {
     if (OPS_TAB_KEYS.includes(activeView)) setOpsTab(activeView);
   }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -64600,6 +65100,7 @@ export default function App() {
         { key: "operations:issues",         view: "operations", tab: "issues",         label: "Issues",        icon: AlertTriangle, badge: openIssueCount > 0 ? openIssueCount.toString() : null },
         { key: "operations:ops-assigns",    view: "operations", tab: "ops-assigns",    label: "Assignments",   icon: ClipboardList },
         { key: "operations:smallware",      view: "operations", tab: "smallware",      label: "Assets",        icon: Package },
+        { key: "operations:store-docs",     view: "operations", tab: "store-docs",     label: "Documents",     icon: FolderOpen },
       ]},
       { key: "dist-order",     label: "Order Supplies", icon: ShoppingCart },
       { key: "agent-inbox",    label: "Agent Inbox", icon: Sparkles, badge: agentPendingCount > 0 ? agentPendingCount.toString() : null },
@@ -64930,6 +65431,8 @@ export default function App() {
                   {effOpsTab === "ops-network" && <OpsNetworkDashboard brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds} assignments={assignments} auditTrail={auditTrail} opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} checklistStates={checklistStates}/>}
                   {effOpsTab === "ops-assigns" && <AssignmentsView brands={visibleBrands} stores={stores} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} opsTeam={opsTeam} storeRoles={storeRoles} storeDepartments={storeDepartments} auditTrail={auditTrail} onAdd={addAssignment} onAddMany={addAssignments} onEdit={updateAssignment} onDelete={deleteAssignment}/>}
                   {effOpsTab === "smallware" && <SmallwareView brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds} opsTeam={opsTeam} currentUser={currentUser} isManagerView={isHqOrAbove(currentUser.role) || currentUser.role === "manager"}/>}
+                  {/* STOREDOCS 2026-08-01f — per-store document vault. */}
+                  {effOpsTab === "store-docs" && <StoreDocumentsView stores={stores} visibleStoreIds={crossEntityStoreIds} currentUser={currentUser} brands={visibleBrands}/>}
                 </div>
               );
             })()}
