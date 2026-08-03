@@ -64082,7 +64082,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: FLAGCONTEXT 2026-08-03c");
+      console.log("CB build: PRINTSAFE 2026-08-04a");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:

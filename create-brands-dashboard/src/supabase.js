@@ -16086,19 +16086,58 @@ export async function autoPrintSoTicket(soId) {
         amount: l.discount_type === "percent" ? gross * (1 - disc / 100) : gross - disc };
     });
     const net = lines.reduce((a, l) => a + l.amount, 0);
-    await supabase.from("ck_label_jobs").insert({ status: "queued", kind: "doc", payload: {
+    await supabase.from("ck_label_jobs").insert({ status: "queued", kind: "doc", payload: sanitiseDocPayload({
       title: "SALES ORDER", subtitle: so.so_number,
       meta: [`Customer: ${cust?.display_name || cust?.company || ""}`, `Date: ${so.order_date || ""}`, `Status: CONFIRMED`],
       lines, totals: [{ label: "Net (ex VAT/ship)", value: net, strong: true }],
       note: so.note || "", footer: "Create Brands Distribution",
-    }, created_by: "auto" });
+    }), created_by: "auto" });
   } catch { /* printing must never break order flow */ }
+}
+
+// PRINTSAFE 2026-08-04a — sanitise before queueing. A totals row whose value
+// was undefined (e.g. taxTotal not computed) had its key DROPPED by
+// JSON.stringify, so the payload reached the printer as { "label": "VAT" }
+// with no value. The CloudPRNT renderer then threw on it, served an empty
+// body, printed a blank page and never marked the job done — so the same
+// poison job replayed on every poll and blocked everything behind it.
+//
+// Coercing here covers every caller rather than the one that happened to break.
+function sanitiseDocPayload(p = {}) {
+  const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+  return {
+    ...p,
+    title: String(p.title || "DOCUMENT"),
+    subtitle: String(p.subtitle || ""),
+    meta: (p.meta || []).map(m => String(m ?? "")),
+    note: String(p.note || ""),
+    footer: String(p.footer || ""),
+    lines: (p.lines || [])
+      .filter(l => l && (l.name || l.itemId))
+      .map(l => ({
+        name: String(l.name || l.itemId || ""),
+        category: String(l.category || ""),
+        note: String(l.note || ""),
+        qty: num(l.qty),
+        unitPrice: num(l.unitPrice),
+        // Round here too: 3.9000000000000004 wastes characters on a 32-column
+        // receipt and looks broken.
+        amount: Math.round(num(l.amount) * 100) / 100,
+      })),
+    totals: (p.totals || [])
+      .filter(t => t && t.label)
+      .map(t => ({
+        label: String(t.label),
+        value: Math.round(num(t.value) * 100) / 100,
+        strong: !!t.strong,
+      })),
+  };
 }
 
 // Receipt-style document (SO / invoice) on the warehouse Star printer.
 export async function enqueueDistDocPrint(payload, user) {
   const { error } = await supabase.from("ck_label_jobs").insert({
-    status: "queued", kind: "doc", payload,
+    status: "queued", kind: "doc", payload: sanitiseDocPayload(payload),
     created_by: user?.name || user?.id || null,
   });
   if (error) throw error;
