@@ -57629,7 +57629,12 @@ function flagPunch(p, member) {
   return flags;
 }
 
-function FlaggedPunchesTab({ enriched = [], opsTeam = [], stores = [], onAmend, from, to }) {
+function FlaggedPunchesTab({ allPunches = [], opsTeam = [], stores = [], onAmend }) {
+  // FLAGGEDRANGE 2026-08-02f — this tab used to read the same week-filtered
+  // list as Records, so an auto clock-out from last month was invisible. A
+  // review queue has to show everything still outstanding, not just the week
+  // you happen to be looking at. Own range control, defaulting to 90 days.
+  const [rangeDays, setRangeDays] = useState(90);
   const T = { ink: "#3A2E26", soft: "#7A6A58", faint: "#9A8770", line: "#E8DCC6", card: "#FDF8EF", accent: "#844429" };
   const [view, setView] = useState("pending");     // pending | fixed | all
   const [typeFilter, setTypeFilter] = useState("all");
@@ -57639,9 +57644,15 @@ function FlaggedPunchesTab({ enriched = [], opsTeam = [], stores = [], onAmend, 
     return s ? (s.shortName || s.name) : "—";
   }, [stores]);
 
+  const cutoff = useMemo(() => {
+    if (rangeDays === 0) return "0000-01-01";
+    const d = new Date(); d.setDate(d.getDate() - rangeDays);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }, [rangeDays]);
+
   const rows = useMemo(() => {
     const out = [];
-    (enriched || []).forEach(p => {
+    (allPunches || []).filter(p => (p.date || "") >= cutoff).forEach(p => {
       const member = (opsTeam || []).find(m => m.id === p.employeeId) || null;
       const flags = flagPunch(p, member);
       if (!flags.length) return;
@@ -57653,7 +57664,7 @@ function FlaggedPunchesTab({ enriched = [], opsTeam = [], stores = [], onAmend, 
     const sev = { high: 0, med: 1, low: 2 };
     return out.sort((a, b) =>
       (sev[a.top.sev] - sev[b.top.sev]) || (b.p.date || "").localeCompare(a.p.date || ""));
-  }, [enriched, opsTeam]);
+  }, [allPunches, opsTeam, cutoff]);
 
   const pending = rows.filter(r => !r.fixed);
   const fixed = rows.filter(r => r.fixed);
@@ -57672,8 +57683,15 @@ function FlaggedPunchesTab({ enriched = [], opsTeam = [], stores = [], onAmend, 
 
   return (
     <div className="space-y-3">
-      <div className="text-[11px]" style={{ color: T.soft }}>
-        {from === to ? from : `${from} → ${to}`} · {rows.length} flagged punch{rows.length === 1 ? "" : "es"}
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[11px]" style={{ color: T.soft }}>
+          {rows.length} flagged punch{rows.length === 1 ? "" : "es"} ·
+        </span>
+        {[[30, "30 days"], [90, "90 days"], [365, "1 year"], [0, "All time"]].map(([d, l]) => (
+          <button key={d} onClick={() => setRangeDays(d)}
+            className="px-2.5 py-1 rounded-lg text-[11px] font-bold"
+            style={rangeDays === d ? { background: T.accent, color: "#fff" } : { background: "#F0E6D2", color: T.ink, border: `1px solid ${T.line}` }}>{l}</button>
+        ))}
       </div>
 
       {/* Pending / Fixed */}
@@ -58505,11 +58523,14 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
   // FLAGGED 2026-08-02d — must sit AFTER `enriched`: a useMemo dependency array
   // is evaluated immediately, so referencing a const declared further down the
   // component throws "Cannot access X before initialization" and blanks the app.
-  const flaggedPendingCount = useMemo(() => (enriched || []).filter(p => {
+  // FLAGGEDRANGE — counts across everything in scope, not the visible week, so
+  // the badge reflects what's actually outstanding.
+  const scopedPunches = useMemo(() => punchRecords.filter(r => inScope(r)), [punchRecords, inScope]);
+  const flaggedPendingCount = useMemo(() => scopedPunches.filter(p => {
     const member = (opsTeam || []).find(m => m.id === p.employeeId) || null;
     if (!flagPunch(p, member).length) return false;
     return !(p.amendedBy || (p.status === "auto_closed" && Number(p.grossPay) > 0));
-  }).length, [enriched, opsTeam]);
+  }).length, [scopedPunches, opsTeam]);
 
   // Live hours: closed -> graced stored hours; open -> elapsed since (graced) clock-in.
   const liveHours = (r) => {
@@ -59128,7 +59149,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
       })()}
 
       {/* ── Summary ── */}
-      {tab === "flagged" && <FlaggedPunchesTab enriched={enriched} opsTeam={opsTeam} stores={stores} from={from} to={to} onAmend={setAmendModal} />}
+      {tab === "flagged" && <FlaggedPunchesTab allPunches={scopedPunches} opsTeam={opsTeam} stores={stores} onAmend={setAmendModal} />}
       {tab === "breaks" && <BreaksAnalysisTab enriched={enriched} breakSplit={breakSplit} opsTeam={opsTeam} stores={stores} from={from} to={to} periodStoreId={periodStoreId} breakOptOut={breakOptOut} onOptOutChanged={onOptOutChanged} />}
 
       {tab === "summary" && (
@@ -63970,7 +63991,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: TAFACILITIES 2026-08-02e");
+      console.log("CB build: FLAGGEDRANGE 2026-08-02f");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
