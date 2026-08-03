@@ -191,6 +191,7 @@ import {
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
   fetchFreshOrderCustomers, saveFreshOrderCustomers, freshAccessActive, setSoFreshAttached, deletePayPeriod, setSoTeamNotes, uploadIssuePhoto,
+  fetchBreakOptOutStores, saveBreakOptOutStores, storeOptsOutOfBreaks,
   fetchStoreDocCategories, upsertStoreDocCategory, archiveStoreDocCategory,
   fetchStoreDocuments, uploadStoreDocumentFile, saveStoreDocument, supersedeStoreDocument,
   archiveStoreDocument, deleteStoreDocument, docExpiryStatus,
@@ -22740,6 +22741,7 @@ function PhoneClockInCard({ currentUser, opsTeam = [], stores = [], punchRecords
         const { hours } = computePunchHours({
           punchIn: openPunch.punchIn, punchOut: now,
           breakMinutes: openPunch.breakMinutes, breakStart: openPunch.breakStart, breakEnd: openPunch.breakEnd, breakEndRef: now,
+          storeId: openPunch.storeId,   // BREAKOPTOUT
         });
         const gross = (me.hourlyRate && !isSalaried(me)) ? Math.round(hours * me.hourlyRate * 100) / 100 : null;
         await onPunchOut(openPunch.id, now, hours, gross);
@@ -24211,6 +24213,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
         const { hours } = computePunchHours({
           punchIn: myOpenPunch.punchIn, punchOut: nowIso,
           breakMinutes: myOpenPunch.breakMinutes, breakStart: myOpenPunch.breakStart, breakEnd: myOpenPunch.breakEnd, breakEndRef: nowIso,
+          storeId: myOpenPunch.storeId,   // BREAKOPTOUT
         });
         const gross = (myOpsMember.hourlyRate && !isSalaried(myOpsMember)) ? Math.round(hours * myOpsMember.hourlyRate * 100) / 100 : null;
         const savedOut = await onEmpPunchOut(myOpenPunch.id, nowIso, hours, gross);
@@ -31879,6 +31882,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
     const split = computePunchHours({
       punchIn: new Date(pIn).toISOString(), punchOut: new Date(end).toISOString(),
       breakMinutes: r.breakMinutes, breakStart: r.breakStart, breakEnd: r.breakEnd, breakEndRef: new Date(end).toISOString(),
+      storeId: r.storeId,   // BREAKOPTOUT
     });
     return split.payableHours != null ? split.payableHours : Math.max(0, (end - pIn) / 3600000);
   };
@@ -56227,7 +56231,7 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
       const { hours: hoursWorked } = computePunchHours({
         punchIn: new Date(effInMs).toISOString(), punchOut: new Date(effOutMs).toISOString(),
         breakMinutes: openRecord.breakMinutes, breakStart: openRecord.breakStart, breakEnd: openRecord.breakEnd,
-        breakEndRef: new Date().toISOString(),
+        breakEndRef: new Date().toISOString(), storeId: openRecord.storeId,   // BREAKOPTOUT
       });
       // Salaried staff: their hourlyRate column holds a salary, so hours × rate
       // is meaningless — store null and let salaried pay be computed separately.
@@ -57561,7 +57565,60 @@ function OrderRecordingsTab({ stores = [], visibleStoreIds }) {
 }
 
 // ─── Breaks Analysis Tab — rich break analytics for Time & Attendance ─────────
-function BreaksAnalysisTab({ enriched = [], breakSplit, opsTeam = [], stores = [], from, to, periodStoreId }) {
+// BREAKOPTOUT 2026-08-02a — a site can pay breaks rather than deducting them.
+// Opting out means: no statutory minimum enforced, and a break the employee
+// punched is not deducted either. Staff are paid every clocked hour.
+function BreakOptOutPanel({ stores = [], optOut = [], onChanged }) {
+  const T = { ink: "#3A2E26", faint: "#9A8770", line: "#E8DCC6", card: "#FDF8EF", accent: "#844429" };
+  const [list, setList] = useState(optOut);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  useEffect(() => { setList(optOut); }, [optOut]);
+
+  const toggle = async (id, on) => {
+    const store = stores.find(s => s.id === id);
+    if (on && !window.confirm(
+      `Pay breaks in full at ${store?.shortName || store?.name}?\n\n` +
+      `No break will be deducted from anyone's hours there — staff are paid every hour they clock, ` +
+      `including time punched as a break.\n\nThis affects future pay calculations and any punch recalculated from now on.`
+    )) return;
+    const next = on ? [...list, id] : list.filter(x => x !== id);
+    setList(next); setBusy(true); setErr("");
+    try { await saveBreakOptOutStores(next); onChanged?.(next); }
+    catch (e) { setErr(e.message); setList(list); }
+    setBusy(false);
+  };
+
+  return (
+    <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
+      <div className="px-4 py-2.5 text-[10px] uppercase tracking-widest font-bold" style={{ background: "#3A2E26", color: "#F3E9D8" }}>
+        Break deductions by site
+      </div>
+      <div className="p-4">
+        <p className="text-xs mb-3" style={{ color: T.faint }}>
+          Sites listed here <b>pay breaks in full</b> — no statutory minimum is enforced and nothing is deducted for a punched break.
+          Everywhere else keeps the normal rule (15m over 4h, 30m over 6h, 45m over 10h).
+        </p>
+        {err && <div className="text-xs mb-2 px-3 py-2 rounded-lg" style={{ background: "#FBEAEA", color: "#B3261E" }}>{err}</div>}
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
+          {stores.filter(s => !s.archivedAt).map(s => {
+            const on = list.includes(s.id);
+            return (
+              <label key={s.id} className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs cursor-pointer"
+                style={{ background: on ? "#EAF3E7" : "#FFFFFF", border: `1px solid ${on ? "#BBD6B4" : T.line}`, color: T.ink }}>
+                <input type="checkbox" checked={on} disabled={busy} onChange={e => toggle(s.id, e.target.checked)}/>
+                <span className="font-semibold truncate">{s.shortName || s.name}</span>
+                {on && <span className="ml-auto text-[10px] font-bold" style={{ color: "#3F6B3A" }}>breaks paid</span>}
+              </label>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BreaksAnalysisTab({ enriched = [], breakSplit, opsTeam = [], stores = [], from, to, periodStoreId, breakOptOut = [], onOptOutChanged }) {
   const [sortKey, setSortKey] = useState("auto");
   const [sortDir, setSortDir] = useState("desc");
   const storeName = (id) => (stores || []).find(s => s.id === id)?.shortName || (stores || []).find(s => s.id === id)?.name || "—";
@@ -57747,6 +57804,8 @@ function BreaksAnalysisTab({ enriched = [], breakSplit, opsTeam = [], stores = [
   return (
     <div className="space-y-4">
       <div className="text-[11px] text-[#8A7B68]">{from === to ? from : `${from} → ${to}`}{periodStoreId ? ` · ${storeName(periodStoreId)}` : " · all stores"} · {shifts} shift{shifts===1?"":"s"} analysed</div>
+
+      <BreakOptOutPanel stores={stores} optOut={breakOptOut} onChanged={onOptOutChanged}/>
 
       {/* Summary cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-2">
@@ -58020,7 +58079,7 @@ function BreaksAnalysisTab({ enriched = [], breakSplit, opsTeam = [], stores = [
 }
 
 
-function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedules, punchRecords, currentUser, onUpdate, onAdd, onDelete, onAddComment, payPeriods = [], isPunchLocked, onApprovePeriod, onReopenPeriod, paySchedule, payPeriodLocations = [], onPeriodsChanged, onApprovePunch, onApproveAllPunches }) {
+function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedules, punchRecords, currentUser, onUpdate, onAdd, onDelete, onAddComment, payPeriods = [], isPunchLocked, onApprovePeriod, onReopenPeriod, paySchedule, payPeriodLocations = [], onPeriodsChanged, onApprovePunch, onApproveAllPunches, breakOptOut = [], onOptOutChanged }) {
   const { user } = useAuth();
 
   // Store-first scoping. Owner/HQ get the ownership filter (defaults to
@@ -58243,7 +58302,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
     return computePunchHours({
       punchIn: inIso, punchOut: outIso,
       breakMinutes: r.breakMinutes, breakStart: r.breakStart, breakEnd: r.breakEnd,
-      breakEndRef: new Date().toISOString(), breakPaid: r.breakPaid,
+      breakEndRef: new Date().toISOString(), breakPaid: r.breakPaid, storeId: r.storeId,   // BREAKOPTOUT
     });
   };
 
@@ -58357,7 +58416,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
     const recomputed = computePunchHours({
       punchIn: r.punchIn, punchOut: r.punchOut,
       breakMinutes: r.breakMinutes, breakStart: r.breakStart, breakEnd: r.breakEnd,
-      breakPaid: true,
+      breakPaid: true, storeId: r.storeId,   // BREAKOPTOUT
     });
     const hours = recomputed.hours ?? r.hoursWorked;
     const gross = (r.grossPay != null && Number(r.hourlyRate) > 0 && hours != null)
@@ -58834,7 +58893,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
       })()}
 
       {/* ── Summary ── */}
-      {tab === "breaks" && <BreaksAnalysisTab enriched={enriched} breakSplit={breakSplit} opsTeam={opsTeam} stores={stores} from={from} to={to} periodStoreId={periodStoreId} />}
+      {tab === "breaks" && <BreaksAnalysisTab enriched={enriched} breakSplit={breakSplit} opsTeam={opsTeam} stores={stores} from={from} to={to} periodStoreId={periodStoreId} breakOptOut={breakOptOut} onOptOutChanged={onOptOutChanged} />}
 
       {tab === "summary" && (
         <div className="space-y-3">
@@ -59206,7 +59265,7 @@ function PayBreakdown({ r, member }) {
   const split = computePunchHours({
     punchIn: inIso, punchOut: outIso,
     breakMinutes: r.breakMinutes, breakStart: r.breakStart, breakEnd: r.breakEnd,
-    breakPaid: r.breakPaid,
+    breakPaid: r.breakPaid, storeId: r.storeId,   // BREAKOPTOUT
   });
   if (split.payableHours == null) return null;
 
@@ -59430,7 +59489,7 @@ function AmendPunchModal({ record, employee, onSave, onDelete, onClose }) {
       alert(`That's a ${Math.round(newBreakMins / 60 * 10) / 10}-hour break \u2014 almost certainly a typo. Breaks over 5 hours can't be saved; correct the times or minutes.`);
       return;
     }
-    const hoursWorked = newPunchOut ? computePunchHours({ punchIn: newPunchIn, punchOut: newPunchOut, breakMinutes: newBreakMins, breakStart: newBreakStart, breakEnd: newBreakEnd, breakPaid }).hours : null;
+    const hoursWorked = newPunchOut ? computePunchHours({ punchIn: newPunchIn, punchOut: newPunchOut, breakMinutes: newBreakMins, breakStart: newBreakStart, breakEnd: newBreakEnd, breakPaid, storeId: record?.storeId }).hours : null;
     // SALARYGUARD: every other pricing path checks isSalaried() before
     // multiplying — this one did not. For salaried staff `hourly_rate` holds an
     // ANNUAL amount (the column is reused as amount-in-unit), so amending one
@@ -60370,7 +60429,7 @@ function EmployeeHoursView({ currentUser, brands, schedules, punchRecords, onUpd
       {(() => {
         const claimSplit = (r) => (r.punchIn && r.punchOut) ? computePunchHours({
           punchIn: r.punchIn, punchOut: r.punchOut,
-          breakMinutes: r.breakMinutes, breakStart: r.breakStart, breakEnd: r.breakEnd,
+          breakMinutes: r.breakMinutes, breakStart: r.breakStart, breakEnd: r.breakEnd, storeId: r.storeId,
         }) : null;
         const rows = enriched.filter(r => {
           if (r.status !== "closed" || (r.breakPaid && !r.breakClaimReason)) return false;
@@ -62382,7 +62441,7 @@ function PunchEditModal({ punch, memberName, storeName, onClose, onSave, onDelet
     const { hours: netH, rawHours: rawH, overnight, breakMins: deducted, breakEnforced, requiredBreakMins: reqMin, punchedBreakMins: punched, workedHours } = computePunchHours({
       punchIn: new Date(inVal).toISOString(), punchOut: outIsoPrev,
       breakMinutes: breakMins, breakStart: punch.breakStart || null, breakEnd: punch.breakEnd || null,
-      breakEndRef: outIsoPrev,
+      breakEndRef: outIsoPrev, storeId: punch.storeId,   // BREAKOPTOUT
     });
     return { rawH, netH, worked: workedHours, deducted, breakEnforced, reqMin, punched, gross: Math.round(netH * rate * 100) / 100, overnight, long: netH > 16 };
   }, [inVal, outVal, breakMins, rate, punch.breakStart, punch.breakEnd]);
@@ -62427,6 +62486,7 @@ function PunchEditModal({ punch, memberName, storeName, onClose, onSave, onDelet
         hours = computePunchHours({
           punchIn: inIso, punchOut: outIso,
           breakMinutes: breakMinsOut, breakStart: breakStartOut, breakEnd: breakEndOut,
+          storeId: punch.storeId,   // BREAKOPTOUT
         }).hours;
         gross = Math.round(hours * rate * 100) / 100;
         status = "closed";
@@ -62750,6 +62810,7 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
     const split = item.punchIn && splitOut ? computePunchHours({
       punchIn: item.punchIn, punchOut: splitOut,
       breakMinutes: item.breakMinutes, breakStart: item.breakStart, breakEnd: item.breakEnd, breakEndRef: new Date().toISOString(),
+      storeId: item.storeId,   // BREAKOPTOUT
     }) : null;
     return (
       <div
@@ -63673,7 +63734,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: STOREDOCSUI 2026-08-01g");
+      console.log("CB build: BREAKOPTOUT 2026-08-02a");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -64458,6 +64519,15 @@ export default function App() {
   // Loaded separately from the main bootstrap so a missing table (before the
   // migration runs) degrades to the built-in monthly 21st→20th default rather
   // than failing the whole app load.
+  // BREAKOPTOUT 2026-08-02a — primed once at load so every hours calculation
+  // sees it. Held in supabase.js module scope rather than React state because
+  // computePunchHours is a pure function called from eleven places.
+  const [breakOptOut, setBreakOptOut] = useState([]);
+  const reloadBreakOptOut = useCallback(async () => {
+    try { setBreakOptOut(await fetchBreakOptOutStores()); } catch { /* default: rule on everywhere */ }
+  }, []);
+  useEffect(() => { reloadBreakOptOut(); }, [reloadBreakOptOut]);
+
   const reloadPayPeriodData = useCallback(async () => {
     const [sched, locs, rows] = await Promise.all([
       fetchPaySchedule().catch(() => null),
@@ -65631,6 +65701,7 @@ export default function App() {
                     onAddComment={handleAddPunchComment}
                     payPeriods={payPeriods} isPunchLocked={isPunchLocked} onApprovePeriod={approvePayPeriod} onReopenPeriod={reopenPayPeriod}
                     paySchedule={paySchedule} payPeriodLocations={payPeriodLocations} onPeriodsChanged={reloadPayPeriodData}
+                    breakOptOut={breakOptOut} onOptOutChanged={setBreakOptOut}
                     onApprovePunch={approveOnePunch} onApproveAllPunches={approveAllPunchesInPeriod}
                   />}
                   {effTeamTab === "onboarding-board" && canSeeView("onboarding-board") && <OnboardingBoard stores={stores.filter(s => crossEntityStoreIds.includes(s.id))} opsTeam={opsTeam}/>}

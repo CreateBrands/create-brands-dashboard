@@ -1224,10 +1224,45 @@ export const BREAK_RULE_EFFECTIVE_FROM = "2026-06-29";
 // to refuse the punch-out outright and to stop the overnight rule firing on it.
 export const MISPUNCH_WINDOW_MS = 120000;   // 2 minutes
 
+// BREAKOPTOUT 2026-08-02a — sites that pay breaks rather than deducting them.
+// Held module-level and consulted inside the hours calculation, because
+// computePunchHours has eleven call sites and threading a flag through all of
+// them would guarantee one gets missed — and a missed one means a store that
+// opted out silently keeps deducting.
+//
+// Primed once at app load from app_settings. Defaults to empty, so a failed
+// load leaves every store on the normal rule rather than accidentally paying
+// breaks estate-wide.
+let _breakOptOutStores = new Set();
+export function setBreakOptOutStores(ids) {
+  _breakOptOutStores = new Set((ids || []).filter(Boolean));
+}
+export function storeOptsOutOfBreaks(storeId) {
+  return !!storeId && _breakOptOutStores.has(storeId);
+}
+export async function fetchBreakOptOutStores() {
+  const { data, error } = await supabase.from("app_settings")
+    .select("value").eq("key", "break_optout_stores").maybeSingle();
+  if (error) throw error;
+  try {
+    const v = JSON.parse(data?.value || "[]");
+    const list = Array.isArray(v) ? v.filter(Boolean) : [];
+    setBreakOptOutStores(list);
+    return list;
+  } catch { setBreakOptOutStores([]); return []; }
+}
+export async function saveBreakOptOutStores(ids) {
+  const clean = [...new Set((ids || []).filter(Boolean))];
+  await upsertAppSetting("break_optout_stores", JSON.stringify(clean));
+  setBreakOptOutStores(clean);
+  return clean;
+}
+
 // Was the enforced-break rule in force for a punch that started at `punchIn`?
 // Undated calls default to TRUE so live clock-outs (which always pass a date)
 // and any future caller keep the rule.
-export function breakRuleAppliesOn(punchIn) {
+export function breakRuleAppliesOn(punchIn, storeId = null) {
+  if (storeOptsOutOfBreaks(storeId)) return false;
   if (!punchIn) return true;
   const d = new Date(punchIn);
   if (isNaN(d.getTime())) return true;
@@ -1255,7 +1290,7 @@ export function requiredBreakMins(rawHours) {
 // Returns a clear split: { workedHours (raw clocked), breakMins (deducted),
 // breakHours, payableHours, hours (=payableHours, kept for back-compat),
 // punchedBreakMins, requiredBreakMins, breakEnforced, rawHours, overnight }.
-export function computePunchHours({ punchIn, punchOut, breakMinutes = 0, breakStart = null, breakEnd = null, breakEndRef = null, applyBreakRule = true, breakPaid = false } = {}) {
+export function computePunchHours({ punchIn, punchOut, breakMinutes = 0, breakStart = null, breakEnd = null, breakEndRef = null, applyBreakRule = true, breakPaid = false, storeId = null } = {}) {
   const EMPTY = { hours: null, payableHours: null, workedHours: null, breakHours: null, breakMins: 0, punchedBreakMins: 0, requiredBreakMins: 0, breakEnforced: false, rawHours: null, overnight: false, breakPaid: false };
   if (!punchIn || !punchOut) return EMPTY;
   // Truncate both punches to the MINUTE before diffing. The UI shows HH:MM, so
@@ -1283,7 +1318,10 @@ export function computePunchHours({ punchIn, punchOut, breakMinutes = 0, breakSt
   const rawHours = (outMs - inMs) / 3600000;
 
   // BREAKSTART: the enforced minimum only applies from the date staff were told.
-  const ruleOn = applyBreakRule && breakRuleAppliesOn(punchIn);
+  // BREAKOPTOUT — an opted-out store pays breaks in full: no enforced minimum,
+  // and a break the employee punched is not deducted either.
+  const optOut = storeOptsOutOfBreaks(storeId);
+  const ruleOn = applyBreakRule && !optOut && breakRuleAppliesOn(punchIn, storeId);
 
   // Total punched break (including a break still open at the reference moment).
   let punchedBreakMins = Number(breakMinutes) || 0;
@@ -1308,7 +1346,7 @@ export function computePunchHours({ punchIn, punchOut, breakMinutes = 0, breakSt
   // be allocated to the employee. The break is still recorded (punchedBreakMins
   // is preserved for reporting), but it is NOT deducted from paid hours — the
   // worker is paid the full raw shift.
-  const deductMins = breakPaid ? 0 : breakMins;
+  const deductMins = (breakPaid || optOut) ? 0 : breakMins;
 
   const breakHours = Math.round((breakMins / 60) * 100) / 100;
   const payableHours = Math.round(Math.max(0, rawHours - deductMins / 60) * 100) / 100;
@@ -1372,6 +1410,7 @@ export async function sweepAutoClockouts(stores = []) {
     const { hours } = computePunchHours({
       punchIn: p.punch_in, punchOut: outIso,
       breakMinutes: p.break_minutes, breakStart: p.break_start, breakEnd: p.break_end, breakEndRef: outIso,
+      storeId: p.store_id,   // BREAKOPTOUT
     });
     const cappedAt = (p.scheduled_end && effOutMs < cutoffMs) ? "scheduled end" : "store cut-off";
     const { error: upErr } = await supabase.from("punch_records").update({
@@ -6490,6 +6529,59 @@ export async function fetchStoreDocCompliance(storeIds = []) {
   expiring.sort((a, b) => a.days - b.days);
   expired.sort((a, b) => b.days - a.days);
   return { categories: cats, documents: docs, gaps, expiring, expired };
+}
+
+// ── BANKFEED 2026-08-01h — Tide bank feed via Enable Banking ────────────────
+// Feeds the EXISTING bank_transactions table (same dedupe_key as the CSV
+// importer), so reconciliation and categorisation work unchanged. Every call
+// goes through the bank-feed Edge Function because Enable Banking signs
+// requests with a private key that must never reach the browser.
+
+async function bankFeed(action, body = {}) {
+  const headers = {};
+  if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
+  const { data, error } = await supabase.functions.invoke("bank-feed", { body: { action, ...body }, headers });
+  if (error) throw error;
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
+
+export const listBankAspsps = (country = "GB") => bankFeed("banks", { country });
+export const startBankConnection = (entityId, bankName = "Tide") => bankFeed("start", { entityId, bankName });
+export const completeBankConnection = (code, state) => bankFeed("callback", { code, state });
+export const syncBankFeed = (connectionId = null, days = 30) => bankFeed("sync", { connectionId, days });
+
+export async function fetchBankConnections() {
+  const [{ data: conns, error }, { data: accs }] = await Promise.all([
+    supabase.from("bank_connections").select("*").order("created_at", { ascending: false }),
+    supabase.from("bank_accounts").select("id, name, eb_account_uid, eb_connection_id, sort_code, account_number, last_synced_at"),
+  ]);
+  if (error) throw error;
+  return (conns || []).map(c => ({
+    id: c.id, entityId: c.entity_id, bankName: c.bank_name, country: c.country,
+    status: c.status, consentExpiresAt: c.consent_expires_at,
+    connectedAt: c.connected_at, lastSyncedAt: c.last_synced_at, error: c.error || "",
+    // Days until the PSD2 consent lapses. Surfaced everywhere, because a feed
+    // that has quietly stopped looks identical to one with no new transactions.
+    daysLeft: c.consent_expires_at
+      ? Math.ceil((new Date(c.consent_expires_at) - new Date()) / 86400000) : null,
+    accounts: (accs || []).filter(a => a.eb_connection_id === c.id).map(a => ({
+      id: a.id, name: a.name || "", ebUid: a.eb_account_uid,
+      sortCode: a.sort_code || "", accountNumber: a.account_number || "",
+      lastSyncedAt: a.last_synced_at,
+    })),
+  }));
+}
+
+export async function disconnectBank(connectionId) {
+  const { error } = await supabase.from("bank_connections")
+    .update({ status: "revoked" }).eq("id", connectionId);
+  if (error) throw error;
+  // Unlink the accounts so they stop being synced but keep their history and
+  // stay usable for CSV import.
+  await supabase.from("bank_accounts")
+    .update({ eb_account_uid: null, eb_connection_id: null }).eq("eb_connection_id", connectionId);
+  return connectionId;
 }
 
 export async function fetchAppSettings() {
