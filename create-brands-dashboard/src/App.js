@@ -10589,16 +10589,23 @@ async function pdfDistDoc({ docTitle, docNo, meta = [], columns, rows, totals = 
   doc.setFont("helvetica", "normal"); doc.setFontSize(8.5);
   (rows || []).forEach(r => {
     if (y > H - 90) { doc.addPage(); y = M; header(); doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); }
-    // A single-cell row is a category heading in the printed version.
-    if (Array.isArray(r) && r.length === 1) {
+    // PDFROWS 2026-08-02c — printDistDoc marks a category heading as
+    // { header: "CAKES" }, not a one-element array. Testing for the array shape
+    // meant a heading object fell through to the cell loop and threw
+    // "(e || []).forEach is not a function" — every document with categories
+    // failed, which is most of them.
+    if (r && !Array.isArray(r) && r.header != null) {
       doc.setFont("helvetica", "bold"); doc.setFontSize(8); doc.setTextColor(...brand);
-      doc.text(String(r[0]), M + 4, y + 11);
+      doc.text(String(r.header), M + 4, y + 11);
       doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setTextColor(40);
       y += 16;
       return;
     }
     doc.setTextColor(40);
-    (r || []).forEach((v, i) => {
+    // Anything else that isn't an array is skipped rather than thrown on — a
+    // single odd row shouldn't lose the whole document.
+    if (!Array.isArray(r)) return;
+    r.forEach((v, i) => {
       const right = columns[i]?.align === "right";
       doc.text(String(v ?? ""), right ? xAt(i) + colW[i] - 4 : xAt(i) + 4, y + 11, {
         align: right ? "right" : "left", maxWidth: colW[i] - 8,
@@ -63734,7 +63741,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: BREAKOPTOUT 2026-08-02b");
+      console.log("CB build: PDFROWS 2026-08-02c");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
