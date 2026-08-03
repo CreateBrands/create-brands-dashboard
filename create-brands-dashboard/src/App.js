@@ -57601,14 +57601,21 @@ function flagPunch(p, member) {
   const now = new Date();
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 
-  if (p.status === "auto_closed") {
-    if (/implausible/i.test(notes)) {
-      flags.push({ key: "implausible", label: "Implausible length", sev: "high",
-        why: `${Number(p.hoursWorked || 0).toFixed(2)}h on one shift — usually a forgotten clock-out.` });
-    } else {
-      flags.push({ key: "auto", label: "Auto clocked out", sev: "high",
-        why: "Left open past the store's cut-off, so the system closed it. Pay is withheld until someone confirms the hours." });
-    }
+  // FLAGHISTORY 2026-08-03a — read the NOTES, not just the current status.
+  // Amending an auto-closed punch changes status to "amended", which made the
+  // flag disappear from this tab altogether rather than moving to Sorted. The
+  // note is written at auto-close time and survives the amend, so it's the
+  // durable record of what happened. (7 punches mention "Implausible" but only
+  // 2 still carry auto_closed status — the other 5 had vanished.)
+  const wasAutoClosed = p.status === "auto_closed" || /auto-closed at/i.test(notes);
+  const wasImplausible = /implausible/i.test(notes);
+
+  if (wasImplausible) {
+    flags.push({ key: "implausible", label: "Implausible length", sev: "high",
+      why: `${Number(p.hoursWorked || 0).toFixed(2)}h on one shift — usually a forgotten clock-out.` });
+  } else if (wasAutoClosed) {
+    flags.push({ key: "auto", label: "Auto clocked out", sev: "high",
+      why: "Left open past the store's cut-off, so the system closed it. Pay is withheld until someone confirms the hours." });
   }
   if (/auto-closed & capped/i.test(notes)) {
     flags.push({ key: "break", label: "Break left open", sev: "med",
@@ -57658,7 +57665,11 @@ function FlaggedPunchesTab({ allPunches = [], opsTeam = [], stores = [], onAmend
       if (!flags.length) return;
       // Someone has been through it if they amended the record, or if pay is
       // present on something that had it deliberately withheld.
-      const fixed = !!p.amendedBy || (p.status === "auto_closed" && Number(p.grossPay) > 0);
+      // Sorted once someone has been through it: amended, or pay restored on
+      // something that had it withheld.
+      const fixed = !!p.amendedBy || p.status === "amended"
+        || (p.status !== "auto_closed" && /auto-closed at|implausible/i.test(String(p.notes || "")))
+        || (p.status === "auto_closed" && Number(p.grossPay) > 0);
       out.push({ p, member, flags, fixed, top: flags[0] });
     });
     const sev = { high: 0, med: 1, low: 2 };
@@ -58529,7 +58540,9 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
   const flaggedPendingCount = useMemo(() => scopedPunches.filter(p => {
     const member = (opsTeam || []).find(m => m.id === p.employeeId) || null;
     if (!flagPunch(p, member).length) return false;
-    return !(p.amendedBy || (p.status === "auto_closed" && Number(p.grossPay) > 0));
+    return !(p.amendedBy || p.status === "amended"
+      || (p.status !== "auto_closed" && /auto-closed at|implausible/i.test(String(p.notes || "")))
+      || (p.status === "auto_closed" && Number(p.grossPay) > 0));
   }).length, [scopedPunches, opsTeam]);
 
   // Live hours: closed -> graced stored hours; open -> elapsed since (graced) clock-in.
@@ -63991,7 +64004,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: FLAGGEDRANGE 2026-08-02f");
+      console.log("CB build: FLAGHISTORY 2026-08-03a");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
