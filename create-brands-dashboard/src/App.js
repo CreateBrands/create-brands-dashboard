@@ -57572,6 +57572,212 @@ function OrderRecordingsTab({ stores = [], visibleStoreIds }) {
 }
 
 // ─── Breaks Analysis Tab — rich break analytics for Time & Attendance ─────────
+// ── FLAGGED 2026-08-02d — auto clock-outs and flagged punches in one place ──
+// Previously these were scattered: an auto-closed shift looked like any other
+// row in Records, and the only tell was pay being blank. They're gathered here
+// and split Pending / Fixed, because the question is always "what still needs
+// me" rather than "what happened".
+//
+// A punch is flagged when the system withheld pay and asked for a human:
+//   • auto clock-out   — nightly sweep closed a shift left open past cut-off
+//   • implausible      — over 16h, almost always a forgotten punch
+//   • capped break     — a break left open at clock-out, capped at statutory
+//   • still open       — clocked in on a past day and never out
+//   • no pay rate      — closed and worked, but nothing to pay it at
+//   • zero hours       — closed with nothing recorded
+//
+// Fixed means a manager has been through it: amended the record, or pay is
+// now present on something that had it withheld.
+
+function flagPunch(p, member) {
+  const flags = [];
+  const notes = String(p.notes || "");
+  const now = new Date();
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+
+  if (p.status === "auto_closed") {
+    if (/implausible/i.test(notes)) {
+      flags.push({ key: "implausible", label: "Implausible length", sev: "high",
+        why: `${Number(p.hoursWorked || 0).toFixed(2)}h on one shift — usually a forgotten clock-out.` });
+    } else {
+      flags.push({ key: "auto", label: "Auto clocked out", sev: "high",
+        why: "Left open past the store's cut-off, so the system closed it. Pay is withheld until someone confirms the hours." });
+    }
+  }
+  if (/auto-closed & capped/i.test(notes)) {
+    flags.push({ key: "break", label: "Break left open", sev: "med",
+      why: "A break was started and never ended — capped at the statutory minimum rather than running all shift." });
+  }
+  if (!p.punchOut && p.date < today) {
+    flags.push({ key: "open", label: "Never clocked out", sev: "high",
+      why: "Still open from a previous day. No hours recorded at all." });
+  }
+  if (p.punchOut && Number(p.hoursWorked) > 0 && !(Number(p.hourlyRate) > 0) && !(member && isSalaried(member))) {
+    flags.push({ key: "rate", label: "No pay rate", sev: "high",
+      why: "Hours worked but no rate on the punch — this shift pays £0." });
+  }
+  if (p.punchOut && !(Number(p.hoursWorked) > 0)) {
+    flags.push({ key: "zero", label: "Zero hours", sev: "med",
+      why: "Closed with no hours recorded." });
+  }
+  return flags;
+}
+
+function FlaggedPunchesTab({ enriched = [], opsTeam = [], stores = [], onAmend, from, to }) {
+  const T = { ink: "#3A2E26", soft: "#7A6A58", faint: "#9A8770", line: "#E8DCC6", card: "#FDF8EF", accent: "#844429" };
+  const [view, setView] = useState("pending");     // pending | fixed | all
+  const [typeFilter, setTypeFilter] = useState("all");
+
+  const storeName = useCallback((id) => {
+    const s = stores.find(x => x.id === id);
+    return s ? (s.shortName || s.name) : "—";
+  }, [stores]);
+
+  const rows = useMemo(() => {
+    const out = [];
+    (enriched || []).forEach(p => {
+      const member = (opsTeam || []).find(m => m.id === p.employeeId) || null;
+      const flags = flagPunch(p, member);
+      if (!flags.length) return;
+      // Someone has been through it if they amended the record, or if pay is
+      // present on something that had it deliberately withheld.
+      const fixed = !!p.amendedBy || (p.status === "auto_closed" && Number(p.grossPay) > 0);
+      out.push({ p, member, flags, fixed, top: flags[0] });
+    });
+    const sev = { high: 0, med: 1, low: 2 };
+    return out.sort((a, b) =>
+      (sev[a.top.sev] - sev[b.top.sev]) || (b.p.date || "").localeCompare(a.p.date || ""));
+  }, [enriched, opsTeam]);
+
+  const pending = rows.filter(r => !r.fixed);
+  const fixed = rows.filter(r => r.fixed);
+  const shown = (view === "pending" ? pending : view === "fixed" ? fixed : rows)
+    .filter(r => typeFilter === "all" || r.flags.some(f => f.key === typeFilter));
+
+  const types = useMemo(() => {
+    const m = new Map();
+    rows.forEach(r => r.flags.forEach(f => m.set(f.key, { ...f, n: (m.get(f.key)?.n || 0) + 1 })));
+    return [...m.values()].sort((a, b) => b.n - a.n);
+  }, [rows]);
+
+  const sevColor = (s) => s === "high"
+    ? { bg: "#FBEAEA", fg: "#B3261E", bd: "#E8A9A9" }
+    : { bg: "#FFF4DC", fg: "#8A5A0B", bd: "#E5B769" };
+
+  return (
+    <div className="space-y-3">
+      <div className="text-[11px]" style={{ color: T.soft }}>
+        {from === to ? from : `${from} → ${to}`} · {rows.length} flagged punch{rows.length === 1 ? "" : "es"}
+      </div>
+
+      {/* Pending / Fixed */}
+      <div className="grid grid-cols-3 gap-2">
+        {[
+          ["pending", "Needs review", pending.length, "#FBEAEA", "#B3261E", "#E8A9A9"],
+          ["fixed", "Sorted", fixed.length, "#EAF3E7", "#3F6B3A", "#BBD6B4"],
+          ["all", "All flagged", rows.length, "#F3EDE2", "#5C5346", "#E8DCC6"],
+        ].map(([k, label, n, bg, fg, bd]) => (
+          <button key={k} onClick={() => setView(k)}
+            className="rounded-xl px-3.5 py-2.5 text-left"
+            style={{ background: bg, border: `${view === k ? 2 : 1}px solid ${view === k ? fg : bd}` }}>
+            <div className="text-[9px] uppercase tracking-widest font-bold" style={{ color: fg }}>{label}</div>
+            <div className="text-xl font-bold leading-tight" style={{ color: fg }}>{n}</div>
+          </button>
+        ))}
+      </div>
+
+      {/* Flag type filter */}
+      {types.length > 1 && (
+        <div className="flex flex-wrap gap-1.5">
+          <button onClick={() => setTypeFilter("all")}
+            className="px-2.5 py-1 rounded-lg text-[11px] font-bold"
+            style={typeFilter === "all" ? { background: T.accent, color: "#fff" } : { background: "#F0E6D2", color: T.ink, border: `1px solid ${T.line}` }}>
+            All types
+          </button>
+          {types.map(t => (
+            <button key={t.key} onClick={() => setTypeFilter(t.key)}
+              className="px-2.5 py-1 rounded-lg text-[11px] font-bold"
+              style={typeFilter === t.key ? { background: T.accent, color: "#fff" } : { background: "#F0E6D2", color: T.ink, border: `1px solid ${T.line}` }}>
+              {t.label} ({t.n})
+            </button>
+          ))}
+        </div>
+      )}
+
+      {shown.length === 0 ? (
+        <div className="rounded-xl text-center py-14" style={{ background: T.card, border: `1px solid ${T.line}` }}>
+          <CheckCircle size={28} className="mx-auto mb-2" style={{ color: "#3F6B3A" }}/>
+          <div className="text-sm font-bold" style={{ color: T.ink }}>
+            {view === "pending" ? "Nothing waiting on you." : view === "fixed" ? "Nothing sorted yet in this period." : "No flagged punches in this period."}
+          </div>
+          <div className="text-xs mt-1" style={{ color: T.faint }}>
+            Auto clock-outs and unusual punches appear here for review.
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
+          <table className="w-full text-sm">
+            <thead style={{ background: "#3A2E26" }}>
+              <tr>
+                {["Date", "Employee", "Store", "Clocked", "Hours", "Pay", "Flag", ""].map((h, i) => (
+                  <th key={i} className="px-3 py-2.5 text-[10px] uppercase tracking-wider font-bold text-left whitespace-nowrap" style={{ color: "#F3E9D8" }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {shown.map(({ p, flags, fixed: isFixed, top }, i) => {
+                const c = sevColor(top.sev);
+                return (
+                  <tr key={p.id} style={{ background: i % 2 ? "#FAF4E9" : "transparent", borderTop: `1px solid ${T.line}` }}>
+                    <td className="px-3 py-2.5 whitespace-nowrap tabular-nums" style={{ color: T.soft }}>{p.date}</td>
+                    <td className="px-3 py-2.5">
+                      <div className="font-semibold" style={{ color: T.ink }}>{p.employeeName || "Unknown"}</div>
+                      {isFixed && p.amendedBy && <div className="text-[10px]" style={{ color: "#3F6B3A" }}>amended by {p.amendedBy}</div>}
+                    </td>
+                    <td className="px-3 py-2.5 text-xs whitespace-nowrap" style={{ color: T.soft }}>{storeName(p.storeId)}</td>
+                    <td className="px-3 py-2.5 text-xs whitespace-nowrap tabular-nums" style={{ color: T.soft }}>
+                      {p.punchIn ? new Date(p.punchIn).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "—"}
+                      {" – "}
+                      {p.punchOut ? new Date(p.punchOut).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : <span style={{ color: "#B3261E" }}>still in</span>}
+                    </td>
+                    <td className="px-3 py-2.5 text-xs tabular-nums font-semibold" style={{ color: T.ink }}>
+                      {p.hoursWorked != null ? Number(p.hoursWorked).toFixed(2) : "—"}
+                    </td>
+                    <td className="px-3 py-2.5 text-xs tabular-nums" style={{ color: Number(p.grossPay) > 0 ? "#3F6B3A" : "#B3261E" }}>
+                      {Number(p.grossPay) > 0 ? gbp(p.grossPay) : "withheld"}
+                    </td>
+                    <td className="px-3 py-2.5">
+                      <div className="flex flex-wrap gap-1">
+                        {flags.map(f => (
+                          <span key={f.key} title={f.why}
+                            className="text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap"
+                            style={{ background: sevColor(f.sev).bg, color: sevColor(f.sev).fg, border: `1px solid ${sevColor(f.sev).bd}` }}>
+                            {f.label}
+                          </span>
+                        ))}
+                      </div>
+                      <div className="text-[10px] mt-0.5" style={{ color: T.faint }}>{top.why}</div>
+                    </td>
+                    <td className="px-3 py-2.5 whitespace-nowrap">
+                      <button onClick={() => onAmend?.(p)}
+                        className="px-3 py-1.5 rounded-lg text-[11px] font-bold"
+                        style={isFixed
+                          ? { background: "#F0E6D2", color: T.ink, border: `1px solid ${T.line}` }
+                          : { background: T.accent, color: "#fff" }}>
+                        {isFixed ? "Review again" : "Fix"}
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // BREAKOPTOUT 2026-08-02b — a site can be exempt from the ENFORCED statutory
 // minimum. A break the employee actually punched is still deducted; what goes
 // away is the minimum being applied to someone who never punched one.
@@ -58223,6 +58429,13 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
   const [filterEmployee, setFilterEmployee] = useState("all");
   const [tab,            setTab]            = useState("records");
   const [amendModal,     setAmendModal]     = useState(null);
+  // FLAGGED 2026-08-02d — counted here so the tab badge is right without
+  // having to open the tab.
+  const flaggedPendingCount = useMemo(() => (enriched || []).filter(p => {
+    const member = (opsTeam || []).find(m => m.id === p.employeeId) || null;
+    if (!flagPunch(p, member).length) return false;
+    return !(p.amendedBy || (p.status === "auto_closed" && Number(p.grossPay) > 0));
+  }).length, [enriched, opsTeam]);
   const [rejectOTModal,  setRejectOTModal]  = useState(null);
   const [addManualModal, setAddManualModal] = useState(false);
   const [photoModal,     setPhotoModal]     = useState(null);
@@ -58482,6 +58695,13 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
             <button onClick={()=>setTab("records")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="records"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Records</button>
             <button onClick={()=>setTab("summary")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="summary"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Summary</button>
             <button onClick={()=>setTab("breaks")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="breaks"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Breaks</button>
+            {/* FLAGGED — the badge says whether the tab needs opening. */}
+            <button onClick={()=>setTab("flagged")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 ${tab==="flagged"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>
+              Flagged
+              {flaggedPendingCount > 0 && (
+                <span className="text-[10px] font-bold px-1.5 rounded-full" style={{ background: "#B3261E", color: "#fff" }}>{flaggedPendingCount}</span>
+              )}
+            </button>
             <button onClick={()=>setTab("recordings")} className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${tab==="recordings"?"bg-indigo-600 text-white":"text-slate-400 hover:text-white"}`}>Recordings</button>
           </div>
         </div>
@@ -58900,6 +59120,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
       })()}
 
       {/* ── Summary ── */}
+      {tab === "flagged" && <FlaggedPunchesTab enriched={enriched} opsTeam={opsTeam} stores={stores} from={from} to={to} onAmend={setAmendModal} />}
       {tab === "breaks" && <BreaksAnalysisTab enriched={enriched} breakSplit={breakSplit} opsTeam={opsTeam} stores={stores} from={from} to={to} periodStoreId={periodStoreId} breakOptOut={breakOptOut} onOptOutChanged={onOptOutChanged} />}
 
       {tab === "summary" && (
@@ -63741,7 +63962,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: PDFROWS 2026-08-02c");
+      console.log("CB build: FLAGGED 2026-08-02d");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
