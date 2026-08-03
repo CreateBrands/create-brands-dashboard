@@ -57565,9 +57565,9 @@ function OrderRecordingsTab({ stores = [], visibleStoreIds }) {
 }
 
 // ─── Breaks Analysis Tab — rich break analytics for Time & Attendance ─────────
-// BREAKOPTOUT 2026-08-02a — a site can pay breaks rather than deducting them.
-// Opting out means: no statutory minimum enforced, and a break the employee
-// punched is not deducted either. Staff are paid every clocked hour.
+// BREAKOPTOUT 2026-08-02b — a site can be exempt from the ENFORCED statutory
+// minimum. A break the employee actually punched is still deducted; what goes
+// away is the minimum being applied to someone who never punched one.
 function BreakOptOutPanel({ stores = [], optOut = [], onChanged }) {
   const T = { ink: "#3A2E26", faint: "#9A8770", line: "#E8DCC6", card: "#FDF8EF", accent: "#844429" };
   const [list, setList] = useState(optOut);
@@ -57578,9 +57578,9 @@ function BreakOptOutPanel({ stores = [], optOut = [], onChanged }) {
   const toggle = async (id, on) => {
     const store = stores.find(s => s.id === id);
     if (on && !window.confirm(
-      `Pay breaks in full at ${store?.shortName || store?.name}?\n\n` +
-      `No break will be deducted from anyone's hours there — staff are paid every hour they clock, ` +
-      `including time punched as a break.\n\nThis affects future pay calculations and any punch recalculated from now on.`
+      `Stop enforcing minimum breaks at ${store?.shortName || store?.name}?\n\n` +
+      `No statutory minimum will be applied to anyone who didn't punch a break. ` +
+      `Breaks staff DO punch are still deducted.\n\nThis affects future pay calculations and any punch recalculated from now on.`
     )) return;
     const next = on ? [...list, id] : list.filter(x => x !== id);
     setList(next); setBusy(true); setErr("");
@@ -57592,12 +57592,12 @@ function BreakOptOutPanel({ stores = [], optOut = [], onChanged }) {
   return (
     <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
       <div className="px-4 py-2.5 text-[10px] uppercase tracking-widest font-bold" style={{ background: "#3A2E26", color: "#F3E9D8" }}>
-        Break deductions by site
+        Enforced break minimums by site
       </div>
       <div className="p-4">
         <p className="text-xs mb-3" style={{ color: T.faint }}>
-          Sites listed here <b>pay breaks in full</b> — no statutory minimum is enforced and nothing is deducted for a punched break.
-          Everywhere else keeps the normal rule (15m over 4h, 30m over 6h, 45m over 10h).
+          Sites listed here have <b>no enforced minimum break</b> — nothing is deducted from someone who didn't punch a break.
+          A break they <b>do</b> punch is still deducted. Everywhere else keeps the normal rule (15m over 4h, 30m over 6h, 45m over 10h).
         </p>
         {err && <div className="text-xs mb-2 px-3 py-2 rounded-lg" style={{ background: "#FBEAEA", color: "#B3261E" }}>{err}</div>}
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-1.5">
@@ -57608,7 +57608,7 @@ function BreakOptOutPanel({ stores = [], optOut = [], onChanged }) {
                 style={{ background: on ? "#EAF3E7" : "#FFFFFF", border: `1px solid ${on ? "#BBD6B4" : T.line}`, color: T.ink }}>
                 <input type="checkbox" checked={on} disabled={busy} onChange={e => toggle(s.id, e.target.checked)}/>
                 <span className="font-semibold truncate">{s.shortName || s.name}</span>
-                {on && <span className="ml-auto text-[10px] font-bold" style={{ color: "#3F6B3A" }}>breaks paid</span>}
+                {on && <span className="ml-auto text-[10px] font-bold" style={{ color: "#3F6B3A" }}>no minimum</span>}
               </label>
             );
           })}
@@ -63734,7 +63734,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: BREAKOPTOUT 2026-08-02a");
+      console.log("CB build: BREAKOPTOUT 2026-08-02b");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:

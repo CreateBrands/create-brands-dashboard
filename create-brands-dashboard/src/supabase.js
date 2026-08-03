@@ -1224,7 +1224,10 @@ export const BREAK_RULE_EFFECTIVE_FROM = "2026-06-29";
 // to refuse the punch-out outright and to stop the overnight rule firing on it.
 export const MISPUNCH_WINDOW_MS = 120000;   // 2 minutes
 
-// BREAKOPTOUT 2026-08-02a — sites that pay breaks rather than deducting them.
+// BREAKOPTOUT 2026-08-02b — sites exempt from the ENFORCED statutory minimum.
+// A break the employee actually punched is still deducted: they weren't
+// working for it. What the opt-out removes is the minimum being applied to
+// someone who never punched a break at all.
 // Held module-level and consulted inside the hours calculation, because
 // computePunchHours has eleven call sites and threading a flag through all of
 // them would guarantee one gets missed — and a missed one means a store that
@@ -1318,8 +1321,9 @@ export function computePunchHours({ punchIn, punchOut, breakMinutes = 0, breakSt
   const rawHours = (outMs - inMs) / 3600000;
 
   // BREAKSTART: the enforced minimum only applies from the date staff were told.
-  // BREAKOPTOUT — an opted-out store pays breaks in full: no enforced minimum,
-  // and a break the employee punched is not deducted either.
+  // BREAKOPTOUT 2026-08-02b — the opt-out suppresses the ENFORCED minimum only.
+  // A punched break is still deducted, because the employee genuinely wasn't
+  // working for it.
   const optOut = storeOptsOutOfBreaks(storeId);
   const ruleOn = applyBreakRule && !optOut && breakRuleAppliesOn(punchIn, storeId);
 
@@ -1346,7 +1350,7 @@ export function computePunchHours({ punchIn, punchOut, breakMinutes = 0, breakSt
   // be allocated to the employee. The break is still recorded (punchedBreakMins
   // is preserved for reporting), but it is NOT deducted from paid hours — the
   // worker is paid the full raw shift.
-  const deductMins = (breakPaid || optOut) ? 0 : breakMins;
+  const deductMins = breakPaid ? 0 : breakMins;
 
   const breakHours = Math.round((breakMins / 60) * 100) / 100;
   const payableHours = Math.round(Math.max(0, rawHours - deductMins / 60) * 100) / 100;
