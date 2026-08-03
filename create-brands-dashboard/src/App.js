@@ -57645,6 +57645,26 @@ function FlaggedPunchesTab({ allPunches = [], opsTeam = [], stores = [], onAmend
   const T = { ink: "#3A2E26", soft: "#7A6A58", faint: "#9A8770", line: "#E8DCC6", card: "#FDF8EF", accent: "#844429" };
   const [view, setView] = useState("pending");     // pending | fixed | all
   const [typeFilter, setTypeFilter] = useState("all");
+  // FLAGCONTEXT 2026-08-03c — a zero-hour or duplicate-looking punch can't be
+  // judged alone: you need the shifts either side to tell a double-tap from a
+  // genuinely missed clock-out. Expands in place rather than opening a modal,
+  // so several rows can be compared without losing your place.
+  const [openRow, setOpenRow] = useState(null);
+
+  // That employee's punches on the day before, the day itself and the day
+  // after — searched across ALL punches in scope, because the context is often
+  // outside whatever filter is currently applied.
+  const contextFor = useCallback((p) => {
+    const shiftDay = (iso, days) => {
+      const d = new Date(iso + "T00:00:00");
+      d.setDate(d.getDate() + days);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    };
+    const lo = shiftDay(p.date, -1), hi = shiftDay(p.date, 1);
+    return (allPunches || [])
+      .filter(x => x.employeeId === p.employeeId && x.date >= lo && x.date <= hi)
+      .sort((a, b) => new Date(a.punchIn || 0) - new Date(b.punchIn || 0));
+  }, [allPunches]);
 
   const storeName = useCallback((id) => {
     const s = stores.find(x => x.id === id);
@@ -57751,8 +57771,11 @@ function FlaggedPunchesTab({ allPunches = [], opsTeam = [], stores = [], onAmend
             <tbody>
               {shown.map(({ p, flags, fixed: isFixed, top }, i) => {
                 const c = sevColor(top.sev);
+                const isOpen = openRow === p.id;
+                const ctx = isOpen ? contextFor(p) : [];
                 return (
-                  <tr key={p.id} style={{ background: i % 2 ? "#FAF4E9" : "transparent", borderTop: `1px solid ${T.line}` }}>
+                  <Fragment key={p.id}>
+                  <tr style={{ background: i % 2 ? "#FAF4E9" : "transparent", borderTop: `1px solid ${T.line}` }}>
                     <td className="px-3 py-2.5 whitespace-nowrap tabular-nums" style={{ color: T.soft }}>{p.date}</td>
                     <td className="px-3 py-2.5">
                       <div className="font-semibold" style={{ color: T.ink }}>{p.employeeName || "Unknown"}</div>
@@ -57783,15 +57806,80 @@ function FlaggedPunchesTab({ allPunches = [], opsTeam = [], stores = [], onAmend
                       <div className="text-[10px] mt-0.5" style={{ color: T.faint }}>{top.why}</div>
                     </td>
                     <td className="px-3 py-2.5 whitespace-nowrap">
-                      <button onClick={() => onAmend?.(p)}
-                        className="px-3 py-1.5 rounded-lg text-[11px] font-bold"
-                        style={isFixed
-                          ? { background: "#F0E6D2", color: T.ink, border: `1px solid ${T.line}` }
-                          : { background: T.accent, color: "#fff" }}>
-                        {isFixed ? "Review again" : "Fix"}
-                      </button>
+                      <div className="flex items-center gap-1.5 justify-end">
+                        <button onClick={() => setOpenRow(isOpen ? null : p.id)}
+                          title="Show the shifts either side"
+                          className="px-2 py-1.5 rounded-lg text-[11px] font-bold"
+                          style={{ background: isOpen ? T.accent : "#F0E6D2", color: isOpen ? "#fff" : T.ink, border: `1px solid ${T.line}` }}>
+                          {isOpen ? "Hide" : "Nearby"}
+                        </button>
+                        <button onClick={() => onAmend?.(p)}
+                          className="px-3 py-1.5 rounded-lg text-[11px] font-bold"
+                          style={isFixed
+                            ? { background: "#F0E6D2", color: T.ink, border: `1px solid ${T.line}` }
+                            : { background: T.accent, color: "#fff" }}>
+                          {isFixed ? "Review again" : "Fix"}
+                        </button>
+                      </div>
                     </td>
                   </tr>
+
+                  {isOpen && (
+                    <tr style={{ background: "#F5EDDF", borderTop: `1px solid ${T.line}` }}>
+                      <td colSpan={8} className="px-4 py-3">
+                        <div className="text-[10px] uppercase tracking-widest font-bold mb-2" style={{ color: T.faint }}>
+                          {p.employeeName} · shifts either side of {p.date}
+                        </div>
+                        {ctx.length <= 1 ? (
+                          <div className="text-xs" style={{ color: T.soft }}>
+                            Nothing else within a day of this. A lone zero-hour punch is usually a mis-tap
+                            rather than a duplicate — but it also means no real shift was recorded, so
+                            check whether they actually worked that day.
+                          </div>
+                        ) : (
+                          <table className="w-full text-xs">
+                            <tbody>
+                              {ctx.map(x => {
+                                const same = x.id === p.id;
+                                const dup = !same && x.date === p.date && x.punchIn && p.punchIn
+                                  && Math.abs(new Date(x.punchIn) - new Date(p.punchIn)) < 10 * 60 * 1000;
+                                return (
+                                  <tr key={x.id} style={{ borderTop: `1px solid ${T.line}` }}>
+                                    <td className="py-1.5 pr-3 whitespace-nowrap tabular-nums" style={{ color: same ? T.ink : T.soft, fontWeight: same ? 700 : 400 }}>
+                                      {x.date}{same ? " ← this one" : ""}
+                                    </td>
+                                    <td className="py-1.5 pr-3 whitespace-nowrap tabular-nums" style={{ color: T.soft }}>
+                                      {x.punchIn ? new Date(x.punchIn).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "—"}
+                                      {" – "}
+                                      {x.punchOut ? new Date(x.punchOut).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "still in"}
+                                    </td>
+                                    <td className="py-1.5 pr-3 tabular-nums font-semibold" style={{ color: T.ink }}>
+                                      {x.hoursWorked != null ? Number(x.hoursWorked).toFixed(2) + "h" : "—"}
+                                    </td>
+                                    <td className="py-1.5 pr-3" style={{ color: T.soft }}>{x.status}</td>
+                                    <td className="py-1.5">
+                                      {dup ? (
+                                        <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                                          style={{ background: "#FFF4DC", color: "#8A5A0B", border: "1px solid #E5B769" }}>
+                                          within 10 min — likely the same tap
+                                        </span>
+                                      ) : null}
+                                    </td>
+                                    <td className="py-1.5 text-right">
+                                      {!same ? (
+                                        <button onClick={() => onAmend?.(x)} className="text-[11px] font-bold" style={{ color: T.accent }}>Amend</button>
+                                      ) : null}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 );
               })}
             </tbody>
@@ -63994,7 +64082,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: FLAGRANGE 2026-08-03b");
+      console.log("CB build: FLAGCONTEXT 2026-08-03c");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
