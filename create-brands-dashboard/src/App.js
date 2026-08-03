@@ -58429,13 +58429,6 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
   const [filterEmployee, setFilterEmployee] = useState("all");
   const [tab,            setTab]            = useState("records");
   const [amendModal,     setAmendModal]     = useState(null);
-  // FLAGGED 2026-08-02d — counted here so the tab badge is right without
-  // having to open the tab.
-  const flaggedPendingCount = useMemo(() => (enriched || []).filter(p => {
-    const member = (opsTeam || []).find(m => m.id === p.employeeId) || null;
-    if (!flagPunch(p, member).length) return false;
-    return !(p.amendedBy || (p.status === "auto_closed" && Number(p.grossPay) > 0));
-  }).length, [enriched, opsTeam]);
   const [rejectOTModal,  setRejectOTModal]  = useState(null);
   const [addManualModal, setAddManualModal] = useState(false);
   const [photoModal,     setPhotoModal]     = useState(null);
@@ -58502,6 +58495,15 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
     const isUnscheduled  = !sched && !r.scheduledStart;
     return { ...r, scheduledStart, scheduledEnd, sched, overtimeHrs, gracedHours, gracedIn: gt.inIso, gracedOut: gt.outIso, isUnscheduled };
   });
+
+  // FLAGGED 2026-08-02d — must sit AFTER `enriched`: a useMemo dependency array
+  // is evaluated immediately, so referencing a const declared further down the
+  // component throws "Cannot access X before initialization" and blanks the app.
+  const flaggedPendingCount = useMemo(() => (enriched || []).filter(p => {
+    const member = (opsTeam || []).find(m => m.id === p.employeeId) || null;
+    if (!flagPunch(p, member).length) return false;
+    return !(p.amendedBy || (p.status === "auto_closed" && Number(p.grossPay) > 0));
+  }).length, [enriched, opsTeam]);
 
   // Live hours: closed -> graced stored hours; open -> elapsed since (graced) clock-in.
   const liveHours = (r) => {
