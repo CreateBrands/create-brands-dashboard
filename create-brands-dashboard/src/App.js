@@ -1214,10 +1214,16 @@ const isShopSite = (s) => !FACILITY_SITE_TYPES.has(s?.siteType);
 const USE_COGS_V2 = true;
 const shopStoresOnly = (list) => (list || []).filter(isShopSite);
 
-function StoreScopeDropdown({ stores, brands, value, onChange, className = "" }) {
-  // Never list production/distribution/franchise facilities as selectable
-  // "stores" inside a shop brand's scope — they're operational entities, not shops.
-  stores = shopStoresOnly(stores);
+function StoreScopeDropdown({ stores, brands, value, onChange, className = "", includeFacilities = false }) {
+  // Facilities (production, distribution, franchise ops) are normally not
+  // selectable "stores" inside a shop brand's scope — they're operational
+  // entities, not shops.
+  //
+  // TAFACILITIES 2026-08-02e — but Time & Attendance is the exception: CK and
+  // Distribution have staff who clock in, so their punches have to be
+  // filterable. Opt-in rather than changing the default, because the other six
+  // call sites are shop-scoped views where excluding facilities is right.
+  if (!includeFacilities) stores = shopStoresOnly(stores);
   if (!stores || stores.length === 0) return null;
   if (stores.length === 1) return null; // one store = nothing to pick
   // For multi-brand contexts (owner/HQ seeing Chocoberry + Tove), prefix the
@@ -58711,7 +58717,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
 
       {/* Filters */}
       <div className="flex flex-wrap gap-2 items-center">
-        <StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>
+        <StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64" includeFacilities/>
         <SelectDropdown value={filterEmployee} onChange={setFilterEmployee} className="w-44">
           <option value="all">All Employees</option>
           {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}
@@ -63964,7 +63970,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: FLAGGED 2026-08-02d");
+      console.log("CB build: TAFACILITIES 2026-08-02e");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
