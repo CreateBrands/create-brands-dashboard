@@ -9486,6 +9486,11 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
   // IMPORTHEAD — what the document itself says, so the review can be compared
   // against it rather than only against the lines we managed to match.
   const [docTotals, setDocTotals] = useState(null);
+  // IMPORTVAT 2026-08-04f — the extractor reports VAT per line and it was being
+  // discarded. On a mixed invoice that matters: MAPS 42288 had milk and butter
+  // zero-rated alongside three lines at 20%, so a single document-level rate
+  // would have been wrong either way.
+  const [taxRates, setTaxRates] = useState([]);
   const [stage, setStage] = useState("");             // progress text
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -9493,12 +9498,14 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
   useEffect(() => {
     (async () => {
       try {
-        const [v, it] = await Promise.all([
+        const [v, it, tr] = await Promise.all([
           fetchDistContacts({ kind: "vendor" }).catch(() => []),
           fetchDistItems().catch(() => []),
+          fetchDistTaxRates().catch(() => []),
         ]);
         setVendors(v || []);
         setItems((it || []).filter(x => x.active !== false));
+        setTaxRates(tr || []);
       } catch (e) { setErr(e.message); }
     })();
   }, []);
@@ -9538,9 +9545,26 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
     return bestScore >= 0.5 ? { item: best, score: bestScore } : { item: null, score: bestScore };
   }, [items, itemByName]);
 
+  // Derive the rate from the VAT amount rather than guessing: 62.94 on 314.70
+  // is 20%. Snap to the nearest configured rate so it maps to a real tax_rate_id.
+  const rateForLine = useCallback((netAmount, vatAmount) => {
+    if (!taxRates.length) return null;
+    const net = Number(netAmount) || 0, vat = Number(vatAmount);
+    if (!Number.isFinite(vat) || net === 0) return null;
+    const pct = (vat / net) * 100;
+    let best = null, bestGap = Infinity;
+    taxRates.forEach(r => {
+      const gap = Math.abs(Number(r.percent) - pct);
+      if (gap < bestGap) { bestGap = gap; best = r; }
+    });
+    return bestGap <= 1.5 ? best : null;   // within 1.5pp, else leave for a human
+  }, [taxRates]);
+
   const addRows = (incoming) => {
     setRows(incoming.map((r, i) => {
       const m = matchItem(r.description, r.sku);
+      const amount = (Number(r.qty) || 0) * (Number(r.unitPrice) || 0);
+      const tax = rateForLine(amount, r.vat);
       return {
         key: `r${i}-${Date.now()}`,
         description: r.description || "",
@@ -9549,6 +9573,9 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
         unitPrice: Number(r.unitPrice) || 0,
         itemId: m.item?.id || "",
         confidence: m.score,
+        vat: Number.isFinite(Number(r.vat)) ? Number(r.vat) : null,
+        taxRateId: tax?.id || null,
+        taxPercent: tax ? Number(tax.percent) : null,
       };
     }));
   };
@@ -9642,6 +9669,7 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
           sku: l.supplier_code || "",
           qty: qty != null && qty !== 0 ? qty : 1,
           unitPrice: price,
+          vat: num(l.vat),
         };
       }));
 
@@ -9711,6 +9739,10 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
   const usable = rows.filter(r => r.itemId && Number(r.qty) !== 0);
   const unmatched = rows.filter(r => !r.itemId);
   const total = usable.reduce((s, r) => s + (Number(r.qty) || 0) * (Number(r.unitPrice) || 0), 0);
+  const vatTotal = usable.reduce((s, r) => {
+    const amt = (Number(r.qty) || 0) * (Number(r.unitPrice) || 0);
+    return s + (r.taxPercent != null ? amt * r.taxPercent / 100 : (Number(r.vat) || 0));
+  }, 0);
 
   const create = async () => {
     if (!vendorId) { setErr("Pick a supplier first."); return; }
@@ -9720,6 +9752,7 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
       const lines = usable.map(r => ({
         itemId: r.itemId, qty: Number(r.qty) || 0, unitPrice: Number(r.unitPrice) || 0,
         description: r.description || "",
+        taxRateId: r.taxRateId || null,   // IMPORTVAT — per line, not per document
       }));
       if (docType === "bill") {
         await postDistBill({
@@ -9823,13 +9856,16 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
                 {unmatched.length > 0 && <span className="text-amber-400"> · {unmatched.length} need an item before they can be imported</span>}
               </div>
               <div className="text-right">
-                <div className="text-sm font-bold text-white">Importing {gbp(total)}</div>
+                <div className="text-sm font-bold text-white">
+                  Importing {gbp(total)} net
+                  {vatTotal > 0 ? <span className="text-slate-400 font-normal"> · {gbp(total + vatTotal)} with VAT</span> : null}
+                </div>
                 {docTotals?.net != null && (
-                  <div className={`text-[11px] ${Math.abs(docTotals.net - total) > 0.01 ? "text-amber-400" : "text-slate-500"}`}>
-                    Document says {gbp(docTotals.net)} net
-                    {docTotals.gross != null ? ` · ${gbp(docTotals.gross)} gross` : ""}
-                    {Math.abs(docTotals.net - total) > 0.01 ? ` — ${gbp(Math.abs(docTotals.net - total))} not yet matched` : ""}
-                  </div>
+                  Math.abs(docTotals.net - total) <= 0.01
+                    ? <div className="text-[11px] text-emerald-400">✓ matches the document{docTotals.gross != null ? ` (${gbp(docTotals.gross)} gross)` : ""}</div>
+                    : <div className="text-[11px] text-amber-400">
+                        Document says {gbp(docTotals.net)} net — {gbp(Math.abs(docTotals.net - total))} not yet matched
+                      </div>
                 )}
               </div>
             </div>
@@ -9846,6 +9882,7 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
                     <th className="text-left">Catalogue item</th>
                     <th className="text-right w-20">Qty</th>
                     <th className="text-right w-24">Unit price</th>
+                    <th className="text-right w-20">VAT</th>
                     <th className="text-right w-24">Amount</th>
                     <th className="w-8"></th>
                   </tr>
@@ -9874,6 +9911,15 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
                       <td className="px-2 py-1.5">
                         <input type="number" step="0.01" value={r.unitPrice} onChange={e => setRow(r.key, { unitPrice: e.target.value })}
                           className="w-24 px-2 py-1 bg-slate-900 border border-slate-800 rounded text-slate-200 text-xs text-right"/>
+                      </td>
+                      <td className="px-2 py-1.5">
+                        <select value={r.taxRateId || ""} onChange={e => {
+                          const t = taxRates.find(x => x.id === e.target.value);
+                          setRow(r.key, { taxRateId: e.target.value || null, taxPercent: t ? Number(t.percent) : null });
+                        }} className="w-20 px-1.5 py-1 bg-slate-900 border border-slate-800 rounded text-slate-200 text-xs text-right">
+                          <option value="">—</option>
+                          {taxRates.map(t => <option key={t.id} value={t.id}>{Number(t.percent)}%</option>)}
+                        </select>
                       </td>
                       <td className="px-2 py-1.5 text-right text-slate-200 tabular-nums">
                         {gbp((Number(r.qty) || 0) * (Number(r.unitPrice) || 0))}
@@ -64177,7 +64223,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: EXTRACTERR 2026-08-04e");
+      console.log("CB build: IMPORTVAT 2026-08-04f");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
