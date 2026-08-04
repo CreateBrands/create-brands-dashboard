@@ -9491,6 +9491,11 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
   // zero-rated alongside three lines at 20%, so a single document-level rate
   // would have been wrong either way.
   const [taxRates, setTaxRates] = useState([]);
+  // DOCVIEW 2026-08-04h — the source document alongside the extraction. This is
+  // the one pattern every serious extraction product shares: you can't verify
+  // "25 x £8.99" without seeing the invoice, and making someone open the PDF
+  // separately means in practice they don't check at all.
+  const [docUrl, setDocUrl] = useState(null);
   const [stage, setStage] = useState("");             // progress text
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -9638,6 +9643,7 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
     setErr(""); setBusy(true); setStage("Uploading document…");
     try {
       const inv = await uploadInvoiceFile(file, "brand-distribution", currentUser?.id || null);
+      try { if (inv?.image_path) setDocUrl(await getInvoiceFileUrl(inv.image_path)); } catch { /* preview is a bonus, never block the import */ }
       setStage("Reading line items…");
       await extractInvoice(inv.id);
       // IMPORTRACE 2026-08-04d — the extractor inserts LINES first and updates
@@ -9747,6 +9753,7 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
         try {
           setStage("Already scanned — loading the existing extraction…");
           const { invoice, lines: ls } = await getInvoiceWithLines(e.existingId);
+          try { if (invoice?.image_path) setDocUrl(await getInvoiceFileUrl(invoice.image_path)); } catch { /* preview only */ }
           loadExtraction(invoice, ls || [], { reused: true });
           setErr("");
         } catch (inner) {
@@ -9915,9 +9922,24 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
           </div>
         </div>
 
-        {/* Review */}
+        {/* Review — document beside the data, the pattern every extraction
+            product converges on. Stacks on narrow screens. */}
         {rows.length > 0 && (
-          <>
+          <div className={docUrl ? "grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] gap-4 items-start" : ""}>
+            {docUrl && (
+              <div className="rounded-xl overflow-hidden lg:sticky lg:top-2" style={{ border: "1px solid #E8DCC6", background: "#FDF8EF" }}>
+                <div className="flex items-center justify-between px-3 py-2" style={{ background: "#3A2E26" }}>
+                  <span className="text-[10px] uppercase tracking-widest font-bold" style={{ color: "#F3E9D8" }}>Source document</span>
+                  <a href={docUrl} target="_blank" rel="noreferrer" className="text-[10px] font-bold" style={{ color: "#F3E9D8" }}>Open full size</a>
+                </div>
+                {/* The extractor accepts PDFs and images, so the preview has to
+                    handle both. */}
+                {/\.pdf(\?|$)/i.test(String(docUrl).split("?")[0])
+                  ? <iframe title="Source invoice" src={docUrl} className="w-full" style={{ height: "70vh", border: 0 }}/>
+                  : <img src={docUrl} alt="Source invoice" className="w-full object-contain" style={{ maxHeight: "70vh" }}/>}
+              </div>
+            )}
+            <div className="min-w-0 space-y-3">
             <div className="flex items-center justify-between gap-3 flex-wrap">
               <div className="text-xs text-slate-400">
                 {usable.length} of {rows.length} line{rows.length === 1 ? "" : "s"} matched
@@ -10000,7 +10022,8 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
                 </tbody>
               </table>
             </div>
-          </>
+            </div>
+          </div>
         )}
 
         <div className="flex justify-end gap-2 pt-2 border-t border-slate-800/60">
@@ -64291,7 +64314,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: DUPOPEN 2026-08-04g");
+      console.log("CB build: DOCVIEW 2026-08-04h");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
