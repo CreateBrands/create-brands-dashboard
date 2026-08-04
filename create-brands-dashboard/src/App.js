@@ -9483,6 +9483,9 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
   const [reference, setReference] = useState("");
   const [vatMode, setVatMode] = useState("exclusive");
   const [rows, setRows] = useState([]);               // review table
+  // IMPORTHEAD — what the document itself says, so the review can be compared
+  // against it rather than only against the lines we managed to match.
+  const [docTotals, setDocTotals] = useState(null);
   const [stage, setStage] = useState("");             // progress text
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -9569,8 +9572,43 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
         setErr("Couldn't read any lines from that document. Try a clearer scan, or use the Excel template.");
         return;
       }
+      // IMPORTHEAD 2026-08-04c — v1 of this only picked up the number and date.
+      // Everything else the extractor now returns — supplier, due date, totals —
+      // was being thrown away, so the header had to be re-keyed by hand on every
+      // import even when the document plainly said it.
       if (head?.invoice_number && !docNumber) setDocNumber(head.invoice_number);
+      if (head?.order_number && !reference) setReference(head.order_number);
       if (head?.invoice_date) setDocDate(String(head.invoice_date).slice(0, 10));
+      if (head?.due_date) setDueDate(String(head.due_date).slice(0, 10));
+
+      // Match the extracted supplier name to a vendor. Exact first, then a
+      // contains match both ways so "J M Posner LTD" finds "JMPOSNER".
+      if (head?.supplier_name && !vendorId) {
+        const norm = (s) => String(s || "").toLowerCase().replace(/\b(ltd|limited|plc|llp|uk|the|co)\b/g, "").replace(/[^a-z0-9]/g, "");
+        const target = norm(head.supplier_name);
+        if (target) {
+          const hit = vendors.find(v => norm(v.displayName) === target || norm(v.companyName) === target)
+            || vendors.find(v => {
+              const a = norm(v.displayName), b = norm(v.companyName);
+              return (a && (a.includes(target) || target.includes(a)))
+                  || (b && (b.includes(target) || target.includes(b)));
+            });
+          if (hit) setVendorId(hit.id);
+          else setErr(`Supplier "${head.supplier_name}" isn't in your vendor list — pick one, or add them first.`);
+        }
+      }
+
+      // VAT basis: the extractor reports net and gross separately, so infer
+      // rather than leaving it on a default that may be wrong.
+      if (head?.total_gross != null && head?.total_ex_vat != null && Number(head.total_gross) > Number(head.total_ex_vat)) {
+        setVatMode("exclusive");
+      }
+      setDocTotals({
+        net: head?.total_ex_vat != null ? Number(head.total_ex_vat) : null,
+        gross: head?.total_gross != null ? Number(head.total_gross) : null,
+        due: head?.amount_due != null ? Number(head.amount_due) : null,
+        warnings: Array.isArray(head?.extraction_warnings) ? head.extraction_warnings : [],
+      });
       // IMPORTQTY 2026-08-04b — quantity lives in `order_qty`; reading only
       // `qty` meant every line defaulted to 1. A J M Posner proforma for
       // £6,231 (70 × £41 + 90 × £37) imported as £78 with prices correct and
@@ -9771,8 +9809,22 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
                 {usable.length} of {rows.length} line{rows.length === 1 ? "" : "s"} matched
                 {unmatched.length > 0 && <span className="text-amber-400"> · {unmatched.length} need an item before they can be imported</span>}
               </div>
-              <div className="text-sm font-bold text-white">Total {gbp(total)}</div>
+              <div className="text-right">
+                <div className="text-sm font-bold text-white">Importing {gbp(total)}</div>
+                {docTotals?.net != null && (
+                  <div className={`text-[11px] ${Math.abs(docTotals.net - total) > 0.01 ? "text-amber-400" : "text-slate-500"}`}>
+                    Document says {gbp(docTotals.net)} net
+                    {docTotals.gross != null ? ` · ${gbp(docTotals.gross)} gross` : ""}
+                    {Math.abs(docTotals.net - total) > 0.01 ? ` — ${gbp(Math.abs(docTotals.net - total))} not yet matched` : ""}
+                  </div>
+                )}
+              </div>
             </div>
+            {(docTotals?.warnings || []).length > 0 && (
+              <div className="text-[11px] text-amber-300 bg-amber-950/20 border border-amber-800/40 rounded-lg px-3 py-2">
+                {docTotals.warnings.map((w, i) => <div key={i}>⚠ {String(w).replace(/_/g, " ")}</div>)}
+              </div>
+            )}
             <div className="border border-slate-800 rounded-xl overflow-x-auto max-h-[45vh]">
               <table className="w-full text-xs">
                 <thead className="dist-th sticky top-0">
@@ -64112,7 +64164,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: IMPORTQTY 2026-08-04b");
+      console.log("CB build: IMPORTHEAD 2026-08-04c");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
