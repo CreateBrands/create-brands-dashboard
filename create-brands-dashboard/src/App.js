@@ -9580,6 +9580,58 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
     }));
   };
 
+  // DUPOPEN 2026-08-04g — a duplicate used to be a dead end: the document was
+  // refused, and if nobody had converted the first scan there was no bill and
+  // no way to make one. Now a duplicate LOADS the existing extraction into the
+  // review table — which is also what you want when a colleague has already
+  // scanned the same delivery note.
+  const loadExtraction = useCallback((head, lines, { reused = false } = {}) => {
+    const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+    addRows(lines.map(l => {
+      const price = num(l.pack_price_ex_vat) ?? num(l.unit_price) ?? 0;
+      let qty = num(l.order_qty) ?? num(l.qty) ?? num(l.pack_qty_base);
+      if (qty == null || qty === 0) {
+        const t = num(l.line_total) ?? num(l.amount);
+        if (t != null && price > 0) qty = Math.round((t / price) * 1000) / 1000;
+      }
+      return {
+        description: l.raw_description || l.description || "",
+        sku: l.supplier_code || "",
+        qty: qty != null && qty !== 0 ? qty : 1,
+        unitPrice: price,
+        vat: num(l.vat),
+      };
+    }));
+
+    if (head?.invoice_number) setDocNumber(head.invoice_number);
+    if (head?.order_number) setReference(head.order_number);
+    if (head?.invoice_date) setDocDate(String(head.invoice_date).slice(0, 10));
+    if (head?.due_date) setDueDate(String(head.due_date).slice(0, 10));
+    if (head?.supplier_name) {
+      const norm = (s) => String(s || "").toLowerCase().replace(/\b(ltd|limited|plc|llp|uk|the|co)\b/g, "").replace(/[^a-z0-9]/g, "");
+      const target = norm(head.supplier_name);
+      if (target) {
+        const hit = vendors.find(v => norm(v.displayName) === target || norm(v.companyName) === target)
+          || vendors.find(v => {
+            const a = norm(v.displayName), b = norm(v.companyName);
+            return (a && (a.includes(target) || target.includes(a))) || (b && (b.includes(target) || target.includes(b)));
+          });
+        if (hit) setVendorId(hit.id);
+        else setErr(`Supplier "${head.supplier_name}" isn't in your vendor list — pick one, or add them first.`);
+      }
+    }
+    if (head?.total_gross != null && head?.total_ex_vat != null && Number(head.total_gross) > Number(head.total_ex_vat)) setVatMode("exclusive");
+    setDocTotals({
+      net: head?.total_ex_vat != null ? Number(head.total_ex_vat) : null,
+      gross: head?.total_gross != null ? Number(head.total_gross) : null,
+      due: head?.amount_due != null ? Number(head.amount_due) : null,
+      warnings: Array.isArray(head?.extraction_warnings) ? head.extraction_warnings : [],
+    });
+    setStage(reused
+      ? `Already scanned on ${String(head?.created_at || "").slice(0, 10) || "a previous occasion"} — that extraction is loaded below. Review and create the bill, or cancel.`
+      : `Read ${lines.length} line${lines.length === 1 ? "" : "s"} — review below before creating.`);
+  }, [vendors, addRows]);
+
   // ── OCR ───────────────────────────────────────────────────────────────────
   const onScan = async (file) => {
     if (!file) return;
@@ -9687,7 +9739,23 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
         `Read ${lines.length} line${lines.length === 1 ? "" : "s"} — review below before creating.`
         + (mismatch ? ` ⚠ The document totals ${gbp(docTotal)} but these lines add to ${gbp(lineSum)} — check the quantities.` : "")
       );
-    } catch (e) { setStage(""); setErr(e?.message || String(e)); }
+    } catch (e) {
+      // DUPOPEN — the function returns the existing invoice's id on a duplicate.
+      // Load it rather than stopping: the document is already extracted, and
+      // what the user actually wants is the bill.
+      if (e?.duplicate && e?.existingId) {
+        try {
+          setStage("Already scanned — loading the existing extraction…");
+          const { invoice, lines: ls } = await getInvoiceWithLines(e.existingId);
+          loadExtraction(invoice, ls || [], { reused: true });
+          setErr("");
+        } catch (inner) {
+          setStage(""); setErr(e.message || "This document has already been imported.");
+        }
+      } else {
+        setStage(""); setErr(e?.message || String(e));
+      }
+    }
     setBusy(false);
   };
 
@@ -64223,7 +64291,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: IMPORTVAT 2026-08-04f");
+      console.log("CB build: DUPOPEN 2026-08-04g");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
