@@ -9561,10 +9561,23 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
       const inv = await uploadInvoiceFile(file, "brand-distribution", currentUser?.id || null);
       setStage("Reading line items…");
       await extractInvoice(inv.id);
+      // IMPORTRACE 2026-08-04d — the extractor inserts LINES first and updates
+      // the invoice header LAST. Breaking as soon as lines appeared grabbed the
+      // header before supplier, number, dates and totals had been written — so
+      // quantities came through correctly while the header stayed empty.
+      // Wait for the status the function sets in that same final update.
       let lines = [], head = null;
-      for (let i = 0; i < 12; i++) {
+      for (let i = 0; i < 20; i++) {
         const { invoice, lines: ls } = await getInvoiceWithLines(inv.id);
-        if (ls && ls.length) { lines = ls; head = invoice; break; }
+        if (invoice?.status === "failed") {
+          throw new Error(invoice.error_note || "The extractor couldn't read that document.");
+        }
+        // status flips to pending_review in the same update that writes the
+        // header, so it's the reliable signal that everything has landed.
+        if (invoice?.status === "pending_review") { lines = ls || []; head = invoice; break; }
+        // Fallback: if lines exist but the status hasn't moved after several
+        // more polls, take what we have rather than timing out entirely.
+        if (ls && ls.length && i >= 14) { lines = ls; head = invoice; break; }
         await new Promise(r => setTimeout(r, 1500));
       }
       if (!lines.length) {
@@ -64164,7 +64177,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: IMPORTHEAD 2026-08-04c");
+      console.log("CB build: IMPORTRACE 2026-08-04d");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
