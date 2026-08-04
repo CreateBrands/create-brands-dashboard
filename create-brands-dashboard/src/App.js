@@ -9853,7 +9853,7 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
   const inp = "px-3 py-2 bg-slate-950 border border-slate-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500";
 
   return (
-    <Modal onClose={onClose} title="Import bill or purchase order" maxW="max-w-5xl" fullScreen>
+    <Modal onClose={onClose} title="Import bill or purchase order" maxW="max-w-5xl" fullScreen wide="max-w-[1800px]">
       <div className="space-y-4">
         {/* Type */}
         <div className="flex gap-1.5">
@@ -9925,7 +9925,7 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
         {/* Review — document beside the data, the pattern every extraction
             product converges on. Stacks on narrow screens. */}
         {rows.length > 0 && (
-          <div className={docUrl ? "grid lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)] gap-4 items-start" : ""}>
+          <div className={docUrl ? "grid xl:grid-cols-[minmax(0,4fr)_minmax(0,6fr)] gap-5 items-start" : ""}>
             {docUrl && (
               <div className="rounded-xl overflow-hidden lg:sticky lg:top-2" style={{ border: "1px solid #E8DCC6", background: "#FDF8EF" }}>
                 <div className="flex items-center justify-between px-3 py-2" style={{ background: "#3A2E26" }}>
@@ -9935,8 +9935,8 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
                 {/* The extractor accepts PDFs and images, so the preview has to
                     handle both. */}
                 {/\.pdf(\?|$)/i.test(String(docUrl).split("?")[0])
-                  ? <iframe title="Source invoice" src={docUrl} className="w-full" style={{ height: "70vh", border: 0 }}/>
-                  : <img src={docUrl} alt="Source invoice" className="w-full object-contain" style={{ maxHeight: "70vh" }}/>}
+                  ? <iframe title="Source invoice" src={docUrl} className="w-full" style={{ height: "78vh", border: 0 }}/>
+                  : <img src={docUrl} alt="Source invoice" className="w-full object-contain" style={{ maxHeight: "78vh" }}/>}
               </div>
             )}
             <div className="min-w-0 space-y-3">
@@ -37040,7 +37040,7 @@ const inputCls = "w-full bg-slate-900/60 border border-slate-700 rounded-xl px-4
 const labelCls = "text-xs text-slate-600 font-semibold mb-1.5 block";
 const selCls = inputCls; // module-level select styling (used by SmallwareView modals)
 
-function Modal({ title, onClose, children, footer, maxW = "max-w-lg", fullScreen = false }) {
+function Modal({ title, onClose, children, footer, maxW = "max-w-lg", fullScreen = false, wide = "" }) {
   // fullScreen: document views (orders, invoices, dispatches…) carry too many
   // lines for a popup — they take the whole screen like a page, with a
   // "← Back" header and a wide centred column. Small dialogs stay popups.
@@ -37053,7 +37053,12 @@ function Modal({ title, onClose, children, footer, maxW = "max-w-lg", fullScreen
           <button onClick={onClose} className="ml-auto text-slate-400 hover:text-white flex-shrink-0"><X size={20}/></button>
         </div>
         <div className="flex-1 overflow-y-auto">
-          <div className="max-w-5xl mx-auto w-full px-4 sm:px-6 py-5">{children}</div>
+          {/* WIDEIMPORT 2026-08-04i — fullScreen deliberately ignores maxW and
+              uses a 5xl reading column; 21 callers pass a NARROWER maxW for
+              their popup form, so honouring it here would have shrunk them all.
+              A separate `wide` opt-in instead, for side-by-side layouts that
+              genuinely need the screen. */}
+          <div className={`${wide || "max-w-5xl"} mx-auto w-full px-4 sm:px-6 py-5`}>{children}</div>
         </div>
         {footer && <div className="flex gap-3 px-4 sm:px-8 py-3 border-t border-slate-800 flex-shrink-0 bg-slate-900"><div className="max-w-5xl mx-auto w-full flex gap-3">{footer}</div></div>}
       </div>
@@ -64314,7 +64319,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: DOCVIEW 2026-08-04h");
+      console.log("CB build: WIDEIMPORT 2026-08-04i");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
