@@ -5844,7 +5844,23 @@ export async function extractInvoice(invoiceId) {
     body: { invoice_id: invoiceId },
     headers,
   });
-  if (error) throw error;
+  // EXTRACTERR 2026-08-04 — functions.invoke throws on any non-2xx WITHOUT
+  // reading the body, so the function's own explanation ("Already imported:
+  // J M Posner INV-JMP-536942...") was being replaced by the useless
+  // "Edge Function returned a non-2xx status code". Read the body first.
+  if (error) {
+    let detail = "";
+    try {
+      const body = await error.context?.json?.();
+      detail = body?.error || "";
+      if (body?.duplicate) {
+        const e = new Error(detail || "This document has already been imported.");
+        e.duplicate = true; e.existingId = body.existing_id || null;
+        throw e;
+      }
+    } catch (inner) { if (inner?.duplicate) throw inner; }
+    throw new Error(detail || error.message || "extraction failed");
+  }
   if (!data?.ok) throw new Error(data?.error || "extraction failed");
   // INTAKE: check and match on arrival, not when someone eventually opens it.
   let guards = null;

@@ -64177,7 +64177,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: IMPORTRACE 2026-08-04d");
+      console.log("CB build: EXTRACTERR 2026-08-04e");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
