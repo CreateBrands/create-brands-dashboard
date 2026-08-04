@@ -9571,13 +9571,43 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
       }
       if (head?.invoice_number && !docNumber) setDocNumber(head.invoice_number);
       if (head?.invoice_date) setDocDate(String(head.invoice_date).slice(0, 10));
-      addRows(lines.map(l => ({
-        description: l.raw_description || l.description || "",
-        sku: l.supplier_code || "",
-        qty: l.qty != null ? l.qty : 1,
-        unitPrice: l.pack_price_ex_vat != null ? l.pack_price_ex_vat : (l.unit_price ?? 0),
-      })));
-      setStage(`Read ${lines.length} line${lines.length === 1 ? "" : "s"} — review below before creating.`);
+      // IMPORTQTY 2026-08-04b — quantity lives in `order_qty`; reading only
+      // `qty` meant every line defaulted to 1. A J M Posner proforma for
+      // £6,231 (70 × £41 + 90 × £37) imported as £78 with prices correct and
+      // quantities wrong — which is the worst shape of error, because it looks
+      // plausible. Same order_qty → qty fallback the rest of the app uses.
+      const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; };
+      addRows(lines.map(l => {
+        const price = num(l.pack_price_ex_vat) ?? num(l.unit_price) ?? 0;
+        let qty = num(l.order_qty) ?? num(l.qty) ?? num(l.pack_qty_base);
+        // Last resort: derive from the line total. An extractor that missed the
+        // quantity column usually still read the amount, and 2870 ÷ 41 = 70.
+        if (qty == null || qty === 0) {
+          const total = num(l.line_total) ?? num(l.amount);
+          if (total != null && price > 0) qty = Math.round((total / price) * 1000) / 1000;
+        }
+        return {
+          description: l.raw_description || l.description || "",
+          sku: l.supplier_code || "",
+          qty: qty != null && qty !== 0 ? qty : 1,
+          unitPrice: price,
+        };
+      }));
+
+      // Cross-check against the document total. Getting prices right and
+      // quantities wrong produces a believable-looking import, so compare
+      // rather than trust.
+      const docTotal = num(head?.total_ex_vat) ?? num(head?.total) ?? num(head?.total_inc_vat);
+      const lineSum = lines.reduce((a, l) => {
+        const p = num(l.pack_price_ex_vat) ?? num(l.unit_price) ?? 0;
+        const q = num(l.order_qty) ?? num(l.qty) ?? 1;
+        return a + p * q;
+      }, 0);
+      const mismatch = docTotal != null && docTotal > 0 && Math.abs(docTotal - lineSum) > Math.max(1, docTotal * 0.02);
+      setStage(
+        `Read ${lines.length} line${lines.length === 1 ? "" : "s"} — review below before creating.`
+        + (mismatch ? ` ⚠ The document totals ${gbp(docTotal)} but these lines add to ${gbp(lineSum)} — check the quantities.` : "")
+      );
     } catch (e) { setStage(""); setErr(e?.message || String(e)); }
     setBusy(false);
   };
@@ -64082,7 +64112,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: PRINTSAFE 2026-08-04a");
+      console.log("CB build: IMPORTQTY 2026-08-04b");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
