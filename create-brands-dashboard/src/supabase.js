@@ -6604,6 +6604,52 @@ export async function disconnectBank(connectionId) {
   return connectionId;
 }
 
+// ── GMAIL CONNECT 2026-08-04 — supplier invoices by email ───────────────────
+// All of it goes through Edge Functions. The refresh token lives in
+// integration_tokens, which is RLS-locked with no policy so only the
+// service_role can read it — this app runs as anon with the key in its JS
+// bundle, so a token the browser could reach would be public.
+
+async function gmailFn(action, body = {}) {
+  const headers = {};
+  if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
+  const { data, error } = await supabase.functions.invoke("gmail-connect", { body: { action, ...body }, headers });
+  if (error) {
+    let detail = "";
+    try { detail = (await error.context?.json?.())?.error || ""; } catch { /* ignore */ }
+    throw new Error(detail || error.message || "Gmail request failed");
+  }
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
+
+export const gmailStatus     = () => gmailFn("status");
+export const gmailAuthUrl    = (clientId, redirectUri) => gmailFn("authUrl", { clientId, redirectUri });
+export const gmailExchange   = (payload) => gmailFn("exchange", payload);
+export const gmailDisconnect = () => gmailFn("disconnect");
+
+export async function runGmailIntake({ max = 10 } = {}) {
+  const headers = {};
+  if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
+  const { data, error } = await supabase.functions.invoke("gmail-invoice-intake", { body: { max }, headers });
+  if (error) throw error;
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
+
+export async function fetchIntegrationStatus(id = "gmail") {
+  const { data, error } = await supabase.from("integration_status").select("*").eq("id", id).maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
+
+export async function fetchGmailIntakeLog(limit = 25) {
+  const { data, error } = await supabase.from("gmail_intake_log")
+    .select("*").order("created_at", { ascending: false }).limit(limit);
+  if (error) throw error;
+  return data || [];
+}
+
 export async function fetchAppSettings() {
   const { data, error } = await supabase.from("app_settings").select("key, value");
   if (error) throw error;

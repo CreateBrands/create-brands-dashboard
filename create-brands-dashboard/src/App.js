@@ -192,6 +192,8 @@ import {
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
   fetchFreshOrderCustomers, saveFreshOrderCustomers, freshAccessActive, setSoFreshAttached, deletePayPeriod, setSoTeamNotes, uploadIssuePhoto,
   fetchBreakOptOutStores, saveBreakOptOutStores, storeOptsOutOfBreaks,
+  gmailStatus, gmailAuthUrl, gmailExchange, gmailDisconnect, runGmailIntake,
+  fetchIntegrationStatus, fetchGmailIntakeLog,
   fetchStoreDocCategories, upsertStoreDocCategory, archiveStoreDocCategory,
   fetchStoreDocuments, uploadStoreDocumentFile, saveStoreDocument, supersedeStoreDocument,
   archiveStoreDocument, deleteStoreDocument, docExpiryStatus,
@@ -9465,6 +9467,235 @@ function StoreDocCategoriesModal({ categories, brands = [], onClose, onChanged }
         )}
       </div>
     </Modal>
+  );
+}
+
+// ── GMAILCONNECT 2026-08-04j — connect Gmail from the app ───────────────────
+// Replaces a terminal session: paste the two Google Cloud credentials once,
+// press Connect, approve in Google's own consent screen, done. The refresh
+// token is exchanged and stored server-side — the browser never holds it.
+//
+// The one step this can't remove is creating the OAuth client in Google Cloud;
+// that's Google's requirement, not ours. Everything after it is a button.
+
+function GmailIntakeSetup({ currentUser }) {
+  const T = { ink: "#3A2E26", soft: "#7A6A58", faint: "#9A8770", line: "#E8DCC6", card: "#FDF8EF", field: "#FFFFFF", accent: "#844429" };
+  const [status, setStatus] = useState(null);
+  const [health, setHealth] = useState(null);
+  const [log, setLog] = useState([]);
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+  const [showCreds, setShowCreds] = useState(false);
+
+  const redirectUri = typeof window !== "undefined" ? `${window.location.origin}/gmail-callback` : "";
+
+  const load = useCallback(async () => {
+    try {
+      const [s, h, l, settings] = await Promise.all([
+        gmailStatus().catch(() => null),
+        fetchIntegrationStatus("gmail").catch(() => null),
+        fetchGmailIntakeLog(15).catch(() => []),
+        fetchAppSettings().catch(() => ({})),
+      ]);
+      setStatus(s); setHealth(h); setLog(l);
+      setQuery(settings?.gmail_intake_query || "label:supplier-invoices has:attachment newer_than:30d");
+    } catch (e) { setErr(e.message); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  // Google hands the code back on the redirect. Catch it, exchange it, and
+  // clean the URL so a refresh doesn't try to reuse a spent code.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    if (!code) return;
+    const pending = sessionStorage.getItem("gmailPendingCreds");
+    if (!pending) { setErr("Google sent a code back, but the credentials weren't held. Enter them and press Connect again."); return; }
+    (async () => {
+      setBusy(true); setErr(""); setMsg("Finishing the connection…");
+      try {
+        const { clientId: cid, clientSecret: cs } = JSON.parse(pending);
+        const res = await gmailExchange({
+          code, clientId: cid, clientSecret: cs, redirectUri,
+          connectedBy: currentUser?.name || currentUser?.id || null,
+        });
+        sessionStorage.removeItem("gmailPendingCreds");
+        window.history.replaceState({}, "", window.location.pathname + window.location.hash);
+        setMsg(`Connected as ${res.account_email || "your Gmail account"}.`);
+        await load();
+      } catch (e) { setErr(e.message); setMsg(""); }
+      setBusy(false);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const connect = async () => {
+    if (!clientId.trim() || !clientSecret.trim()) { setErr("Both the client ID and secret are needed."); return; }
+    setBusy(true); setErr("");
+    try {
+      // Held in sessionStorage, not localStorage: it survives the round trip to
+      // Google and dies with the tab.
+      sessionStorage.setItem("gmailPendingCreds", JSON.stringify({ clientId: clientId.trim(), clientSecret: clientSecret.trim() }));
+      const { url } = await gmailAuthUrl(clientId.trim(), redirectUri);
+      window.location.href = url;
+    } catch (e) { setErr(e.message); setBusy(false); }
+  };
+
+  const disconnect = async () => {
+    if (!window.confirm("Disconnect Gmail? Invoices already imported are kept; no new ones will be pulled in.")) return;
+    setBusy(true); setErr("");
+    try { await gmailDisconnect(); setMsg("Disconnected."); await load(); }
+    catch (e) { setErr(e.message); }
+    setBusy(false);
+  };
+
+  const runNow = async () => {
+    setBusy(true); setErr(""); setMsg("Checking for new invoices…");
+    try {
+      const r = await runGmailIntake({ max: 10 });
+      setMsg(r.connected === false ? "Gmail isn't connected yet."
+        : `Checked ${r.checked} message${r.checked === 1 ? "" : "s"} — ${r.imported} imported, ${r.skipped} already seen.`);
+      await load();
+    } catch (e) { setErr(e.message); setMsg(""); }
+    setBusy(false);
+  };
+
+  const saveQuery = async () => {
+    setBusy(true); setErr("");
+    try { await upsertAppSetting("gmail_intake_query", query.trim()); setMsg("Search saved."); }
+    catch (e) { setErr(e.message); }
+    setBusy(false);
+  };
+
+  const ctl = "w-full px-3 py-2 rounded-lg text-sm focus:outline-none";
+  const ctlSty = { background: T.field, border: `1px solid ${T.line}`, color: T.ink };
+  const lbl = "block text-[11px] font-semibold mb-1";
+  const connected = !!status?.connected;
+
+  return (
+    <div className="space-y-4 max-w-3xl">
+      <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
+        <div className="px-4 py-2.5 text-[10px] uppercase tracking-widest font-bold" style={{ background: "#3A2E26", color: "#F3E9D8" }}>
+          Supplier invoices by email
+        </div>
+        <div className="p-4 space-y-3">
+          <div className="flex items-center gap-3 flex-wrap">
+            <span className="text-xs font-bold px-2.5 py-1 rounded-full"
+              style={connected
+                ? { background: "#EAF3E7", color: "#3F6B3A", border: "1px solid #BBD6B4" }
+                : { background: "#F3EDE2", color: "#7A6A58", border: `1px solid ${T.line}` }}>
+              {connected ? `Connected · ${status.account_email || "Gmail"}` : "Not connected"}
+            </span>
+            {connected && (
+              <>
+                <button onClick={runNow} disabled={busy} className="px-3 py-1.5 rounded-lg text-xs font-bold text-white disabled:opacity-40" style={{ background: T.accent }}>
+                  {busy ? "Working…" : "Check now"}
+                </button>
+                <button onClick={disconnect} disabled={busy} className="px-3 py-1.5 rounded-lg text-xs font-semibold" style={{ background: "#F0E6D2", color: T.ink, border: `1px solid ${T.line}` }}>
+                  Disconnect
+                </button>
+              </>
+            )}
+          </div>
+
+          {health?.last_run_at && (
+            <div className="text-[11px]" style={{ color: T.faint }}>
+              Last checked {new Date(health.last_run_at).toLocaleString("en-GB")}
+              {health.last_result ? ` — ${health.last_result}` : ""}
+              {health.last_error ? <span style={{ color: "#B3261E" }}> · {health.last_error}</span> : null}
+            </div>
+          )}
+
+          {msg && <div className="text-xs px-3 py-2 rounded-lg" style={{ background: "#EAF3E7", color: "#3F6B3A", border: "1px solid #BBD6B4" }}>{msg}</div>}
+          {err && <div className="text-xs px-3 py-2 rounded-lg" style={{ background: "#FBEAEA", color: "#B3261E", border: "1px solid #E8A9A9" }}>{err}</div>}
+
+          {!connected && (
+            <>
+              <p className="text-xs" style={{ color: T.soft }}>
+                One-off setup in Google Cloud, then a button. Suppliers email invoices to your Gmail; every 15 minutes
+                anything new is pulled in, read, and left in the review queue.
+              </p>
+
+              <details className="rounded-lg" style={{ background: "#F5EDDF", border: `1px solid ${T.line}` }} open={showCreds}>
+                <summary onClick={() => setShowCreds(v => !v)} className="px-3 py-2 text-xs font-bold cursor-pointer" style={{ color: T.ink }}>
+                  How to get the two values below
+                </summary>
+                <div className="px-3 pb-3 text-[11px] space-y-1.5" style={{ color: T.soft }}>
+                  <div>1. Open <b>console.cloud.google.com</b> and create a project (or use an existing one).</div>
+                  <div>2. <b>APIs &amp; Services → Library</b> → enable <b>Gmail API</b>.</div>
+                  <div>3. <b>OAuth consent screen</b> → External → add your Gmail address as a test user.</div>
+                  <div>4. <b>Credentials → Create credentials → OAuth client ID</b> → <b>Web application</b>.</div>
+                  <div>5. Under <b>Authorised redirect URIs</b> add exactly:
+                    <code className="block mt-1 px-2 py-1 rounded" style={{ background: "#FFFFFF", border: `1px solid ${T.line}`, color: T.ink }}>{redirectUri}</code>
+                  </div>
+                  <div>6. Copy the client ID and secret into the fields below.</div>
+                  <div className="pt-1" style={{ color: "#8A5A0B" }}>
+                    Publish the consent screen once you're happy — Google expires tokens for apps left in "testing" after seven days.
+                  </div>
+                </div>
+              </details>
+
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div>
+                  <label className={lbl} style={{ color: T.faint }}>Client ID</label>
+                  <input value={clientId} onChange={e => setClientId(e.target.value)} placeholder="…apps.googleusercontent.com" className={ctl} style={ctlSty}/>
+                </div>
+                <div>
+                  <label className={lbl} style={{ color: T.faint }}>Client secret</label>
+                  <input type="password" value={clientSecret} onChange={e => setClientSecret(e.target.value)} className={ctl} style={ctlSty}/>
+                </div>
+              </div>
+              <button onClick={connect} disabled={busy} className="px-4 py-2 rounded-xl text-sm font-bold text-white disabled:opacity-40" style={{ background: T.accent }}>
+                {busy ? "Opening Google…" : "Connect Gmail"}
+              </button>
+              <p className="text-[11px]" style={{ color: T.faint }}>
+                You'll approve access on Google's own screen. Read-only — it can't send or delete anything.
+              </p>
+            </>
+          )}
+
+          <div className="pt-3" style={{ borderTop: `1px solid ${T.line}` }}>
+            <label className={lbl} style={{ color: T.faint }}>Which emails to look at</label>
+            <div className="flex gap-2">
+              <input value={query} onChange={e => setQuery(e.target.value)} className={ctl} style={ctlSty}/>
+              <button onClick={saveQuery} disabled={busy} className="px-3 py-2 rounded-lg text-xs font-bold whitespace-nowrap" style={{ background: "#F0E6D2", color: T.ink, border: `1px solid ${T.line}` }}>Save</button>
+            </div>
+            <p className="text-[11px] mt-1.5" style={{ color: "#8A5A0B" }}>
+              Keep this narrow. Pointed at a whole inbox it will upload every PDF anyone has ever sent you and try to read each one as an invoice.
+              Create a Gmail label and filter first.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {log.length > 0 && (
+        <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
+          <div className="px-4 py-2.5 text-[10px] uppercase tracking-widest font-bold" style={{ background: "#3A2E26", color: "#F3E9D8" }}>
+            Recently pulled in
+          </div>
+          <table className="w-full text-xs">
+            <tbody>
+              {log.map(r => (
+                <tr key={r.message_id} style={{ borderTop: `1px solid ${T.line}` }}>
+                  <td className="px-3 py-2 whitespace-nowrap" style={{ color: T.faint }}>
+                    {new Date(r.created_at).toLocaleDateString("en-GB")}
+                  </td>
+                  <td className="px-3 py-2" style={{ color: T.soft }}>{r.sender}</td>
+                  <td className="px-3 py-2" style={{ color: T.ink }}>{r.subject}</td>
+                  <td className="px-3 py-2 text-right whitespace-nowrap" style={{ color: r.attachments ? "#3F6B3A" : T.faint }}>
+                    {r.attachments ? `${r.attachments} invoice${r.attachments === 1 ? "" : "s"}` : (r.note || "nothing usable")}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -64319,7 +64550,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: WIDEIMPORT 2026-08-04i");
+      console.log("CB build: GMAILCONNECT 2026-08-04j");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -66384,6 +66615,7 @@ export default function App() {
                   desc: "Order page layout and collections.",
                   items: [
                     { key: "store-ordering", label: "Store Ordering", desc: "Per-store suppliers, locations, frequency, team rounds and approvers.", gate: () => true },
+                    { key: "gmail-intake",   label: "Invoices by email", desc: "Connect Gmail so supplier invoices arrive and extract themselves.", gate: () => true },
                     { key: "dist-order-setup", label: "Order Page", desc: "Layout, collections, and how items are shown.", gate: gOwner },
                     { key: "dist-order-builder", label: "Order Page Builder", desc: "Drag to arrange departments, collections, and items.", gate: gOwner },
                   ].filter(i => i.gate()),
@@ -66443,6 +66675,8 @@ export default function App() {
             />}
             {effectiveActiveView === "setup" && setupPanel === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
             {effectiveActiveView === "setup" && setupPanel === "store-ordering" && currentUser.role !== "staff" && <StoreOrderingSetupView currentUser={currentUser} stores={stores} opsTeam={opsTeam}/>}
+            {/* GMAILCONNECT — owner/HQ only: it holds an OAuth client secret. */}
+            {effectiveActiveView === "setup" && setupPanel === "gmail-intake" && isHqOrAbove(currentUser.role) && <GmailIntakeSetup currentUser={currentUser}/>}
             {effectiveActiveView === "setup" && setupPanel === "hr-policies" && currentUser.role !== "staff" && <PoliciesSetupView currentUser={currentUser} opsTeam={opsTeam} brands={brands} stores={stores}/>}
             {effectiveActiveView === "setup" && setupPanel === "dist-order-setup" && currentUser.role === "owner" && <DistOrderSetupView/>}
             {effectiveActiveView === "setup" && setupPanel === "salescats" && <SalesCategoryMapView/>}
