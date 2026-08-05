@@ -23491,7 +23491,6 @@ function EmployeeActionCard({ currentUser, employeeId }) {
 function EmployeeHomeGreeting({ currentUser, brands, opsTeam, schedules = [], assignments = [], stores = [], visibleStoreIds = [], children }) {
   const myId = currentUser.opsTeamMemberId || currentUser.id;
   const myMember = (opsTeam || []).find(m => m.id === myId);
-  const firstName = myMember?.firstName || myMember?.nickname || (currentUser.name || "").split(" ")[0] || "there";
   const myBrandId = currentUser.brandIds?.[0];
 
   // Greeting by time of day
@@ -23586,8 +23585,9 @@ function EmployeeHomeGreeting({ currentUser, brands, opsTeam, schedules = [], as
         )}
       </div>
 
-      {/* greeting */}
-      <div className="text-2xl font-bold leading-tight">{greeting}, {firstName}.</div>
+      {/* NONAME 2026-08-05k — the greeting no longer names the person. It is
+          their own phone; the name was decoration. */}
+      <div className="text-2xl font-bold leading-tight">{greeting}.</div>
       <div className="text-lg font-semibold text-white/90 mt-1">You have {shiftWord} today.</div>
 
       {/* shift card */}
@@ -24624,7 +24624,9 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
   memberExpTypes = {}, memberExpCategories = {}, memberExpStores = {}, memberExpAccounts = {}, onSubmitExpense, onSubmitExpenseMany,
   onLogout }) {
 
-  const brand = brands.find(b => b.id === currentUser.brandIds[0]);
+  // NONAME 2026-08-05k — brands[0] was only ever used to label the header and
+  // the More card, both of which are gone. Nothing should pick one of a
+  // person's brands or stores on their behalf and present it as fact.
   // Store scope for this employee: stores in their brand(s), plus any store
   // their ops_team record lists. TodaysTasks needs this to scope assignments —
   // without it, nothing shows (every store-scoped assignment fails the filter).
@@ -25163,11 +25165,11 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
           <div className="flex items-center gap-3 px-3 py-3 mb-3 rounded-2xl bg-slate-800/60">
             <label className="relative flex-shrink-0 cursor-pointer" title="Tap to change photo">
               {myOpsMember?.photoUrl ? (
-                <img src={myOpsMember.photoUrl} alt={currentUser.name} className="w-12 h-12 rounded-full object-cover"/>
+                <img src={myOpsMember.photoUrl} alt="Profile photo" className="w-12 h-12 rounded-full object-cover"/>
               ) : (
-                <div className="w-12 h-12 rounded-full flex items-center justify-center text-sm font-bold text-white" style={{ background: currentUser.color || "#6366f1" }}>
-                  {(currentUser.name || "?").split(" ").map(w => w[0]).slice(0,2).join("").toUpperCase()}
-                </div>
+                // NONAME 2026-08-05k — was the person's initials, taken from
+                // their name. Same information, one step removed.
+                <div className="w-12 h-12 rounded-full flex items-center justify-center text-base bg-slate-700 text-slate-400">📷</div>
               )}
               {/* small camera badge */}
               <span className="absolute -bottom-0.5 -right-0.5 w-5 h-5 rounded-full bg-indigo-600 border-2 border-slate-800 flex items-center justify-center">
@@ -25177,8 +25179,8 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
                 onChange={e => { const f = e.target.files?.[0]; if (f) onUploadMyPhoto(f); e.target.value = ""; }}/>
             </label>
             <div className="min-w-0">
-              <div className="text-sm font-bold text-white truncate">{currentUser.name}</div>
-              <div className="text-xs text-slate-500 truncate">{brand?.name || "—"}</div>
+              <div className="text-sm font-bold text-white truncate">Your photo</div>
+              <div className="text-xs text-slate-500 truncate">Tap to change it</div>
               {photoUploadBusy && <div className="text-[11px] text-indigo-300 mt-0.5">Uploading photo…</div>}
               {photoUploadErr && <div className="text-[11px] text-red-400 mt-0.5">{photoUploadErr}</div>}
             </div>
@@ -25255,12 +25257,13 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
           <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center flex-shrink-0">
             <BarChart2 size={15} className="text-white"/>
           </div>
-          <div className="flex-1 min-w-0">
-            <div className="text-sm font-bold text-white truncate">{currentUser.name}</div>
-            <div className="text-xs text-slate-500">{brand?.name || "—"}</div>
-          </div>
+          {/* NONAME 2026-08-05k — the header used to show the person's own name
+              and brands[0] beneath it. The name told them nothing they didn't
+              know, and brands[0] is a single hard-coded pick that misrepresents
+              anyone assigned to more than one site. Where they're working is
+              the store picker's job, and it already says so. */}
+          <div className="flex-1 min-w-0"/>
           <div className="flex items-center gap-2">
-            {brand && <span className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-800 text-slate-300"><span className="w-1.5 h-1.5 rounded-full" style={{ background: brand.color }}/>{brand.name}</span>}
             {/* GLOBALSTORE 2026-08-05h — store picker as an icon beside
                 messages. Only for people who work at more than one site. */}
             {myAllStoreIds.length > 1 && (
@@ -64992,7 +64995,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: ONECOUNT 2026-08-05j");
+      console.log("CB build: NONAME 2026-08-05k");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
