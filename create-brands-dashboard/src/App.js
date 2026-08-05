@@ -192,7 +192,7 @@ import {
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
   fetchFreshOrderCustomers, saveFreshOrderCustomers, freshAccessActive, setSoFreshAttached, deletePayPeriod, setSoTeamNotes, uploadIssuePhoto,
   fetchBreakOptOutStores, saveBreakOptOutStores, storeOptsOutOfBreaks,
-  fetchPendingIntakeDocs, markIntakeConverted, dismissIntakeDoc,
+  fetchPendingIntakeDocs, markIntakeConverted, dismissIntakeDoc, setEmployeeDefaultStore,
   gmailStatus, gmailAuthUrl, gmailExchange, gmailDisconnect, runGmailIntake,
   fetchIntegrationStatus, fetchGmailIntakeLog,
   fetchStoreDocCategories, upsertStoreDocCategory, archiveStoreDocCategory,
@@ -24664,6 +24664,20 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
   // Chocoberry shops). Now: HQ/owner see the whole brand; everyone else is
   // scoped to their assigned store_ids. Fallback to the brand-wide set ONLY when
   // a user has no assigned stores at all, so no one is ever locked out.
+  // EMPSTORE 2026-08-05f — the employee's home store, read from their profile
+  // and written back when they change it. Optimistic local state so the screen
+  // reacts immediately rather than waiting for the round trip.
+  const [homeStoreOverride, setHomeStoreOverride] = useState(undefined);
+  const homeStoreId = homeStoreOverride !== undefined
+    ? homeStoreOverride
+    : (myOpsMember?.defaultStoreId || null);
+  const saveHomeStore = useCallback(async (storeId) => {
+    setHomeStoreOverride(storeId);
+    const id = myOpsMember?.id || currentUser?.employeeId;
+    if (!id) return;
+    try { await setEmployeeDefaultStore(id, storeId); } catch { /* the local choice still applies */ }
+  }, [myOpsMember, currentUser]);
+
   const myVisibleStoreIds = useMemo(() => {
     // Prefer the live opsTeam record, but fall back to the storeIds captured on
     // the login user — so store scope works even before the async opsTeam fetch
@@ -25284,6 +25298,9 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
                 checklistStates={checklistStates} onSignOff={onSignOff}
                 onChecklistItemToggle={onChecklistItemToggle} onTempLog={onTempLog} currentUser={currentUser}
                 storeRoles={storeRoles} opsTeam={opsTeam} punchRecords={punchRecords}
+                showDateBar={false}
+                homeStoreId={homeStoreId}
+                onChangeHomeStore={saveHomeStore}
               />
             </>
           )}
@@ -38320,7 +38337,13 @@ function CollapsibleTasks(props) {
   );
 }
 
-function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists, tempUnits, cleaningTasks, auditTrail, checklistStates, onSignOff, onChecklistItemToggle, onTempLog, currentUser, storeRoles = [], opsTeam = [], punchRecords = [], schedules = [] }) {
+// EMPSTORE / NODATEBAR 2026-08-05f — two switches for the employee home:
+//   showDateBar  — staff only work today. The date also drove canWrite, so
+//                  browsing to yesterday made the whole screen silently
+//                  read-only with nothing explaining why.
+//   homeStoreId  — their store comes from their profile, set once, instead of
+//                  a dropdown to re-pick on every visit.
+function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists, tempUnits, cleaningTasks, auditTrail, checklistStates, onSignOff, onChecklistItemToggle, onTempLog, currentUser, storeRoles = [], opsTeam = [], punchRecords = [], schedules = [], showDateBar = true, homeStoreId = null, onChangeHomeStore = null }) {
   // Date browsing: past days are read-only — compliance is recorded live, not backfilled.
   const [viewDate, setViewDate] = useState(getTodayStr());
   const canWrite = viewDate === getTodayStr();
@@ -38352,7 +38375,7 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
     return (brands || []).filter(b => brandIdsInScope.has(b.id) || isHqOrAbove(user.role) || user.brandIds?.includes(b.id));
   }, [brands, visibleStores, user.role, user.brandIds]);
 
-  const [selStore, setSelStore] = useState("all");
+  const [selStore, setSelStore] = useState(homeStoreId || "all");
   const [expandedId, setExpandedId] = useState(null);
   const [tempVal, setTempVal] = useState("");
   const [tempBusy, setTempBusy] = useState(false);
@@ -38454,9 +38477,26 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
 
   return (
     <div className="space-y-6">
-      <OpsDateBar value={viewDate} onChange={setViewDate}/>
+      {showDateBar && <OpsDateBar value={viewDate} onChange={setViewDate}/>}
       <div className="flex flex-wrap items-center gap-2">
-        <StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>
+        {onChangeHomeStore ? (
+          // On the employee home the store is a SETTING, not a filter: it says
+          // where you're working, with a way to correct it.
+          visibleStores.length > 1 ? (
+            <div className="flex items-center gap-2 text-xs">
+              <span style={{ color: "#8A7B68" }}>Working at</span>
+              <select value={selStore === "all" ? "" : selStore}
+                onChange={e => { const v = e.target.value; setSelStore(v || "all"); onChangeHomeStore(v || null); }}
+                className="px-2.5 py-1.5 rounded-lg text-xs font-semibold"
+                style={{ background: "#FFFFFF", border: "1px solid #E8DCC6", color: "#3A2E26" }}>
+                <option value="">All my stores</option>
+                {visibleStores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+              </select>
+            </div>
+          ) : null
+        ) : (
+          <StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>
+        )}
       </div>
       {overdue.length > 0 && <div className="bg-red-950/20 border border-red-500/30 rounded-2xl p-4 flex items-start gap-3"><AlertTriangle size={16} className="text-red-400 flex-shrink-0 mt-0.5"/><div className="text-sm font-bold text-red-400">{overdue.length} overdue — action required</div></div>}
       {bAssigns.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><ClipboardList size={32} className="mb-3 text-slate-700"/><div className="text-sm font-semibold">No assignments {selStore === "all" ? "across your stores" : "for this store"} today</div></div>}
@@ -64848,7 +64888,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: EMPHOME 2026-08-05e");
+      console.log("CB build: EMPSTORE 2026-08-05f");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:

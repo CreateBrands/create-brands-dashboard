@@ -645,6 +645,7 @@ function dbOpsTeamToApp(m) {
     isTrainee: m.is_trainee ?? false,
     hourlyRate: m.hourly_rate != null ? parseFloat(m.hourly_rate) : 0,
     storeIds: m.store_ids || [],
+    defaultStoreId: m.default_store_id || null,   // EMPSTORE
     roleId: m.role_id || null,
     accessRoleId: m.access_role_id || null,
     roleIds: (m.role_ids && m.role_ids.length) ? m.role_ids : (m.role_id ? [m.role_id] : []),
@@ -6693,6 +6694,16 @@ export async function dismissIntakeDoc(invoiceId, reason = "not a bill") {
     .update({ converted_bill_id: "dismissed", error_note: reason }).eq("id", invoiceId);
   if (error) throw error;
   return invoiceId;
+}
+
+// EMPSTORE 2026-08-05f — the employee's home store, set once on their profile
+// rather than chosen from a dropdown on every visit.
+export async function setEmployeeDefaultStore(employeeId, storeId) {
+  if (!employeeId) throw new Error("employeeId required");
+  const { error } = await supabase.from("ops_team")
+    .update({ default_store_id: storeId || null }).eq("id", employeeId);
+  if (error) throw error;
+  return storeId;
 }
 
 export async function fetchAppSettings() {
