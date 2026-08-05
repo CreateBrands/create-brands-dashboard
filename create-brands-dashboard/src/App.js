@@ -156,6 +156,7 @@ import {
   runBatchMatchInvoiceLines, fetchStoreItemBrief, receiptLineBaseQty, receiptLineUnitCost,
   receiptLineNeedsPackSize, parsedPackBaseQty, fetchAliasRow, setAliasPackSize,
   ensureClaimInvoice, linkClaimToInvoice,
+  fetchRoleAppNav, upsertRoleAppNav, deleteRoleAppNav,
   fetchDistTaxRates, fetchDistContacts, upsertDistContact,
   fetchDistItems, upsertDistItem, deleteDistItem, previewDeleteInactiveDistItems, bulkDeleteInactiveDistItems, fetchStoreItemTags, setStoreItemTag, fetchStoreItemStock, saveStoreItemStock, computeStoreItemUsage, computeStoreItemConsumption, computeStoreItemConsumptionV2, fetchDistBatches, createDistBatch,
   PACKORDER_STAGES, PACKSHIP_STAGES, fetchPackagingOrders, fetchPackagingOrderDetail, upsertPackagingOrder, deletePackagingOrder,
@@ -24719,6 +24720,73 @@ function OrderRecorderModal({ storeId, employeeId, employeeName, onClose, autoSt
   );
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// EMPNAV 2026-08-05o — the employee app's three surfaces, named.
+//
+// Before this, the menus were three hardcoded arrays with role logic spliced
+// into them inline — `isDriverRole` being a regex over the free-text department
+// field, so renaming a department silently changed someone's menu. Naming every
+// destination is what makes it configurable at all.
+//
+// The defaults below reproduce the previous behaviour exactly. A role with no
+// row in role_app_nav gets these, driver and CK special-cases included.
+// ════════════════════════════════════════════════════════════════════════════
+const EMP_NAV_CATALOGUE = {
+  // Bottom bar. The fourth slot is always More and is not configurable —
+  // without it the rest of the app becomes unreachable on a phone.
+  primary: [
+    { key: "ops-tasks",       label: "Home" },
+    { key: "emp-schedule",    label: "Schedule" },
+    { key: "emp-training",    label: "Training" },
+    { key: "ops-temps",       label: "Temperature Log" },
+    { key: "comms",           label: "Communication" },
+    { key: "my-expenses",     label: "Submit Expense" },
+    { key: "order-supplies",  label: "Order Supplies" },
+    { key: "fresh-produce",   label: "Fresh Produce" },
+    { key: "central-kitchen", label: "Central Kitchen" },
+  ],
+  more: [
+    { key: "central-kitchen", label: "Central Kitchen" },
+    { key: "fresh-produce",   label: "Fresh Produce" },
+    { key: "order-supplies",  label: "Order Supplies" },
+    { key: "ops-temps",       label: "Temperature Log" },
+    { key: "ops-deliveries",  label: "Deliveries" },
+    { key: "ops-network",     label: "Ops Status" },
+    { key: "issues",          label: "Report an Issue" },
+    { key: "emp-eod",         label: "EOD Report" },
+    { key: "smallware",       label: "Assets" },
+    { key: "recipes",         label: "Recipes" },
+    { key: "comms",           label: "Communication" },
+    { key: "availability",    label: "Availability" },
+    { key: "my-hours",        label: "My Overtime" },
+    { key: "my-payslips",     label: "My Payslips" },
+    { key: "my-documents",    label: "My Documents" },
+    { key: "my-loans",        label: "My Loans" },
+    { key: "emp-contracts",   label: "Contracts" },
+    { key: "review-qr",       label: "Review QR" },
+    { key: "my-review",       label: "Review Impact" },
+    { key: "my-expenses",     label: "Submit Expense" },
+  ],
+  // The home screen. The greeting itself isn't listed: it's the header of the
+  // page rather than a tile, and a home screen with nothing on it at all is a
+  // bug report waiting to happen.
+  home: [
+    { key: "home-clockin", label: "Clock in / out card" },
+    { key: "home-actions", label: "Announcements & policies to action" },
+    { key: "home-tasks",   label: "Today's tasks tile" },
+  ],
+};
+
+// Resolve one person's menus. `cfg` is their role's row or null; `defaults` is
+// what the shell would have shown anyway. Anything the person isn't entitled to
+// is dropped afterwards by the caller's own gates — configuration can hide an
+// item, never grant access to one.
+function resolveEmpNav(chosenKeys, defaults, pool) {
+  if (!Array.isArray(chosenKeys)) return defaults;      // unconfigured → as before
+  const byKey = new Map((pool || defaults).map(d => [d.key, d]));
+  return chosenKeys.map(k => byKey.get(k)).filter(Boolean);
+}
+
 function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], assignments, checklists, tempUnits, storeRoles = [],
   cleaningTasks, auditTrail, checklistStates, tempLogs, deliveries, issues,
   onSignOff, onChecklistItemToggle, onTempLog, onDeliveryAdd, onAddIssue, onUpdateIssue, onAddEntry,
@@ -25125,6 +25193,23 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     }).filter(m => !m.readBy?.includes(myId)).length;
   })();
 
+  // EMPNAV 2026-08-05o — this person's role configuration. Fetched here rather
+  // than threaded from the app root: it's one small table, and a failure to
+  // read it must leave the menus exactly as they were, never blank.
+  const [navCfg, setNavCfg] = useState(null);
+  const myRoleKey = (myOpsMember?.roleIds || []).join(",") || myOpsMember?.roleId || "";
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const rows = await fetchRoleAppNav();
+        const mine = new Set([...(myOpsMember?.roleIds || []), myOpsMember?.roleId].filter(Boolean));
+        if (alive) setNavCfg(rows.find(r => mine.has(r.roleId)) || null);
+      } catch { if (alive) setNavCfg(null); }
+    })();
+    return () => { alive = false; };
+  }, [myRoleKey]);   // eslint-disable-line react-hooks/exhaustive-deps
+
   // EMP_BOTTOMNAV_V1: four fixed bottom tabs (4th = More opens the sheet)
   const PRIMARY_NAV = [
     { key: "ops-tasks",    label: "Home",      icon: Home,          badge: overdueCount > 0 ? overdueCount.toString() : null },
@@ -25185,15 +25270,32 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     "my-expenses":    "Submit Expense",
   };
 
+  // EMPNAV 2026-08-05o — apply this person's role configuration, if there is
+  // one. The pool is everything they're already entitled to see, so a role can
+  // reorder items or move one between surfaces, but never gain a destination
+  // the entitlement checks above didn't already put in their hands.
+  const NAV_POOL = [...PRIMARY_NAV.filter(n => n.key !== "__more"), ...MORE_NAV];
+  const NAV_PRIMARY = (() => {
+    const rest = resolveEmpNav(navCfg?.primary, PRIMARY_NAV.filter(n => n.key !== "__more"), NAV_POOL)
+      .filter(n => n.key !== "ops-tasks")
+      .slice(0, 2);
+    // Home and More are pinned: drop Home and there is no way back to the home
+    // screen, drop More and the rest of the app is unreachable on a phone.
+    return [PRIMARY_NAV[0], ...rest, { key: "__more", label: "More", icon: MoreHorizontal }];
+  })();
+  const NAV_MORE = resolveEmpNav(navCfg?.more, MORE_NAV, NAV_POOL)
+    .filter(n => !NAV_PRIMARY.some(p => p.key === n.key));   // no item in both bars
+  const showHomeTile = (k) => !Array.isArray(navCfg?.home) || navCfg.home.includes(k);
+
   // EMP_BOTTOMNAV_V1: a primary tab is "active" if it's the current view,
   // OR (for More) if the current view is one of the More items.
-  const moreKeys = MORE_NAV.map(n => n.key);
+  const moreKeys = NAV_MORE.map(n => n.key);
   const goTo = (key) => { setActiveView(key); setMoreOpen(false); };
 
   const BottomNav = () => (
     <nav className="EMP_BOTTOMNAV_V1 emp-bottomnav fixed bottom-0 inset-x-0 z-30 flex items-stretch justify-around bg-slate-900 border-t border-slate-800/60"
       style={{ paddingBottom: "max(env(safe-area-inset-bottom), 8px)" }}>
-      {PRIMARY_NAV.map(n => {
+      {NAV_PRIMARY.map(n => {
         const NIcon = n.icon;
         const active = n.key === "__more"
           ? (moreOpen || moreKeys.includes(activeView))
@@ -25323,7 +25425,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
 
           {/* tile grid */}
           <div className="grid grid-cols-2 gap-2">
-            {MORE_NAV.map(n => {
+            {NAV_MORE.map(n => {
               const NIcon = n.icon; const active = activeView === n.key;
               return (
                 <button key={n.key} onClick={() => goTo(n.key)}
@@ -25449,13 +25551,13 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
                 schedules={schedules || []} assignments={assignments} stores={stores}
                 visibleStoreIds={myVisibleStoreIds}
               >
-                <PhoneClockInCard
+                {showHomeTile("home-clockin") && <PhoneClockInCard
                   currentUser={currentUser} opsTeam={opsTeam} stores={stores}
                   punchRecords={punchRecords || []} onPunchIn={onEmpPunchIn} onPunchOut={onEmpPunchOut}
-                />
+                />}
               </EmployeeHomeGreeting>
-              <EmployeeActionCard currentUser={currentUser} employeeId={currentUser?.employeeId || currentUser?.id}/>
-              <CollapsibleTasks
+              {showHomeTile("home-actions") && <EmployeeActionCard currentUser={currentUser} employeeId={currentUser?.employeeId || currentUser?.id}/>}
+              {showHomeTile("home-tasks") && <CollapsibleTasks
                 brands={myBrands} stores={stores} visibleStoreIds={myVisibleStoreIds}
                 assignments={assignments} checklists={checklists}
                 tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail}
@@ -25464,7 +25566,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
                 storeRoles={storeRoles} opsTeam={opsTeam} punchRecords={punchRecords}
                 showDateBar={false}
                 hideStorePicker
-              />
+              />}
             </>
           )}
           {activeView === "ops-temps" && (
@@ -36556,6 +36658,175 @@ function RolesManager({ customRoles = [], opsTeam = [], onSaveRole, onArchiveRol
   );
 }
 
+// EMPNAV 2026-08-05o — editor for the per-role menus. An untouched role shows
+// as "default" rather than pre-ticked: saving writes a row, and a row means
+// "this exact list from now on", so a role should only get one once someone has
+// actually decided something about it.
+function EmployeeNavSetup({ storeRoles = [] }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [roleId, setRoleId] = useState("");
+  const [draft, setDraft] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try { setRows(await fetchRoleAppNav()); setErr(""); }
+    catch (e) { setErr(e.message || "Couldn't load the saved menus."); }
+    setLoading(false);
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const roles = (storeRoles || []).filter(r => !r.archivedAt);
+  const current = rows.find(r => r.roleId === roleId) || null;
+
+  const pick = (id) => {
+    setRoleId(id); setMsg(""); setErr("");
+    const existing = rows.find(r => r.roleId === id);
+    setDraft(existing
+      ? { primary: existing.primary || [], more: existing.more || [], home: existing.home || [] }
+      : null);
+  };
+
+  // First-time starting point: the built-in shape, which they then trim.
+  const startFromDefaults = () => setDraft({
+    primary: ["emp-schedule", "emp-training"],
+    more: EMP_NAV_CATALOGUE.more.map(i => i.key),
+    home: EMP_NAV_CATALOGUE.home.map(i => i.key),
+  });
+
+  const toggle = (surface, key) => setDraft(d => {
+    const list = d[surface] || [];
+    return { ...d, [surface]: list.includes(key) ? list.filter(k => k !== key) : [...list, key] };
+  });
+
+  const move = (surface, key, dir) => setDraft(d => {
+    const list = [...(d[surface] || [])];
+    const i = list.indexOf(key), j = i + dir;
+    if (i < 0 || j < 0 || j >= list.length) return d;
+    [list[i], list[j]] = [list[j], list[i]];
+    return { ...d, [surface]: list };
+  });
+
+  const save = async () => {
+    setBusy(true); setErr(""); setMsg("");
+    try {
+      const saved = await upsertRoleAppNav({ roleId, ...draft });
+      setRows(rs => [...rs.filter(r => r.roleId !== roleId), saved]);
+      setMsg("Saved. Anyone with this role picks it up next time they open the app.");
+    } catch (e) { setErr(e.message || "Couldn't save."); }
+    setBusy(false);
+  };
+
+  const reset = async () => {
+    if (!window.confirm("Put this role back on the built-in menus?")) return;
+    setBusy(true); setErr(""); setMsg("");
+    try {
+      await deleteRoleAppNav(roleId);
+      setRows(rs => rs.filter(r => r.roleId !== roleId));
+      setDraft(null);
+      setMsg("Back to the defaults for this role.");
+    } catch (e) { setErr(e.message || "Couldn't reset."); }
+    setBusy(false);
+  };
+
+  const renderSurface = (title, note, surface, items, cap) => {
+    const chosen = draft?.[surface] || [];
+    return (
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4 space-y-3">
+        <div>
+          <div className="text-sm font-bold text-white">{title}</div>
+          <div className="text-xs text-slate-500 mt-0.5">{note}</div>
+        </div>
+        {cap && chosen.length > cap && (
+          <div className="text-[11px] text-amber-400">Only the first {cap} fit — the rest are ignored.</div>
+        )}
+        <div className="space-y-1.5">
+          {items.map(it => {
+            const on = chosen.includes(it.key);
+            const pos = chosen.indexOf(it.key);
+            return (
+              <div key={it.key} className={`flex items-center gap-2 rounded-xl px-3 py-2 border ${on ? "border-indigo-600/40 bg-indigo-950/20" : "border-slate-800"}`}>
+                <button onClick={() => toggle(surface, it.key)} className="flex items-center gap-2 flex-1 min-w-0 text-left">
+                  <span className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 ${on ? "bg-indigo-600" : "bg-slate-800 border border-slate-700"}`}>
+                    {on && <Check size={11} className="text-white"/>}
+                  </span>
+                  <span className={`text-sm truncate ${on ? "text-white" : "text-slate-500"}`}>{it.label}</span>
+                  {on && cap && pos < cap && <span className="text-[10px] text-indigo-300 flex-shrink-0">slot {pos + 1}</span>}
+                </button>
+                {on && (
+                  <div className="flex gap-1 flex-shrink-0">
+                    <button onClick={() => move(surface, it.key, -1)} className="px-1.5 text-slate-500 hover:text-white text-xs">↑</button>
+                    <button onClick={() => move(surface, it.key, 1)} className="px-1.5 text-slate-500 hover:text-white text-xs">↓</button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div className="space-y-4 max-w-3xl">
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4">
+        <div className="text-sm font-bold text-white">Employee app menus</div>
+        <p className="text-xs text-slate-400 mt-1">
+          Sets what a job role sees in the phone app. A role you haven&#39;t touched keeps the built-in
+          menus, so nothing changes until you decide it should. Hiding an item hides the route to it —
+          it doesn&#39;t change what someone is allowed to do, and anything they were never entitled to
+          stays hidden however it&#39;s ticked here.
+        </p>
+      </div>
+
+      <label className="text-xs text-slate-400 block max-w-md">Job role
+        <select value={roleId} onChange={e => pick(e.target.value)} disabled={loading}
+          className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white">
+          <option value="">{loading ? "Loading…" : "Choose a role…"}</option>
+          {roles.map(r => (
+            <option key={r.id} value={r.id}>
+              {r.name}{rows.some(x => x.roleId === r.id) ? " — customised" : " — default"}
+            </option>
+          ))}
+        </select></label>
+
+      {roleId && !draft && (
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4 flex items-center justify-between gap-3">
+          <div className="text-xs text-slate-400">This role is on the built-in menus.</div>
+          <button onClick={startFromDefaults} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold">Customise it</button>
+        </div>
+      )}
+
+      {roleId && draft && (
+        <>
+          {renderSurface("Bottom bar",
+            "Home and More are fixed. Two slots between them — the first two ticked, in order.",
+            "primary", EMP_NAV_CATALOGUE.primary.filter(i => i.key !== "ops-tasks"), 2)}
+          {renderSurface("More sheet",
+            "Anything promoted to the bottom bar drops out of here automatically.",
+            "more", EMP_NAV_CATALOGUE.more, null)}
+          {renderSurface("Home screen",
+            "The greeting always shows. These are the cards beneath it.",
+            "home", EMP_NAV_CATALOGUE.home, null)}
+          <div className="flex items-center gap-3">
+            <button onClick={save} disabled={busy} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-bold">
+              {busy ? "Saving…" : "Save"}
+            </button>
+            {current && <button onClick={reset} disabled={busy} className="text-xs font-semibold text-red-400 hover:text-red-300">Back to defaults</button>}
+          </div>
+        </>
+      )}
+
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      {msg && <div className="text-xs text-emerald-400">{msg}</div>}
+    </div>
+  );
+}
+
+
 function AdminPanelView({
   brands, users, entries,
   stores = [], flipdishStores = [],
@@ -36565,7 +36836,8 @@ function AdminPanelView({
   onAddStore, onUpdateStore, onDeleteStore,
   onLinkFlipdish, onUnlinkFlipdish, onBackfillStoreSales,
   onUpdateKPITargets, onBulkImport,
-  customRoles = [], onSaveRole, onArchiveRole, onAssignMemberRole, initialTab, hideTabs
+  customRoles = [], onSaveRole, onArchiveRole, onAssignMemberRole, initialTab, hideTabs,
+  storeRoles = [],
 }) {
   const [tab, setTab] = useState(initialTab || "locations");
   const [locModal, setLocModal] = useState(null);
@@ -36578,6 +36850,7 @@ function AdminPanelView({
     {key:"stores",   label:"Stores"},
     {key:"managers", label:"Managers & Access"},
     {key:"roles",    label:"Roles"},
+    {key:"empnav",   label:"Employee App Menu"},
     {key:"kpis",     label:"KPI Targets"},
     {key:"minwage",  label:"Minimum Wage"},
     {key:"payroll",  label:"Payroll"},
@@ -36637,6 +36910,8 @@ function AdminPanelView({
           onBackfillStoreSales={onBackfillStoreSales}
         />
       )}
+
+      {tab==="empnav"&&<EmployeeNavSetup storeRoles={storeRoles}/>}
 
       {tab==="roles"&&(
         <div className="bg-slate-900 border border-slate-800 rounded-2xl px-5 py-6 text-sm text-slate-400 space-y-2">
@@ -65258,7 +65533,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: PROMOTE 2026-08-05n");
+      console.log("CB build: EMPNAV 2026-08-05o");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -67260,6 +67535,7 @@ export default function App() {
                     { key: "ops-settings:structure", label: "Structure", desc: "Departments and roles per store.", gate: gOps },
                     { key: "admin:managers", label: "Managers & Access", desc: "Assign managers and their access.", gate: gOwner },
                     { key: "admin:roles", label: "Roles", desc: "Custom roles and base permissions.", gate: gOwner },
+                    { key: "admin:empnav", label: "Employee App Menu", desc: "What each job role sees on the phone: bottom bar, More sheet, home screen.", gate: gOwner },
                     { key: "ops-settings:presets", label: "Shift Presets", desc: "Reusable shift templates.", gate: gOps },
                   ].filter(i => i.gate()),
                 },
@@ -67381,6 +67657,7 @@ export default function App() {
               onBackfillStoreSales={backfillStoreSales}
               onUpdateKPITargets={updateKPITargets} onBulkImport={handleBulkImport}
               customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} onAssignMemberRole={handleAssignMemberRole}
+              storeRoles={storeRoles}
             />}
             {effectiveActiveView === "setup" && setupPanel === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
             {effectiveActiveView === "setup" && setupPanel === "store-ordering" && currentUser.role !== "staff" && <StoreOrderingSetupView currentUser={currentUser} stores={stores} opsTeam={opsTeam}/>}

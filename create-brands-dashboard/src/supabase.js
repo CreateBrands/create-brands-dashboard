@@ -18268,3 +18268,45 @@ export async function reviewFuelTransaction(id, { note, reviewedBy }) {
   if (error) throw error;
 }
 // ===== end FLEET_FUEL_V1 =====
+
+// ════════════════════════════════════════════════════════════════════════════
+// EMPNAV 2026-08-05o — per-job-role customisation of the employee app's three
+// surfaces (bottom nav, More sheet, home page tiles). One row per store_role;
+// no row at all means "use the built-in defaults", so an unconfigured role
+// behaves exactly as it did before this existed.
+// ════════════════════════════════════════════════════════════════════════════
+function dbRoleNavToApp(r) {
+  return {
+    roleId:  r.role_id,
+    primary: r.primary_keys || null,
+    more:    r.more_keys    || null,
+    home:    r.home_keys    || null,
+  };
+}
+
+export async function fetchRoleAppNav() {
+  const { data, error } = await supabase.from("role_app_nav").select("*");
+  if (error) throw error;
+  return (data || []).map(dbRoleNavToApp);
+}
+
+export async function upsertRoleAppNav(cfg) {
+  const row = {
+    role_id:      cfg.roleId,
+    primary_keys: cfg.primary || null,
+    more_keys:    cfg.more    || null,
+    home_keys:    cfg.home    || null,
+    updated_at:   new Date().toISOString(),
+  };
+  const { data, error } = await supabase
+    .from("role_app_nav").upsert(row, { onConflict: "role_id" }).select().single();
+  if (error) throw error;
+  return dbRoleNavToApp(data);
+}
+
+// Removing the row restores the defaults for that role — deliberately not the
+// same as saving an empty list, which would leave someone with a blank menu.
+export async function deleteRoleAppNav(roleId) {
+  const { error } = await supabase.from("role_app_nav").delete().eq("role_id", roleId);
+  if (error) throw error;
+}
