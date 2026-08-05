@@ -9704,6 +9704,21 @@ function GmailIntakeSetup({ currentUser }) {
 // They arrive by email or scan, get extracted, then need a person to turn them
 // into a bill. That review belongs HERE, in front of whoever pays them — not on
 // a separate Invoices screen they'd have to remember to check.
+// DOCTYPE 2026-08-05c — what a document IS decides what you make from it.
+// An order acknowledgement is not a payable document: BAKO confirms an order,
+// then invoices it later. Turning the acknowledgement into a bill and the
+// invoice into a second bill pays the same delivery twice — which is exactly
+// the kind of error a queue like this should prevent rather than cause.
+const DOC_KIND = {
+  invoice:    { label: "Invoice",        creates: "bill", tone: "ok",   hint: "" },
+  credit_note:{ label: "Credit note",    creates: "bill", tone: "ok",   hint: "Negative — check the sign before posting." },
+  receipt:    { label: "Receipt",        creates: "bill", tone: "ok",   hint: "" },
+  proforma:   { label: "Proforma",       creates: "po",   tone: "warn", hint: "Not a VAT invoice. Usually a purchase order — the real invoice follows." },
+  order_ack:  { label: "Order ack",      creates: "po",   tone: "warn", hint: "Confirms an order, doesn't request payment. Wait for the invoice, or raise a PO." },
+  sales_order:{ label: "Sales order",    creates: "po",   tone: "warn", hint: "An order, not a bill. The invoice comes separately." },
+  statement:  { label: "Statement",      creates: null,   tone: "stop", hint: "A summary of invoices already issued — don't post it as a bill or you'll double-count." },
+};
+
 function IntakeQueue({ onOpen, refreshKey }) {
   const T = { ink: "#3A2E26", faint: "#9A8770", line: "#E8DCC6", card: "#FDF8EF", accent: "#844429" };
   const [docs, setDocs] = useState([]);
@@ -9741,18 +9756,31 @@ function IntakeQueue({ onOpen, refreshKey }) {
             const unfinished = d.status !== "pending_review";
             const stillReading = unfinished && ageMins < 10;
             const stuck = unfinished && ageMins >= 10;
+            const kind = DOC_KIND[d.docType] || null;
             return (
               <tr key={d.id} style={{ borderTop: `1px solid ${T.line}` }}>
                 <td className="px-4 py-2.5 whitespace-nowrap" style={{ color: T.faint }}>
                   {d.date || new Date(d.createdAt).toLocaleDateString("en-GB")}
                 </td>
                 <td className="px-3 py-2.5">
-                  <div className="font-semibold" style={{ color: T.ink }}>{d.supplierName || "Supplier not read"}</div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-semibold" style={{ color: T.ink }}>{d.supplierName || "Supplier not read"}</span>
+                    {kind && (
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded" title={kind.hint}
+                        style={kind.tone === "ok"
+                          ? { background: "#EAF3E7", color: "#3F6B3A" }
+                          : kind.tone === "warn"
+                            ? { background: "#FFF4DC", color: "#8A5A0B" }
+                            : { background: "#FBEAEA", color: "#B3261E" }}>{kind.label}</span>
+                    )}
+                  </div>
                   <div className="text-[11px]" style={{ color: T.faint }}>
                     {d.number || d.orderNumber || "no document number"}
-                    {d.docType ? ` · ${d.docType.replace(/_/g, " ")}` : ""}
                     {d.source === "email" && d.sender ? ` · from ${String(d.sender).replace(/.*<|>.*/g, "")}` : ""}
                   </div>
+                  {kind?.hint && (
+                    <div className="text-[11px] mt-0.5" style={{ color: kind.tone === "stop" ? "#B3261E" : "#8A5A0B" }}>{kind.hint}</div>
+                  )}
                 </td>
                 <td className="px-3 py-2.5 text-right tabular-nums whitespace-nowrap" style={{ color: T.ink }}>
                   {d.net != null ? gbp(d.net) : "—"}
@@ -9772,8 +9800,11 @@ function IntakeQueue({ onOpen, refreshKey }) {
                   )}
                 </td>
                 <td className="px-4 py-2.5 text-right whitespace-nowrap">
-                  <button onClick={() => onOpen(d.id)} disabled={stillReading || stuck || busy}
-                    className="px-3 py-1.5 rounded-lg text-[11px] font-bold text-white disabled:opacity-40" style={{ background: T.accent }}>Review</button>
+                  <button onClick={() => onOpen(d.id, kind?.creates || "bill")} disabled={stillReading || stuck || busy || kind?.creates === null}
+                    title={kind?.creates === null ? "Statements aren't payable documents" : ""}
+                    className="px-3 py-1.5 rounded-lg text-[11px] font-bold text-white disabled:opacity-40" style={{ background: T.accent }}>
+                    {kind?.creates === "po" ? "Review as PO" : "Review as bill"}
+                  </button>
                   <button onClick={() => dismiss(d)} disabled={busy}
                     className="ml-1.5 px-2 py-1.5 rounded-lg text-[11px] font-semibold"
                     style={{ background: "#F0E6D2", color: T.ink, border: `1px solid ${T.line}` }}>Not a bill</button>
@@ -9787,12 +9818,12 @@ function IntakeQueue({ onOpen, refreshKey }) {
   );
 }
 
-function DistDocImporter({ currentUser, onClose, onCreated, openInvoiceId = null }) {
+function DistDocImporter({ currentUser, onClose, onCreated, openInvoiceId = null, openAs = null }) {
   const XLSX = useXLSX();
   const fileRef = useRef(null);
   const xlRef = useRef(null);
 
-  const [docType, setDocType] = useState("bill");     // bill | po
+  const [docType, setDocType] = useState(openAs === "po" ? "po" : "bill");   // bill | po
   const [vendors, setVendors] = useState([]);
   const [items, setItems] = useState([]);
   const [vendorId, setVendorId] = useState("");
@@ -10410,6 +10441,7 @@ function DistBillsView({ currentUser, pendingConvert, setPendingConvert }) {
   const newDoc = () => setCreating({ vendorId: "", billDate: new Date().toISOString().slice(0,10), vatMode: "exclusive", discountPercent: 0, discountType: "percent", lines: [{ itemId:"", accountCode:"", qty:1, unitPrice:"", taxRateId:null }] });
   const [importing, setImporting] = useState(false);   // DISTIMPORT
   const [openDocId, setOpenDocId] = useState(null);    // INTAKEQUEUE
+  const [openDocAs, setOpenDocAs] = useState(null);    // DOCTYPE — bill or po
   const [queueKey, setQueueKey] = useState(0);
   const save = async () => {
     if (!creating?.vendorId) { setErr("Pick a vendor"); return; }
@@ -10428,8 +10460,8 @@ function DistBillsView({ currentUser, pendingConvert, setPendingConvert }) {
     <div className="space-y-4">
       <div className="flex justify-between items-center gap-3 flex-wrap"><div className="text-sm text-slate-400">{visibleBills.length} of {bills.length} bill{bills.length!==1?"s":""}</div><div className="flex gap-2"><button onClick={() => setImporting(true)} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-semibold flex items-center gap-1.5"><Upload size={14}/> Import</button><button onClick={newDoc} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New bill</button></div></div>
       {/* INTAKEQUEUE — extracted documents waiting for someone to make a bill. */}
-      <IntakeQueue refreshKey={queueKey} onOpen={(id) => { setOpenDocId(id); setImporting(true); }}/>
-      {importing && <DistDocImporter currentUser={currentUser} openInvoiceId={openDocId}
+      <IntakeQueue refreshKey={queueKey} onOpen={(id, as) => { setOpenDocId(id); setOpenDocAs(as); setImporting(true); }}/>
+      {importing && <DistDocImporter currentUser={currentUser} openInvoiceId={openDocId} openAs={openDocAs}
         onClose={() => { setImporting(false); setOpenDocId(null); setQueueKey(k => k + 1); }}
         onCreated={() => { load(); setQueueKey(k => k + 1); }}/>}
       {bills.length > 0 && (
@@ -64665,7 +64697,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: INTAKEQUEUE 2026-08-05b");
+      console.log("CB build: DOCTYPE 2026-08-05c");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
