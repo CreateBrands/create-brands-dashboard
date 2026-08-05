@@ -6650,6 +6650,51 @@ export async function fetchGmailIntakeLog(limit = 25) {
   return data || [];
 }
 
+// ── INTAKE QUEUE 2026-08-05 — extracted supplier documents awaiting a bill ──
+// These are supplier BILLS, so they belong in the Bills screen rather than a
+// separate invoices view: the person who reviews them is the person who pays
+// them. The `invoices` table stays as the OCR staging area; this is the queue
+// on top of it.
+
+export async function fetchPendingIntakeDocs({ entity = "brand-distribution" } = {}) {
+  const { data, error } = await supabase.from("invoices")
+    .select("id, supplier_name, invoice_number, order_number, document_type, invoice_date, due_date, total_ex_vat, total_gross, status, source, source_sender, extraction_warnings, created_at, converted_bill_id, image_path")
+    .eq("entity", entity)
+    .is("converted_bill_id", null)
+    .in("status", ["pending_review", "uploaded", "extracting"])
+    .order("created_at", { ascending: false })
+    .limit(100);
+  if (error) throw error;
+  return (data || []).map(d => ({
+    id: d.id, supplierName: d.supplier_name || "", number: d.invoice_number || "",
+    orderNumber: d.order_number || "", docType: d.document_type || "",
+    date: d.invoice_date, dueDate: d.due_date,
+    net: d.total_ex_vat != null ? Number(d.total_ex_vat) : null,
+    gross: d.total_gross != null ? Number(d.total_gross) : null,
+    status: d.status, source: d.source || "scan", sender: d.source_sender || "",
+    warnings: Array.isArray(d.extraction_warnings) ? d.extraction_warnings : [],
+    createdAt: d.created_at, imagePath: d.image_path,
+  }));
+}
+
+// Called once a bill has actually been created, so the document drops out of
+// the queue. Without this a converted document would sit there forever looking
+// like work still to do.
+export async function markIntakeConverted(invoiceId, billId) {
+  const { error } = await supabase.from("invoices")
+    .update({ converted_bill_id: billId, converted_at: new Date().toISOString() })
+    .eq("id", invoiceId);
+  if (error) throw error;
+  return invoiceId;
+}
+
+export async function dismissIntakeDoc(invoiceId, reason = "not a bill") {
+  const { error } = await supabase.from("invoices")
+    .update({ converted_bill_id: "dismissed", error_note: reason }).eq("id", invoiceId);
+  if (error) throw error;
+  return invoiceId;
+}
+
 export async function fetchAppSettings() {
   const { data, error } = await supabase.from("app_settings").select("key, value");
   if (error) throw error;

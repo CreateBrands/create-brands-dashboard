@@ -192,6 +192,7 @@ import {
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
   fetchFreshOrderCustomers, saveFreshOrderCustomers, freshAccessActive, setSoFreshAttached, deletePayPeriod, setSoTeamNotes, uploadIssuePhoto,
   fetchBreakOptOutStores, saveBreakOptOutStores, storeOptsOutOfBreaks,
+  fetchPendingIntakeDocs, markIntakeConverted, dismissIntakeDoc,
   gmailStatus, gmailAuthUrl, gmailExchange, gmailDisconnect, runGmailIntake,
   fetchIntegrationStatus, fetchGmailIntakeLog,
   fetchStoreDocCategories, upsertStoreDocCategory, archiveStoreDocCategory,
@@ -9699,7 +9700,85 @@ function GmailIntakeSetup({ currentUser }) {
   );
 }
 
-function DistDocImporter({ currentUser, onClose, onCreated }) {
+// ── INTAKEQUEUE 2026-08-05a — supplier documents waiting to become bills ────
+// They arrive by email or scan, get extracted, then need a person to turn them
+// into a bill. That review belongs HERE, in front of whoever pays them — not on
+// a separate Invoices screen they'd have to remember to check.
+function IntakeQueue({ onOpen, refreshKey }) {
+  const T = { ink: "#3A2E26", faint: "#9A8770", line: "#E8DCC6", card: "#FDF8EF", accent: "#844429" };
+  const [docs, setDocs] = useState([]);
+  const [busy, setBusy] = useState(false);
+
+  const load = useCallback(async () => {
+    try { setDocs(await fetchPendingIntakeDocs()); } catch { /* additive: never block the page */ }
+  }, []);
+  useEffect(() => { load(); }, [load, refreshKey]);
+
+  if (!docs.length) return null;
+
+  const dismiss = async (d) => {
+    if (!window.confirm(`Take "${d.supplierName || d.number || "this document"}" off the queue? It isn't deleted, just removed from the list.`)) return;
+    setBusy(true);
+    try { await dismissIntakeDoc(d.id); await load(); } catch { /* ignore */ }
+    setBusy(false);
+  };
+
+  return (
+    <div className="rounded-xl overflow-hidden" style={{ background: T.card, border: `1px solid ${T.line}` }}>
+      <div className="flex items-center justify-between px-4 py-2.5" style={{ background: "#3A2E26" }}>
+        <span className="text-[10px] uppercase tracking-widest font-bold" style={{ color: "#F3E9D8" }}>
+          Waiting to be turned into bills — {docs.length}
+        </span>
+        <span className="text-[10px]" style={{ color: "#C9BBA6" }}>Arrived by email or scan</span>
+      </div>
+      <table className="w-full text-xs">
+        <tbody>
+          {docs.map(d => {
+            const stillReading = d.status !== "pending_review";
+            return (
+              <tr key={d.id} style={{ borderTop: `1px solid ${T.line}` }}>
+                <td className="px-4 py-2.5 whitespace-nowrap" style={{ color: T.faint }}>
+                  {d.date || new Date(d.createdAt).toLocaleDateString("en-GB")}
+                </td>
+                <td className="px-3 py-2.5">
+                  <div className="font-semibold" style={{ color: T.ink }}>{d.supplierName || "Supplier not read"}</div>
+                  <div className="text-[11px]" style={{ color: T.faint }}>
+                    {d.number || d.orderNumber || "no document number"}
+                    {d.docType ? ` \u00b7 ${d.docType.replace(/_/g, " ")}` : ""}
+                    {d.source === "email" && d.sender ? ` \u00b7 from ${String(d.sender).replace(/.*<|>.*/g, "")}` : ""}
+                  </div>
+                </td>
+                <td className="px-3 py-2.5 text-right tabular-nums whitespace-nowrap" style={{ color: T.ink }}>
+                  {d.net != null ? gbp(d.net) : "\u2014"}
+                </td>
+                <td className="px-3 py-2.5">
+                  {stillReading ? (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: "#F3EDE2", color: "#7A6A58" }}>still reading\u2026</span>
+                  ) : d.warnings.length ? (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" title={d.warnings.join(" \u00b7 ")}
+                      style={{ background: "#FFF4DC", color: "#8A5A0B", border: "1px solid #E5B769" }}>check this one</span>
+                  ) : (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                      style={{ background: "#EAF3E7", color: "#3F6B3A", border: "1px solid #BBD6B4" }}>read cleanly</span>
+                  )}
+                </td>
+                <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                  <button onClick={() => onOpen(d.id)} disabled={stillReading || busy}
+                    className="px-3 py-1.5 rounded-lg text-[11px] font-bold text-white disabled:opacity-40" style={{ background: T.accent }}>Review</button>
+                  <button onClick={() => dismiss(d)} disabled={busy}
+                    className="ml-1.5 px-2 py-1.5 rounded-lg text-[11px] font-semibold"
+                    style={{ background: "#F0E6D2", color: T.ink, border: `1px solid ${T.line}` }}>Not a bill</button>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function DistDocImporter({ currentUser, onClose, onCreated, openInvoiceId = null }) {
   const XLSX = useXLSX();
   const fileRef = useRef(null);
   const xlRef = useRef(null);
@@ -9727,6 +9806,7 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
   // "25 x £8.99" without seeing the invoice, and making someone open the PDF
   // separately means in practice they don't check at all.
   const [docUrl, setDocUrl] = useState(null);
+  const [sourceInvoiceId] = useState(openInvoiceId);   // INTAKEQUEUE
   const [stage, setStage] = useState("");             // progress text
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -9745,6 +9825,23 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
       } catch (e) { setErr(e.message); }
     })();
   }, []);
+
+  // INTAKEQUEUE 2026-08-05 — opened from the Bills queue with a document that
+  // has already been extracted. Waits for the vendor list, because supplier
+  // matching needs it.
+  useEffect(() => {
+    if (!openInvoiceId || !vendors.length) return;
+    (async () => {
+      setBusy(true); setStage("Loading the extracted document…");
+      try {
+        const { invoice, lines: ls } = await getInvoiceWithLines(openInvoiceId);
+        try { if (invoice?.image_path) setDocUrl(await getInvoiceFileUrl(invoice.image_path)); } catch { /* preview only */ }
+        loadExtraction(invoice, ls || []);
+      } catch (e) { setErr(e.message); setStage(""); }
+      setBusy(false);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openInvoiceId, vendors.length]);
 
   const itemByName = useMemo(() => {
     const m = new Map();
@@ -10075,6 +10172,9 @@ function DistDocImporter({ currentUser, onClose, onCreated }) {
           note: `Imported ${new Date().toLocaleDateString("en-GB")}`,
         }, lines);
       }
+      // INTAKEQUEUE — drop it off the queue; otherwise a converted document
+      // sits there looking like outstanding work.
+      if (sourceInvoiceId) { try { await markIntakeConverted(sourceInvoiceId, "created"); } catch { /* non-fatal */ } }
       onCreated?.(docType);
       onClose();
     } catch (e) { setErr(e?.message || String(e)); }
@@ -10300,6 +10400,8 @@ function DistBillsView({ currentUser, pendingConvert, setPendingConvert }) {
   }, [pendingConvert, setPendingConvert]);
   const newDoc = () => setCreating({ vendorId: "", billDate: new Date().toISOString().slice(0,10), vatMode: "exclusive", discountPercent: 0, discountType: "percent", lines: [{ itemId:"", accountCode:"", qty:1, unitPrice:"", taxRateId:null }] });
   const [importing, setImporting] = useState(false);   // DISTIMPORT
+  const [openDocId, setOpenDocId] = useState(null);    // INTAKEQUEUE
+  const [queueKey, setQueueKey] = useState(0);
   const save = async () => {
     if (!creating?.vendorId) { setErr("Pick a vendor"); return; }
     setBusy(true); setErr("");
@@ -10316,7 +10418,11 @@ function DistBillsView({ currentUser, pendingConvert, setPendingConvert }) {
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center gap-3 flex-wrap"><div className="text-sm text-slate-400">{visibleBills.length} of {bills.length} bill{bills.length!==1?"s":""}</div><div className="flex gap-2"><button onClick={() => setImporting(true)} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-semibold flex items-center gap-1.5"><Upload size={14}/> Import</button><button onClick={newDoc} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold flex items-center gap-1.5"><Plus size={14}/> New bill</button></div></div>
-      {importing && <DistDocImporter currentUser={currentUser} onClose={() => setImporting(false)} onCreated={() => load()}/>}
+      {/* INTAKEQUEUE — extracted documents waiting for someone to make a bill. */}
+      <IntakeQueue refreshKey={queueKey} onOpen={(id) => { setOpenDocId(id); setImporting(true); }}/>
+      {importing && <DistDocImporter currentUser={currentUser} openInvoiceId={openDocId}
+        onClose={() => { setImporting(false); setOpenDocId(null); setQueueKey(k => k + 1); }}
+        onCreated={() => { load(); setQueueKey(k => k + 1); }}/>}
       {bills.length > 0 && (
         <div className="flex gap-2 flex-wrap">
           <input value={billQuery} onChange={e => setBillQuery(e.target.value)} placeholder="Search bill# or vendor…" className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white placeholder-slate-600 focus:border-indigo-500 focus:outline-none w-56"/>
@@ -64550,7 +64656,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: GMAILCONNECT 2026-08-04j");
+      console.log("CB build: INTAKEQUEUE 2026-08-05a");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
