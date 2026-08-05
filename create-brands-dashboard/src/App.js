@@ -24668,6 +24668,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
   // and written back when they change it. Optimistic local state so the screen
   // reacts immediately rather than waiting for the round trip.
   const [homeStoreOverride, setHomeStoreOverride] = useState(undefined);
+  const [storePickerOpen, setStorePickerOpen] = useState(false);
   const homeStoreId = homeStoreOverride !== undefined
     ? homeStoreOverride
     : (myOpsMember?.defaultStoreId || null);
@@ -25260,6 +25261,15 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
           </div>
           <div className="flex items-center gap-2">
             {brand && <span className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-800 text-slate-300"><span className="w-1.5 h-1.5 rounded-full" style={{ background: brand.color }}/>{brand.name}</span>}
+            {/* GLOBALSTORE 2026-08-05h — store picker as an icon beside
+                messages. Only for people who work at more than one site. */}
+            {myAllStoreIds.length > 1 && (
+              <button onClick={() => setStorePickerOpen(true)} aria-label="Choose store"
+                title={homeStoreId ? (stores || []).find(s => s.id === homeStoreId)?.shortName || "Store" : "All my stores"}
+                className={`relative flex items-center justify-center w-9 h-9 rounded-xl transition-colors ${homeStoreId ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400 hover:text-white"}`}>
+                <MapPin size={16}/>
+              </button>
+            )}
             <button onClick={() => goTo("comms")} aria-label="Messages"
               className={`relative flex items-center justify-center w-9 h-9 rounded-xl transition-colors ${activeView === "comms" ? "bg-indigo-600 text-white" : "bg-slate-800 text-slate-400 hover:text-white"}`}>
               <MessageSquare size={16}/>
@@ -25269,21 +25279,37 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
           </div>
         </header>
 
-        {/* GLOBALSTORE 2026-08-05g — one store choice for the whole app. Only
-            shown to people who actually work at more than one site; for the
-            108 staff with a single store there is nothing to pick and nothing
-            to see. */}
-        {myAllStoreIds.length > 1 && (
-          <div className="px-4 py-2 flex items-center gap-2" style={{ background: "#F5EDDF", borderBottom: "1px solid #E8DCC6" }}>
-            <MapPin size={13} style={{ color: "#844429" }}/>
-            <span className="text-[11px] font-semibold" style={{ color: "#8A7B68" }}>Working at</span>
-            <select value={homeStoreId || ""} onChange={e => saveHomeStore(e.target.value || null)}
-              className="px-2.5 py-1 rounded-lg text-xs font-bold flex-1 min-w-0"
-              style={{ background: "#FFFFFF", border: "1px solid #E8DCC6", color: "#3A2E26" }}>
-              <option value="">All my stores</option>
+        {/* GLOBALSTORE 2026-08-05h — the store picker is an icon in the header
+            beside messages, not a strip taking a row of the screen. Opens a
+            sheet listing the stores this person actually works at. */}
+        {storePickerOpen && (
+          <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
+            style={{ background: "rgba(0,0,0,.45)" }} onClick={() => setStorePickerOpen(false)}>
+            <div className="w-full sm:max-w-sm rounded-t-3xl sm:rounded-3xl overflow-hidden"
+              style={{ background: "#FDF8EF" }} onClick={e => e.stopPropagation()}>
+              <div className="px-5 py-3.5" style={{ background: "#3A2E26" }}>
+                <div className="text-sm font-bold" style={{ color: "#F3E9D8" }}>Where are you working?</div>
+                <div className="text-[11px]" style={{ color: "#C9BBA6" }}>Applies to everything in the app</div>
+              </div>
+              <button onClick={() => { saveHomeStore(null); setStorePickerOpen(false); }}
+                className="w-full px-5 py-3.5 text-left flex items-center gap-3"
+                style={{ borderBottom: "1px solid #E8DCC6", background: !homeStoreId ? "#F5EDDF" : "transparent" }}>
+                <span className="text-sm font-semibold" style={{ color: "#3A2E26" }}>All my stores</span>
+                {!homeStoreId && <Check size={16} className="ml-auto" style={{ color: "#3F6B3A" }}/>}
+              </button>
               {(stores || []).filter(s => myAllStoreIds.includes(s.id) && !s.archivedAt)
-                .map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
-            </select>
+                .sort((a, b) => (a.shortName || a.name || "").localeCompare(b.shortName || b.name || ""))
+                .map(s => (
+                  <button key={s.id} onClick={() => { saveHomeStore(s.id); setStorePickerOpen(false); }}
+                    className="w-full px-5 py-3.5 text-left flex items-center gap-3"
+                    style={{ borderBottom: "1px solid #E8DCC6", background: homeStoreId === s.id ? "#F5EDDF" : "transparent" }}>
+                    <span className="text-sm font-semibold" style={{ color: "#3A2E26" }}>{s.shortName || s.name}</span>
+                    {homeStoreId === s.id && <Check size={16} className="ml-auto" style={{ color: "#3F6B3A" }}/>}
+                  </button>
+                ))}
+              <button onClick={() => setStorePickerOpen(false)}
+                className="w-full px-5 py-3.5 text-sm font-bold" style={{ color: "#844429" }}>Close</button>
+            </div>
           </div>
         )}
 
@@ -38296,7 +38322,7 @@ function OpsDateBar({ value, onChange, right }) {
 // you can open. Choice is remembered, so anyone who prefers it open only says
 // so once.
 function CollapsibleTasks(props) {
-  const KEY = "cb_home_tasks_open";
+  const KEY = "cb_home_tasks_open_v2";   // v2: EMPHOME d wrote "1" under the old key
   // Collapsed by default: the home screen should answer "what needs me",
   // not open onto a full work list.
   // Collapsed unless the person has explicitly opened it before. The home
@@ -64930,7 +64956,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: GLOBALSTORE 2026-08-05g");
+      console.log("CB build: GLOBALSTORE 2026-08-05h");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
