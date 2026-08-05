@@ -42655,9 +42655,158 @@ function PayrollAttributesTab({ employee, stores, brands, currentUser, onUpdateE
   );
 }
 
+// PROMOTE 2026-08-05n — a job title on the HR record grants nothing. The
+// employee login matches email+PIN against ops_team and hardcodes the session
+// as role "employee", so someone titled "Dist Manager" still lands in the
+// employee app. Manager access lives in the separate `users` table, and until
+// now the only way to create that row was the Setup → Users editor, which
+// doesn't know about ops_team — so the two drifted apart and people ended up
+// half-created. This grants the login FROM the employment record, with the
+// same id, which is what managersAsRoster() de-duplicates on.
+function ManagerAccessTab({ employee, users = [], currentUser, onAddUser, onUpdateUser, onDeleteUser }) {
+  const existing = useMemo(() => {
+    const email = (employee?.email || "").trim().toLowerCase();
+    return (users || []).find(u => u.id === employee?.id || (email && (u.email || "").trim().toLowerCase() === email)) || null;
+  }, [users, employee]);
+
+  const fullName = `${employee?.firstName || ""} ${employee?.lastName || ""}`.trim();
+  const ROLE_OPTS = [
+    { key: "manager",  label: "Manager — their own store(s)" },
+    { key: "hq_staff", label: "HQ Staff — every store" },
+    ...(isOwnerRole(currentUser?.role) ? [{ key: "owner", label: "Owner — full access" }] : []),
+  ];
+
+  const [role, setRole] = useState(existing?.role || "manager");
+  const [email, setEmail] = useState(existing?.email || employee?.email || "");
+  const [pw, setPw] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+
+  const inp = "mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white";
+
+  const grant = async () => {
+    const e = (email || "").trim().toLowerCase();
+    if (!e) { setErr("An email address is required — it's what they sign in with."); return; }
+    if (!pw || pw.length < 6) { setErr("Set a password of at least 6 characters."); return; }
+    const clash = (users || []).find(u => (u.email || "").trim().toLowerCase() === e && u.id !== employee.id);
+    if (clash) { setErr(`That email already signs in as ${clash.name || "another user"}.`); return; }
+    setBusy(true); setErr(""); setMsg("");
+    try {
+      // Same id as the ops_team row, deliberately: the manager session carries
+      // no opsTeamMemberId, so every `currentUser.opsTeamMemberId || currentUser.id`
+      // lookup in the app only finds their employment record if the ids match.
+      await onAddUser({
+        id: employee.id,
+        name: fullName || employee.email || "Manager",
+        email: e,
+        password: pw,
+        role,
+        brandIds: employee.brandId ? [employee.brandId] : [],
+        storeIds: employee.storeIds || [],
+        avatar: `${(employee.firstName || "?")[0] || "?"}${(employee.lastName || "")[0] || ""}`.toUpperCase(),
+      });
+      setPw(""); setMsg("Manager login created. They sign in on the manager screen with this email and password.");
+    } catch (e2) { setErr(e2.message || "Couldn't create the login."); }
+    setBusy(false);
+  };
+
+  const changeRole = async (next) => {
+    setBusy(true); setErr(""); setMsg("");
+    try { await onUpdateUser({ ...existing, role: next }); setRole(next); setMsg("Access level updated."); }
+    catch (e2) { setErr(e2.message || "Couldn't update the role."); }
+    setBusy(false);
+  };
+
+  const resetPw = async () => {
+    if (!pw || pw.length < 6) { setErr("Type the new password first (6 characters or more)."); return; }
+    setBusy(true); setErr(""); setMsg("");
+    try { await onUpdateUser({ ...existing, password: pw }); setPw(""); setMsg("Password changed."); }
+    catch (e2) { setErr(e2.message || "Couldn't change the password."); }
+    setBusy(false);
+  };
+
+  const revoke = async () => {
+    if (!window.confirm(`Remove manager access for ${fullName}?\n\nTheir employment record, pay history and schedule stay exactly as they are. They keep the employee app via their PIN.`)) return;
+    setBusy(true); setErr(""); setMsg("");
+    try { await onDeleteUser(existing.id); setMsg("Manager access removed."); }
+    catch (e2) { setErr(e2.message || "Couldn't remove the login."); }
+    setBusy(false);
+  };
+
+  return (
+    <div className="space-y-4 max-w-2xl">
+      <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4 space-y-1">
+        <div className="text-sm font-bold text-white">How access works here</div>
+        <p className="text-xs text-slate-400">
+          The job title on the Job &amp; Pay tab describes what someone does — it doesn&#39;t grant anything.
+          Everyone with a PIN gets the employee app. A manager login is a separate account, created here,
+          and it&#39;s what opens the management side.
+        </p>
+      </div>
+
+      {existing ? (
+        <div className="rounded-2xl border border-emerald-700/40 bg-emerald-950/10 p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <Check size={15} className="text-emerald-400"/>
+            <div className="text-sm font-bold text-white">Has a manager login</div>
+          </div>
+          <div className="text-xs text-slate-400">Signs in as <span className="text-slate-200 font-mono">{existing.email}</span></div>
+          {existing.id !== employee.id && (
+            <div className="rounded-xl border border-amber-600/40 bg-amber-950/20 p-2.5 text-[11px] text-amber-300">
+              This login was matched by email, not by id, so the app can&#39;t always connect their manager
+              session to this employment record. Worth fixing in Setup → Users.
+            </div>
+          )}
+          <label className="text-xs text-slate-400 block">Access level
+            <select value={role} onChange={e => changeRole(e.target.value)} disabled={busy} className={inp}>
+              {ROLE_OPTS.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
+              {!ROLE_OPTS.some(r => r.key === role) && <option value={role}>{role}</option>}
+            </select></label>
+          <div className="flex items-end gap-2">
+            <label className="text-xs text-slate-400 flex-1">New password
+              <input type="text" value={pw} onChange={e => setPw(e.target.value)} placeholder="Leave blank to keep the current one" className={inp}/></label>
+            <button onClick={resetPw} disabled={busy || !pw} className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-40 text-slate-200 text-sm font-semibold">Change</button>
+          </div>
+          <button onClick={revoke} disabled={busy} className="text-xs font-semibold text-red-400 hover:text-red-300">Remove manager access</button>
+        </div>
+      ) : (
+        <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4 space-y-3">
+          <div className="text-sm font-bold text-white">No manager login</div>
+          <p className="text-xs text-slate-400">{fullName || "This person"} can only use the employee app.</p>
+          <label className="text-xs text-slate-400 block">Access level
+            <select value={role} onChange={e => setRole(e.target.value)} className={inp}>
+              {ROLE_OPTS.map(r => <option key={r.key} value={r.key}>{r.label}</option>)}
+            </select></label>
+          <label className="text-xs text-slate-400 block">Sign-in email
+            <input value={email} onChange={e => setEmail(e.target.value)} placeholder="name@createbrands.co" className={inp}/></label>
+          <label className="text-xs text-slate-400 block">Password
+            <input type="text" value={pw} onChange={e => setPw(e.target.value)} placeholder="At least 6 characters" className={inp}/></label>
+          <div className="rounded-xl border border-amber-600/40 bg-amber-950/20 p-2.5 text-[11px] text-amber-300">
+            Passwords in this table are stored as typed, not hashed. Give them one they don&#39;t use anywhere else,
+            and have them change it if that ever becomes possible.
+          </div>
+          <div className="text-[11px] text-slate-500">
+            Scope comes from this record: {(employee?.storeIds || []).length
+              ? `${(employee.storeIds || []).length} store(s)`
+              : "no stores set — set them on the Job & Pay tab first, or they'll sign in and see nothing"}.
+          </div>
+          <button onClick={grant} disabled={busy} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-bold">
+            {busy ? "Creating…" : "Grant manager access"}
+          </button>
+        </div>
+      )}
+
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      {msg && <div className="text-xs text-emerald-400">{msg}</div>}
+    </div>
+  );
+}
+
 function EmployeeProfileView({
   employeeId, brands, stores, storeRoles, storeDepartments,
   opsTeam, currentUser, onUpdateEmployee, onClose,
+  users = [], onAddUser, onUpdateUser, onDeleteUser,
 }) {
   const employee = useMemo(
     () => opsTeam.find(m => m.id === employeeId),
@@ -42973,6 +43122,8 @@ function EmployeeProfileView({
           { key: "application", label: linkedApp ? "Linked Application" : "Application (none)" },
           { key: "notes",       label: `Notes${notes.length > 0 ? ` (${notes.length})` : ""}` },
           ...(isOwnerRole(currentUser?.role) ? [{ key: "payroll", label: "Payroll" }] : []),
+          // PROMOTE 2026-08-05n — granting a login is an HQ/owner decision.
+          ...(isHqOrAbove(currentUser?.role) && onAddUser ? [{ key: "access", label: "App access" }] : []),
         ].map(t => (
           <button
             key={t.key}
@@ -42989,6 +43140,12 @@ function EmployeeProfileView({
       </div>
 
       {/* Tab content */}
+      {tab === "access" && employee && (
+        <ManagerAccessTab
+          employee={employee} users={users} currentUser={currentUser}
+          onAddUser={onAddUser} onUpdateUser={onUpdateUser} onDeleteUser={onDeleteUser}
+        />
+      )}
       {tab === "personal" && editHr && (
         <PersonalHrTab
           editHr={editHr} setEditHr={setEditHr}
@@ -65101,7 +65258,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: QUICKVENDOR 2026-08-05m");
+      console.log("CB build: PROMOTE 2026-08-05n");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -67003,6 +67160,7 @@ export default function App() {
               storeRoles={storeRoles} storeDepartments={storeDepartments}
               opsTeam={opsTeam} currentUser={currentUser}
               onUpdateEmployee={patchOpsTeam}
+              users={users} onAddUser={addUser} onUpdateUser={updateUser} onDeleteUser={deleteUser}
               onClose={closeEmployeeProfile}
             />}
             {effectiveActiveView === "team" && (() => {
