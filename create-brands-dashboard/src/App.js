@@ -25359,13 +25359,13 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
             </>
           )}
           {activeView === "ops-temps" && (
-            <TemperatureLog
+            <TemperatureLog hideStorePicker
               brands={myBrands} stores={stores} visibleStoreIds={myVisibleStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={onTempLog}
               assignments={assignments} onSignOff={onSignOff}
             />
           )}
           {activeView === "ops-deliveries" && (
-            <DeliveriesHub
+            <DeliveriesHub hideStorePicker
               brands={myBrands} stores={stores} visibleStoreIds={myVisibleStoreIds} deliveries={deliveries} onAdd={onDeliveryAdd}
             />
           )}
@@ -38341,8 +38341,16 @@ function CollapsibleTasks(props) {
   // Counted from the same assignments the list uses, so the summary can't
   // disagree with what's inside it.
   const today = getTodayStr();
-  const mine = (props.assignments || []).filter(a =>
-    a.date === today && (props.visibleStoreIds || []).includes(a.storeId));
+  // Match TodaysTasks' own scoping: rows without a storeId fall back to a
+  // brand match, so counting only store-keyed rows reported "no tasks" on a
+  // screen that then listed several.
+  const mine = (props.assignments || []).filter(a => {
+    if (a.date !== today) return false;
+    if (a.storeId) return (props.visibleStoreIds || []).includes(a.storeId);
+    const brandIds = new Set((props.stores || [])
+      .filter(s => (props.visibleStoreIds || []).includes(s.id)).map(s => s.brandId));
+    return !a.brandId || brandIds.has(a.brandId);
+  });
   const done = mine.filter(a => a.signedOffAt || a.completedAt || a.status === "done").length;
   const left = Math.max(0, mine.length - done);
   const pct = mine.length ? Math.round((done / mine.length) * 100) : 0;
@@ -38670,7 +38678,7 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
 }
 
 // ─── Temperature Log ──────────────────────────────────────────────────────────
-function TemperatureLog({ brands, stores, visibleStoreIds, tempUnits, tempLogs, onLog, assignments = [], onSignOff }) {
+function TemperatureLog({ brands, stores, visibleStoreIds, tempUnits, tempLogs, onLog, assignments = [], onSignOff, hideStorePicker = false }) {
   const [viewDate, setViewDate] = useState(getTodayStr());
   const canLog = viewDate === getTodayStr();
 
@@ -38740,7 +38748,8 @@ function TemperatureLog({ brands, stores, visibleStoreIds, tempUnits, tempLogs, 
       <OpsDateBar value={viewDate} onChange={setViewDate}/>
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>
+          {/* GLOBALSTORE — one picker, in the header. */}
+          {hideStorePicker ? null : (<StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>)}
         </div>
         <button disabled={!canLog} title={canLog ? "" : "Return to today to log readings"} onClick={() => { setForm({ unitId: scopedUnits[0]?.id || "", value: "", notes: "", time: nowTimeStr() }); setShowForm(true); }} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/> Log Reading</button>
       </div>
@@ -39247,7 +39256,7 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
   );
 }
 
-function DeliveriesHub({ brands, stores, visibleStoreIds, deliveries, onAdd }) {
+function DeliveriesHub({ brands, stores, visibleStoreIds, deliveries, onAdd, hideStorePicker = false }) {
   const [tab, setTab] = useState("incoming");
   const C = { line:"#E8DCC6", ink:"#3A2E26", inkFaint:"#8A7B68", accent:"#844429", cream:"#FBF6EC" };
   return (
@@ -39258,12 +39267,12 @@ function DeliveriesHub({ brands, stores, visibleStoreIds, deliveries, onAdd }) {
       </div>
       {tab === "incoming"
         ? <IncomingOrdersView stores={stores} visibleStoreIds={visibleStoreIds} />
-        : <DeliveriesView brands={brands} stores={stores} visibleStoreIds={visibleStoreIds} deliveries={deliveries} onAdd={onAdd} />}
+        : <DeliveriesView brands={brands} stores={stores} visibleStoreIds={visibleStoreIds} deliveries={deliveries} onAdd={onAdd} hideStorePicker={hideStorePicker} />}
     </div>
   );
 }
 
-function DeliveriesView({ brands, stores, visibleStoreIds, deliveries, onAdd }) {
+function DeliveriesView({ brands, stores, visibleStoreIds, deliveries, onAdd, hideStorePicker = false }) {
   const [filterDate, setFilterDate] = useState("");   // "" = all recent (30 days)
 
   const { user } = useAuth();
@@ -39331,7 +39340,8 @@ function DeliveriesView({ brands, stores, visibleStoreIds, deliveries, onAdd }) 
       </div>
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>
+          {/* GLOBALSTORE — one picker, in the header. */}
+          {hideStorePicker ? null : (<StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>)}
         </div>
         <button onClick={() => { setForm({ supplier: "", items: "", temp: "", tempOk: "yes", condition: "good", driver: "", notes: "", time: nowTimeStr() }); setShowForm(true); }} className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors"><Plus size={14}/> Log Delivery</button>
       </div>
@@ -64956,7 +64966,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: GLOBALSTORE 2026-08-05h");
+      console.log("CB build: GLOBALSTORE 2026-08-05i");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
