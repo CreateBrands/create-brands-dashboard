@@ -23426,11 +23426,17 @@ function EmployeeActionCard({ currentUser, employeeId }) {
   const load = useCallback(async () => {
     if (!currentUser?.role) return;
     try {
+      // FIX: passing {} meant brandIds and storeIds were empty, so ANY policy
+      // scoped to a brand or store was filtered out — which is most of them.
+      // Same scope the onboarding section passes.
       const [pols, acks] = await Promise.all([
-        fetchActivePoliciesForRole(currentUser.role, {}).catch(() => []),
+        fetchActivePoliciesForRole(currentUser.role, {
+          brandIds: currentUser?.brandIds || [],
+          storeIds: currentUser?.storeIds || [],
+        }).catch(() => []),
         employeeId ? fetchPolicyAcknowledgements(employeeId).catch(() => []) : Promise.resolve([]),
       ]);
-      const done = new Set((acks || []).map(a => a.policy_key || a.policyKey));
+      const done = new Set((acks || []).map(a => a.policyKey));
       // Only MANDATORY unacknowledged ones. An optional policy on the home
       // screen is noise, and noise is what makes people ignore the card that
       // matters.
@@ -23443,7 +23449,7 @@ function EmployeeActionCard({ currentUser, employeeId }) {
 
   const ack = async (p) => {
     setBusy(p.key);
-    try { await acknowledgePolicy({ employeeId, policyKey: p.key, policyLabel: p.label }); await load(); }
+    try { await acknowledgePolicy({ employeeId, policyKey: p.key, policyLabel: p.label, byName: currentUser?.name }); await load(); }
     catch { /* ignore */ }
     setBusy("");
   };
@@ -23482,7 +23488,7 @@ function EmployeeActionCard({ currentUser, employeeId }) {
   );
 }
 
-function EmployeeHomeGreeting({ currentUser, brands, opsTeam, schedules = [], assignments = [], stores = [], visibleStoreIds = [] }) {
+function EmployeeHomeGreeting({ currentUser, brands, opsTeam, schedules = [], assignments = [], stores = [], visibleStoreIds = [], children }) {
   const myId = currentUser.opsTeamMemberId || currentUser.id;
   const myMember = (opsTeam || []).find(m => m.id === myId);
   const firstName = myMember?.firstName || myMember?.nickname || (currentUser.name || "").split(" ")[0] || "there";
@@ -23567,11 +23573,9 @@ function EmployeeHomeGreeting({ currentUser, brands, opsTeam, schedules = [], as
 
   return (
     <div className="emp-greeting rounded-3xl bg-indigo-600 p-5 mb-5 text-white">
-      {/* avatar */}
-      <div className="w-11 h-11 rounded-full bg-white/20 flex items-center justify-center text-base font-bold mb-4">
-        {`${(myMember?.firstName||currentUser.name||"?")[0] || ""}${myMember?.lastName?.[0] || ""}`.toUpperCase()}
-      </div>
-
+      {/* EMPHOME 2026-08-05e — the initials avatar is gone. It told the person
+          their own initials, on their own phone, at the top of their own home
+          screen: pure decoration taking the most valuable space on the page. */}
       {/* date + weather */}
       <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-white/80 mb-2">
         <span>{dateLabel}</span>
@@ -23605,10 +23609,12 @@ function EmployeeHomeGreeting({ currentUser, brands, opsTeam, schedules = [], as
         ) : (
           <div className="px-4 py-3.5 text-sm text-slate-500">No shift scheduled today.</div>
         )}
-        <div className="px-4 py-3 border-t border-slate-100 flex items-center gap-2 text-sm text-slate-700">
-          <CheckCircle size={15} className="text-slate-400 flex-shrink-0"/>
-          You have {taskCount} {taskCount === 1 ? "task" : "tasks"} today.
-        </div>
+        {/* EMPHOME 2026-08-05e — the "you have N tasks today" line is gone; the
+            task tile below now says that properly, with progress. Two places
+            counting the same thing is two places to disagree. */}
+        {/* Clock in/out lives here rather than in its own card: shift status and
+            the action on it are the same question. */}
+        {children ? <div className="px-4 py-3 border-t border-slate-100">{children}</div> : null}
       </div>
     </div>
   );
@@ -25264,11 +25270,12 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
                 currentUser={currentUser} brands={brands} opsTeam={opsTeam}
                 schedules={schedules || []} assignments={assignments} stores={stores}
                 visibleStoreIds={myVisibleStoreIds}
-              />
-              <PhoneClockInCard
-                currentUser={currentUser} opsTeam={opsTeam} stores={stores}
-                punchRecords={punchRecords || []} onPunchIn={onEmpPunchIn} onPunchOut={onEmpPunchOut}
-              />
+              >
+                <PhoneClockInCard
+                  currentUser={currentUser} opsTeam={opsTeam} stores={stores}
+                  punchRecords={punchRecords || []} onPunchIn={onEmpPunchIn} onPunchOut={onEmpPunchOut}
+                />
+              </EmployeeHomeGreeting>
               <EmployeeActionCard currentUser={currentUser} employeeId={currentUser?.employeeId || currentUser?.id}/>
               <CollapsibleTasks
                 brands={myBrands} stores={stores} visibleStoreIds={myVisibleStoreIds}
@@ -38245,8 +38252,10 @@ function OpsDateBar({ value, onChange, right }) {
 // so once.
 function CollapsibleTasks(props) {
   const KEY = "cb_home_tasks_open";
+  // Collapsed by default: the home screen should answer "what needs me",
+  // not open onto a full work list.
   const [open, setOpen] = useState(() => {
-    try { return localStorage.getItem(KEY) !== "0"; } catch { return true; }
+    try { return localStorage.getItem(KEY) === "1"; } catch { return false; }
   });
   const toggle = () => {
     setOpen(v => {
@@ -38262,26 +38271,49 @@ function CollapsibleTasks(props) {
   const mine = (props.assignments || []).filter(a =>
     a.date === today && (props.visibleStoreIds || []).includes(a.storeId));
   const done = mine.filter(a => a.signedOffAt || a.completedAt || a.status === "done").length;
+  const left = Math.max(0, mine.length - done);
+  const pct = mine.length ? Math.round((done / mine.length) * 100) : 0;
+
+  // A tile saying only "Today's tasks" tells you nothing about whether to open
+  // it. Name what's actually inside, so the decision can be made at a glance.
+  const kinds = [...new Set(mine.map(a => a.kind || a.type || a.checklistName).filter(Boolean))].slice(0, 3);
 
   return (
     <div className="rounded-2xl overflow-hidden" style={{ border: "1px solid #E8DCC6", background: "#FDF8EF" }}>
-      <button onClick={toggle} className="w-full flex items-center gap-3 px-4 py-3 text-left">
-        <ClipboardList size={16} style={{ color: "#844429" }}/>
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-bold" style={{ color: "#3A2E26" }}>Today's tasks</div>
-          <div className="text-[11px]" style={{ color: "#8A7B68" }}>
-            {mine.length ? `${done} of ${mine.length} done` : "Nothing scheduled for you today"}
+      <button onClick={toggle} className="w-full text-left px-4 py-4">
+        <div className="flex items-center gap-3">
+          <div className="w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0"
+            style={{ background: left ? "#FFF4DC" : "#EAF3E7", border: `1px solid ${left ? "#E5B769" : "#BBD6B4"}` }}>
+            <ClipboardList size={20} style={{ color: left ? "#8A5A0B" : "#3F6B3A" }}/>
           </div>
+          <div className="min-w-0 flex-1">
+            <div className="text-base font-bold" style={{ color: "#3A2E26" }}>
+              {mine.length === 0 ? "No tasks today"
+                : left === 0 ? "All tasks done"
+                : `${left} task${left === 1 ? "" : "s"} to do`}
+            </div>
+            <div className="text-xs" style={{ color: "#8A7B68" }}>
+              {mine.length === 0
+                ? "Nothing scheduled for you"
+                : kinds.length
+                  ? kinds.join(" · ")
+                  : `${done} of ${mine.length} complete`}
+            </div>
+          </div>
+          <ChevronDown size={20} style={{ color: "#9A8770", transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }}/>
         </div>
+
         {mine.length > 0 && (
-          <span className="text-[11px] font-bold px-2 py-0.5 rounded-full"
-            style={done >= mine.length
-              ? { background: "#EAF3E7", color: "#3F6B3A" }
-              : { background: "#FFF4DC", color: "#8A5A0B" }}>
-            {done >= mine.length ? "all done" : `${mine.length - done} left`}
-          </span>
+          <div className="mt-3">
+            <div className="h-2 rounded-full overflow-hidden" style={{ background: "#EFE4D2" }}>
+              <div className="h-full rounded-full" style={{ width: `${pct}%`, background: left ? "#B45309" : "#3F6B3A", transition: "width .2s" }}/>
+            </div>
+            <div className="flex items-center justify-between mt-1.5">
+              <span className="text-[11px] font-semibold" style={{ color: "#8A7B68" }}>{done} of {mine.length} done</span>
+              <span className="text-[11px] font-bold" style={{ color: "#844429" }}>{open ? "Hide" : "Tap to open"}</span>
+            </div>
+          </div>
         )}
-        <ChevronDown size={16} style={{ color: "#9A8770", transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }}/>
       </button>
       {open && <div style={{ borderTop: "1px solid #E8DCC6" }}><TodaysTasks {...props}/></div>}
     </div>
@@ -64816,7 +64848,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: EMPHOME 2026-08-05d");
+      console.log("CB build: EMPHOME 2026-08-05e");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
