@@ -9734,7 +9734,13 @@ function IntakeQueue({ onOpen, refreshKey }) {
       <table className="w-full text-xs">
         <tbody>
           {docs.map(d => {
-            const stillReading = d.status !== "pending_review";
+            // An extraction that stalled hours ago will never finish, and
+            // "still reading" makes the queue look busy with work that can't
+            // clear. Over 10 minutes and unfinished means stuck.
+            const ageMins = (Date.now() - new Date(d.createdAt).getTime()) / 60000;
+            const unfinished = d.status !== "pending_review";
+            const stillReading = unfinished && ageMins < 10;
+            const stuck = unfinished && ageMins >= 10;
             return (
               <tr key={d.id} style={{ borderTop: `1px solid ${T.line}` }}>
                 <td className="px-4 py-2.5 whitespace-nowrap" style={{ color: T.faint }}>
@@ -9744,18 +9750,21 @@ function IntakeQueue({ onOpen, refreshKey }) {
                   <div className="font-semibold" style={{ color: T.ink }}>{d.supplierName || "Supplier not read"}</div>
                   <div className="text-[11px]" style={{ color: T.faint }}>
                     {d.number || d.orderNumber || "no document number"}
-                    {d.docType ? ` \u00b7 ${d.docType.replace(/_/g, " ")}` : ""}
-                    {d.source === "email" && d.sender ? ` \u00b7 from ${String(d.sender).replace(/.*<|>.*/g, "")}` : ""}
+                    {d.docType ? ` · ${d.docType.replace(/_/g, " ")}` : ""}
+                    {d.source === "email" && d.sender ? ` · from ${String(d.sender).replace(/.*<|>.*/g, "")}` : ""}
                   </div>
                 </td>
                 <td className="px-3 py-2.5 text-right tabular-nums whitespace-nowrap" style={{ color: T.ink }}>
-                  {d.net != null ? gbp(d.net) : "\u2014"}
+                  {d.net != null ? gbp(d.net) : "—"}
                 </td>
                 <td className="px-3 py-2.5">
                   {stillReading ? (
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: "#F3EDE2", color: "#7A6A58" }}>still reading\u2026</span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" style={{ background: "#F3EDE2", color: "#7A6A58" }}>still reading…</span>
+                  ) : stuck ? (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                      style={{ background: "#FBEAEA", color: "#B3261E", border: "1px solid #E8A9A9" }}>couldn't be read</span>
                   ) : d.warnings.length ? (
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" title={d.warnings.join(" \u00b7 ")}
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full" title={d.warnings.join(" · ")}
                       style={{ background: "#FFF4DC", color: "#8A5A0B", border: "1px solid #E5B769" }}>check this one</span>
                   ) : (
                     <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
@@ -9763,7 +9772,7 @@ function IntakeQueue({ onOpen, refreshKey }) {
                   )}
                 </td>
                 <td className="px-4 py-2.5 text-right whitespace-nowrap">
-                  <button onClick={() => onOpen(d.id)} disabled={stillReading || busy}
+                  <button onClick={() => onOpen(d.id)} disabled={stillReading || stuck || busy}
                     className="px-3 py-1.5 rounded-lg text-[11px] font-bold text-white disabled:opacity-40" style={{ background: T.accent }}>Review</button>
                   <button onClick={() => dismiss(d)} disabled={busy}
                     className="ml-1.5 px-2 py-1.5 rounded-lg text-[11px] font-semibold"
@@ -64656,7 +64665,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: INTAKEQUEUE 2026-08-05a");
+      console.log("CB build: INTAKEQUEUE 2026-08-05b");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
