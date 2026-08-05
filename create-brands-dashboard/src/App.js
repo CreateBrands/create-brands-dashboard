@@ -8231,8 +8231,21 @@ function DistItemTable({ items, taxRates, lines, setLines, vatMode, setVatMode, 
           return (
             <div key={i} className="grid grid-cols-12 gap-1 px-3 py-2 border-t border-slate-800/60 items-center">
               <div className="col-span-4">
+                {/* LINEPRICE 2026-08-05l — the rate used to be written as
+                    `l.unitPrice || it.purchaseRate`, so once a line had a price
+                    it kept it forever: swap item A for item B and B's row still
+                    showed A's money. The price belongs to the item, so picking
+                    a new item replaces it (and blanks it if the new item has no
+                    rate on file, rather than leaving the old one behind).
+                    Account code still falls back to what's already typed, since
+                    it's usually set per document by hand. */}
                 <SearchableItemSelect items={items} value={l.itemId || ""}
-                  onSelect={(it) => upd(i, { itemId: it?.id || "", taxRateId: it?.taxRateId || l.taxRateId, unitPrice: l.unitPrice || it?.purchaseRate || "", accountCode: l.accountCode || it?.expenseAccountCode || "" })} />
+                  onSelect={(it) => upd(i, {
+                    itemId: it?.id || "",
+                    taxRateId: it?.taxRateId || l.taxRateId,
+                    unitPrice: it && it.purchaseRate != null ? it.purchaseRate : "",
+                    accountCode: it?.expenseAccountCode || l.accountCode || "",
+                  })} />
                 <input value={l.lineNote || ""} onChange={e => upd(i, { lineNote: e.target.value })}
                   placeholder="Item note (optional)"
                   className="mt-1 w-full px-2 py-1 rounded-lg bg-slate-900 border border-slate-800 text-[11px] text-amber-300 placeholder-slate-600"/>
@@ -8800,7 +8813,10 @@ function DistGRNView({ currentUser, pendingConvert, setPendingConvert }) {
               <div className="grid grid-cols-12 gap-1 px-3 py-2 bg-slate-900/80 text-[10px] uppercase tracking-wide text-slate-500"><div className="col-span-4">Item details</div><div className="col-span-1 text-right">Qty</div><div className="col-span-2 text-right">Landed £/unit</div><div className="col-span-2">Batch</div><div className="col-span-3">Expiry</div></div>
               {(creating.lines || []).map((l, i) => (
                 <div key={i} className="grid grid-cols-12 gap-1 px-3 py-2 border-t border-slate-800/60 items-center">
-                  <div className="col-span-4"><SearchableItemSelect items={items} value={l.itemId} onSelect={it => updLine(i, { itemId: it?.id || "", landedCost: l.landedCost || it?.purchaseRate || "" })} placeholder="Select an item…" /></div>
+                  {/* LINEPRICE 2026-08-05l — same sticky-cost bug as the
+                      document line table: the landed cost stayed on the row
+                      when the item changed. */}
+                  <div className="col-span-4"><SearchableItemSelect items={items} value={l.itemId} onSelect={it => updLine(i, { itemId: it?.id || "", landedCost: it && it.purchaseRate != null ? it.purchaseRate : "" })} placeholder="Select an item…" /></div>
                   <div className="col-span-1"><input type="number" value={l.qty} onChange={e => updLine(i, { qty: e.target.value })} className="w-full px-1.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white text-right"/>{l.ordered != null && <div className="text-[9px] text-slate-500 text-right mt-0.5">of {l.outstanding} left</div>}</div>
                   <div className="col-span-2"><input type="number" value={l.landedCost} onChange={e => updLine(i, { landedCost: e.target.value })} placeholder="0.00" className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white text-right"/></div>
                   <div className="col-span-2"><input value={l.batchNo} onChange={e => updLine(i, { batchNo: e.target.value })} placeholder="Batch" className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white"/></div>
@@ -64995,7 +65011,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: NONAME 2026-08-05k");
+      console.log("CB build: LINEPRICE 2026-08-05l");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
