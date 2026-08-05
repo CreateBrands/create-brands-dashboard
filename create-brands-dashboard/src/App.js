@@ -38338,38 +38338,19 @@ function CollapsibleTasks(props) {
     });
   };
 
-  // Counted from the same assignments the list uses, so the summary can't
-  // disagree with what's inside it.
-  const today = getTodayStr();
-  // Match TodaysTasks' own scoping: rows without a storeId fall back to a
-  // brand match, so counting only store-keyed rows reported "no tasks" on a
-  // screen that then listed several.
-  const mine = (props.assignments || []).filter(a => {
-    if (a.date !== today) return false;
-    if (a.storeId) return (props.visibleStoreIds || []).includes(a.storeId);
-    const brandIds = new Set((props.stores || [])
-      .filter(s => (props.visibleStoreIds || []).includes(s.id)).map(s => s.brandId));
-    return !a.brandId || brandIds.has(a.brandId);
-  });
-  const done = mine.filter(a => a.signedOffAt || a.completedAt || a.status === "done").length;
-  const left = Math.max(0, mine.length - done);
-  const pct = mine.length ? Math.round((done / mine.length) * 100) : 0;
-
-  // A tile saying only "Today's tasks" tells you nothing about whether to open
-  // it. Break it down by what the work actually IS, with counts, so the
-  // decision to open can be made at a glance.
-  const groups = useMemo(() => {
-    const m = new Map();
-    mine.forEach(a => {
-      const k = a.kind || a.type || (a.tempUnitId ? "Temperature checks" : a.checklistId ? "Checklists" : "Tasks");
-      const label = String(k).replace(/[-_]/g, " ").replace(/^./, c => c.toUpperCase());
-      const cur = m.get(label) || { label, total: 0, done: 0 };
-      cur.total += 1;
-      if (a.signedOffAt || a.completedAt || a.status === "done") cur.done += 1;
-      m.set(label, cur);
-    });
-    return [...m.values()].sort((a, b) => (b.total - b.done) - (a.total - a.done));
-  }, [mine]);
+  // ONECOUNT 2026-08-05j — the tile no longer counts anything itself. Two
+  // earlier attempts to make its own filter agree with the list failed because
+  // the list applies frequency, targeting, on-shift and sign-off rules the
+  // filter didn't know about. TodaysTasks now reports its own totals and this
+  // just displays them.
+  const [counts, setCounts] = useState({ total: 0, done: 0, overdue: 0, groups: [], sig: "" });
+  const handleCounts = useCallback(c => {
+    setCounts(prev => (prev.sig === c.sig ? prev : c));   // identical numbers → no re-render
+  }, []);
+  const done = counts.done;
+  const left = Math.max(0, counts.total - counts.done);
+  const pct = counts.total ? Math.round((counts.done / counts.total) * 100) : 0;
+  const groups = counts.groups;
 
   return (
     <div className="rounded-2xl overflow-hidden" style={{ border: "1px solid #E8DCC6", background: "#FDF8EF" }}>
@@ -38381,18 +38362,18 @@ function CollapsibleTasks(props) {
           </div>
           <div className="min-w-0 flex-1">
             <div className="text-base font-bold" style={{ color: "#3A2E26" }}>
-              {mine.length === 0 ? "No tasks today"
+              {counts.total === 0 ? "No tasks today"
                 : left === 0 ? "All tasks done"
                 : `${left} task${left === 1 ? "" : "s"} to do`}
             </div>
             <div className="text-xs" style={{ color: "#8A7B68" }}>
-              {mine.length === 0 ? "Nothing scheduled for you" : `${done} of ${mine.length} complete`}
+              {counts.total === 0 ? "Nothing scheduled for you" : `${done} of ${counts.total} complete`}
             </div>
           </div>
           <ChevronDown size={20} style={{ color: "#9A8770", transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }}/>
         </div>
 
-        {mine.length > 0 && (
+        {counts.total > 0 && (
           <div className="mt-3">
             <div className="h-2 rounded-full overflow-hidden" style={{ background: "#EFE4D2" }}>
               <div className="h-full rounded-full" style={{ width: `${pct}%`, background: left ? "#B45309" : "#3F6B3A", transition: "width .2s" }}/>
@@ -38414,14 +38395,19 @@ function CollapsibleTasks(props) {
               </div>
             )}
             <div className="flex items-center justify-between mt-2.5">
-              <span className="text-[11px] font-semibold" style={{ color: "#8A7B68" }}>{done} of {mine.length} done</span>
+              <span className="text-[11px] font-semibold" style={{ color: "#8A7B68" }}>{done} of {counts.total} done</span>
               <span className="text-[11px] font-bold px-2.5 py-1 rounded-lg"
                 style={{ background: "#844429", color: "#fff" }}>{open ? "Hide" : "Open tasks"}</span>
             </div>
           </div>
         )}
       </button>
-      {open && <div style={{ borderTop: "1px solid #E8DCC6" }}><TodaysTasks {...props}/></div>}
+      {/* Mounted even when collapsed — it is the only thing that knows the
+          totals, and unmounting it would leave the tile reading "No tasks
+          today" for anyone who never opens it. Hidden, not removed. */}
+      <div style={{ borderTop: "1px solid #E8DCC6", display: open ? "block" : "none" }}>
+        <TodaysTasks {...props} onCounts={handleCounts}/>
+      </div>
     </div>
   );
 }
@@ -38432,7 +38418,7 @@ function CollapsibleTasks(props) {
 //                  read-only with nothing explaining why.
 //   homeStoreId  — their store comes from their profile, set once, instead of
 //                  a dropdown to re-pick on every visit.
-function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists, tempUnits, cleaningTasks, auditTrail, checklistStates, onSignOff, onChecklistItemToggle, onTempLog, currentUser, storeRoles = [], opsTeam = [], punchRecords = [], schedules = [], showDateBar = true, hideStorePicker = false }) {
+function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists, tempUnits, cleaningTasks, auditTrail, checklistStates, onSignOff, onChecklistItemToggle, onTempLog, currentUser, storeRoles = [], opsTeam = [], punchRecords = [], schedules = [], showDateBar = true, hideStorePicker = false, onCounts }) {
   // Date browsing: past days are read-only — compliance is recorded live, not backfilled.
   const [viewDate, setViewDate] = useState(getTodayStr());
   const canWrite = viewDate === getTodayStr();
@@ -38540,7 +38526,6 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
   };
 
   const bAssigns = (assignments || []).filter(a => inScope(a) && isActiveToday(a, viewDate) && targetedAtMe(a) && onShiftGate(a));
-  const overdue = bAssigns.filter(isOverdue);
 
   const getTaskName = (type, taskId) => {
     if (type === "checklist") return checklists.find(c => c.id === taskId)?.name || taskId;
@@ -38549,6 +38534,51 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
     return "Delivery check";
   };
   const typeIcons = { checklist: "📋", cleaning: "🧹", temp: "🌡️", delivery: "🚚" };
+
+  // ── ONECOUNT 2026-08-05j ──────────────────────────────────────────────────
+  // One row list, built once, used for both the rendered cards and the numbers
+  // the summary tile shows. CollapsibleTasks used to run its own filter over
+  // props.assignments (date === today + store scope) and so ignored recurring
+  // frequencies, targeting, the on-shift gate and the real sign-off source —
+  // it read "No tasks today" above a list of tasks. It now displays whatever
+  // this reports, so the two cannot disagree whatever gets added here later.
+  const rows = bAssigns.map(a => {
+    const taskName = getTaskName(a.type, a.taskId);
+    const clState = checklistStates[`asg::${a.id}||${viewDate}`] || {};
+    const doneToday = clState.__signedOff === true
+      || (auditTrail || []).some(t => t.brandId === a.brandId && t.date === viewDate && (t.detail === `${taskName} completed` || t.detail === taskName));
+    return { a, taskName, doneToday, od: isOverdue(a) };
+  });
+  const overdueRows = rows.filter(r => r.od);
+  const doneCount = rows.filter(r => r.doneToday).length;
+
+  // Breakdown by task type, so the collapsed tile can say what's inside it.
+  const groups = (() => {
+    const labels = { checklist: "Checklists", temp: "Temperature checks", cleaning: "Cleaning", delivery: "Deliveries" };
+    const m = new Map();
+    rows.forEach(({ a, doneToday }) => {
+      const label = labels[a.type] || "Tasks";
+      const cur = m.get(label) || { label, total: 0, done: 0 };
+      cur.total += 1;
+      if (doneToday) cur.done += 1;
+      m.set(label, cur);
+    });
+    return [...m.values()].sort((x, y) => (y.total - y.done) - (x.total - x.done));
+  })();
+
+  // Signature of the numbers only. The effect must not depend on freshly-built
+  // arrays or on onCounts itself — both change identity every render and would
+  // loop the parent's setState back through here.
+  const countsSig = [rows.length, doneCount, overdueRows.length]
+    .concat(groups.map(g => `${g.label}:${g.total}:${g.done}`)).join("|");
+  const countsRef = useRef(null);
+  countsRef.current = {
+    payload: { total: rows.length, done: doneCount, overdue: overdueRows.length, groups, sig: countsSig },
+    fn: onCounts,
+  };
+  useEffect(() => {
+    countsRef.current.fn?.(countsRef.current.payload);
+  }, [countsSig]);
 
   // Empty-state when the user has no assigned stores (only managers/staff
   // can hit this — owner/HQ always have all stores in scope).
@@ -38574,22 +38604,18 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
           <StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>
         )}
       </div>
-      {overdue.length > 0 && <div className="bg-red-950/20 border border-red-500/30 rounded-2xl p-4 flex items-start gap-3"><AlertTriangle size={16} className="text-red-400 flex-shrink-0 mt-0.5"/><div className="text-sm font-bold text-red-400">{overdue.length} overdue — action required</div></div>}
+      {overdueRows.length > 0 && <div className="bg-red-950/20 border border-red-500/30 rounded-2xl p-4 flex items-start gap-3"><AlertTriangle size={16} className="text-red-400 flex-shrink-0 mt-0.5"/><div className="text-sm font-bold text-red-400">{overdueRows.length} overdue — action required</div></div>}
       {bAssigns.length === 0 && <div className="flex flex-col items-center justify-center py-16 text-slate-500"><ClipboardList size={32} className="mb-3 text-slate-700"/><div className="text-sm font-semibold">No assignments {selStore === "all" ? "across your stores" : "for this store"} today</div></div>}
       <div className="space-y-3">
-        {bAssigns.map(a => {
-          const od = isOverdue(a); const taskName = getTaskName(a.type, a.taskId);
+        {rows.map(({ a, taskName, doneToday, od }) => {
           const cl = a.type === "checklist" ? checklists.find(c => c.id === a.taskId) : null;
           // Stable key — includes storeId when present so per-store checklist
           // state doesn't collide across stores sharing a brand.
           const stateKey = `asg::${a.id}||${viewDate}`;
           const clState = checklistStates[stateKey] || {};
-          // Done if signed off (the reliable per-assignment marker) or, for
-          // legacy rows, an audit entry for THIS exact task today. The audit detail
-          // is written as "<taskName> completed"; match that exact phrase rather
-          // than a loose substring, so "Closing Task" can't mark "Closing Task 2".
-          const doneToday = clState.__signedOff === true
-            || auditTrail.some(t => t.brandId === a.brandId && t.date === viewDate && (t.detail === `${taskName} completed` || t.detail === taskName));
+          // doneToday comes from `rows` above — signed off, or a legacy audit
+          // entry for THIS exact task today. Computed once there so the cards
+          // and the summary tile can never report different totals.
           const totalItems = cl?.items?.length || 0;
           // Count only real item toggles — exclude metadata keys (__signedOff etc).
           const doneItems = totalItems ? Object.entries(clState).filter(([k,v]) => !k.startsWith("__") && v === true).length : 0;
@@ -64966,7 +64992,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: GLOBALSTORE 2026-08-05i");
+      console.log("CB build: ONECOUNT 2026-08-05j");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
