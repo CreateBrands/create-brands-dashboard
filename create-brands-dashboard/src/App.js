@@ -8210,6 +8210,96 @@ function SearchableItemSelect({ items = [], value, onSelect, placeholder = "Type
 }
 
 // Rich Zoho-style item table (Item · Account · Qty · Rate · VAT · Amount).
+// QUICKVENDOR 2026-08-05m — a bill can't be saved without a vendor, and the
+// vendor list only grew in Setup → Vendors. Entering a bill from a supplier
+// who wasn't on file meant abandoning the half-typed form, going to Setup,
+// creating the contact, and starting the bill again. Same picker, with a way
+// out of that: the new supplier is created, selected, and the form carries on.
+// Only the name is required — everything else is editable in Setup → Vendors.
+function DistVendorPicker({ vendors = [], value, onChange, onCreated, placeholder = "Select a vendor", optionLabel }) {
+  const [form, setForm] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const label = optionLabel || (v => v.displayName);
+
+  const create = async () => {
+    const dn = (form.displayName || form.companyName || "").trim();
+    if (!dn) { setErr("Give the supplier a name."); return; }
+    // Don't quietly create a second contact with a name that already exists —
+    // duplicate vendors split a supplier's ledger in two.
+    const dupe = vendors.find(v => (v.displayName || "").trim().toLowerCase() === dn.toLowerCase());
+    if (dupe) { onChange(dupe.id); setForm(null); return; }
+    setBusy(true); setErr("");
+    try {
+      const v = await upsertDistContact({
+        ...form, displayName: dn, kind: "vendor", active: true,
+        currencyCode: "GBP", accountsPayableCode: "2000",
+      });
+      if (!v) throw new Error("The supplier didn't save. Try again.");
+      await onCreated?.(v);
+      onChange(v.id);
+      setForm(null);
+    } catch (e) { setErr(e.message || "Couldn't save the supplier."); }
+    setBusy(false);
+  };
+
+  const inp = "w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white";
+  return (
+    <>
+      <div className="mt-1 flex items-stretch gap-1.5">
+        <select value={value || ""} onChange={e => onChange(e.target.value)}
+          className={`${inp} flex-1 min-w-0`}>
+          <option value="">{placeholder}</option>
+          {vendors.map(v => <option key={v.id} value={v.id}>{label(v)}</option>)}
+        </select>
+        <button type="button" onClick={() => { setForm({ displayName: "", companyName: "", email: "", workPhone: "", paymentTerms: "due_on_receipt" }); setErr(""); }}
+          title="Add a supplier that isn't in the list"
+          className="px-2.5 rounded-lg bg-slate-700 hover:bg-indigo-600 text-white flex items-center justify-center flex-shrink-0">
+          <Plus size={14}/>
+        </button>
+      </div>
+      {form && (
+        // z-[60]: this opens on top of the document form, which is itself a
+        // full-screen modal at z-50.
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,.6)" }}
+          onClick={() => !busy && setForm(null)}>
+          <div className="w-full max-w-md rounded-2xl bg-slate-900 border border-slate-700 overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+              <div className="text-sm font-bold text-white">New supplier</div>
+              <button onClick={() => !busy && setForm(null)} className="text-slate-500 hover:text-white"><X size={16}/></button>
+            </div>
+            <div className="p-4 space-y-3">
+              <label className="text-xs text-slate-400 block">Supplier name *
+                <input autoFocus value={form.displayName} onChange={e => setForm({ ...form, displayName: e.target.value })}
+                  placeholder="As it should appear on bills" className={`mt-1 ${inp}`}/></label>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="text-xs text-slate-400">Company name
+                  <input value={form.companyName} onChange={e => setForm({ ...form, companyName: e.target.value })} className={`mt-1 ${inp}`}/></label>
+                <label className="text-xs text-slate-400">Payment terms
+                  <select value={form.paymentTerms} onChange={e => setForm({ ...form, paymentTerms: e.target.value })} className={`mt-1 ${inp}`}>
+                    {DIST_PAYMENT_TERMS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+                  </select></label>
+                <label className="text-xs text-slate-400">Email
+                  <input value={form.email} onChange={e => setForm({ ...form, email: e.target.value })} className={`mt-1 ${inp}`}/></label>
+                <label className="text-xs text-slate-400">Phone
+                  <input value={form.workPhone} onChange={e => setForm({ ...form, workPhone: e.target.value })} placeholder="+44…" className={`mt-1 ${inp}`}/></label>
+              </div>
+              <div className="text-[11px] text-slate-500">Saved as a vendor straight away. Addresses, VAT details and the rest can be filled in later under Setup → Vendors.</div>
+              {err && <div className="text-xs text-red-400">{err}</div>}
+            </div>
+            <div className="px-4 py-3 border-t border-slate-800 flex justify-end gap-2">
+              <button onClick={() => setForm(null)} disabled={busy} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Cancel</button>
+              <button onClick={create} disabled={busy} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-bold">
+                {busy ? "Saving…" : "Save & use"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function DistItemTable({ items, taxRates, lines, setLines, vatMode, setVatMode, discountPercent, setDiscountPercent, discountType, setDiscountType }) {
   const upd = (i, patch) => setLines(lines.map((l, j) => j === i ? { ...l, ...patch } : l));
   const del = (i) => setLines(lines.filter((_, j) => j !== i));
@@ -8666,7 +8756,7 @@ function DistPOView({ currentUser }) {
         <Modal onClose={() => setCreating(null)} title={creating.id ? `Edit ${creating.poNumber || "purchase order"}` : "New purchase order"} maxW="max-w-4xl" fullScreen>
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
-              <label className="text-xs text-slate-400">Vendor *<select value={creating.vendorId || ""} onChange={e => setCreating({ ...creating, vendorId: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="">Select a vendor</option>{vendors.map(v => <option key={v.id} value={v.id}>{v.displayName}</option>)}</select></label>
+              <label className="text-xs text-slate-400">Vendor *<DistVendorPicker vendors={vendors} value={creating.vendorId} onChange={id => setCreating({ ...creating, vendorId: id })} onCreated={v => setVendors(prev => [...prev, v])}/></label>
               <div className="text-xs text-slate-500 self-end pb-1">{vendor?.billingAddress ? <span>Deliver to: {vendor.shippingAddress || vendor.billingAddress}</span> : null}</div>
               <label className="text-xs text-slate-400">Reference#<input value={creating.reference || ""} onChange={e => setCreating({ ...creating, reference: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
               <label className="text-xs text-slate-400">Payment terms<select value={creating.paymentTerms || "due_on_receipt"} onChange={e => setCreating({ ...creating, paymentTerms: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white">{DIST_PAYMENT_TERMS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}</select></label>
@@ -8805,7 +8895,7 @@ function DistGRNView({ currentUser, pendingConvert, setPendingConvert }) {
             {creating.poNumber && <div className="rounded-xl border border-indigo-800/40 bg-indigo-950/20 px-3 py-2.5 text-xs text-indigo-200">Receiving against <span className="font-mono font-semibold">{creating.poNumber}</span>. Quantities are pre-filled with what's still outstanding — reduce any line to receive a <span className="font-semibold">partial</span> delivery; the rest stays open on the PO.</div>}
             <p className="text-[11px] text-slate-500">Raises stock (a receipt movement per line) and posts Dr Stock / Cr GRNI at landed cost.</p>
             <div className="grid grid-cols-3 gap-4">
-              <label className="text-xs text-slate-400">Source / vendor *<select value={creating.vendorId || ""} onChange={e => setCreating({ ...creating, vendorId: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="">Select a vendor</option>{vendors.map(v => <option key={v.id} value={v.id}>{v.displayName}{v.isCentralKitchen?" (CK)":""}</option>)}</select></label>
+              <label className="text-xs text-slate-400">Source / vendor *<DistVendorPicker vendors={vendors} value={creating.vendorId} onChange={id => setCreating({ ...creating, vendorId: id })} onCreated={v => setVendors(prev => [...prev, v])} optionLabel={v => `${v.displayName}${v.isCentralKitchen ? " (CK)" : ""}`}/></label>
               <label className="text-xs text-slate-400">Reference#<input value={creating.reference || ""} onChange={e => setCreating({ ...creating, reference: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
               <label className="text-xs text-slate-400">Received date<input type="date" value={creating.receivedDate} onChange={e => setCreating({ ...creating, receivedDate: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
             </div>
@@ -10536,7 +10626,7 @@ function DistBillsView({ currentUser, pendingConvert, setPendingConvert }) {
           <div className="space-y-4">
             <p className="text-[11px] text-slate-500">Posts Dr GRNI (net) + Dr VAT / Cr Trade creditors (gross).</p>
             <div className="grid grid-cols-3 gap-4">
-              <label className="text-xs text-slate-400">Vendor *<select value={creating.vendorId || ""} onChange={e => setCreating({ ...creating, vendorId: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"><option value="">Select a vendor</option>{vendors.map(v => <option key={v.id} value={v.id}>{v.displayName}</option>)}</select></label>
+              <label className="text-xs text-slate-400">Vendor *<DistVendorPicker vendors={vendors} value={creating.vendorId} onChange={id => setCreating({ ...creating, vendorId: id })} onCreated={v => setVendors(prev => [...prev, v])}/></label>
               <label className="text-xs text-slate-400">Bill#<input value={creating.billNumber || ""} onChange={e => setCreating({ ...creating, billNumber: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
               <label className="text-xs text-slate-400">Order number<input value={creating.reference || ""} onChange={e => setCreating({ ...creating, reference: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
               <label className="text-xs text-slate-400">Bill date *<input type="date" value={creating.billDate} onChange={e => setCreating({ ...creating, billDate: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
@@ -65011,7 +65101,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: LINEPRICE 2026-08-05l");
+      console.log("CB build: QUICKVENDOR 2026-08-05m");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
