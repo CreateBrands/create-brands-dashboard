@@ -24678,7 +24678,12 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     try { await setEmployeeDefaultStore(id, storeId); } catch { /* the local choice still applies */ }
   }, [myOpsMember, currentUser]);
 
-  const myVisibleStoreIds = useMemo(() => {
+  // GLOBALSTORE 2026-08-05g — the store is chosen ONCE, in the header, and
+  // every employee view follows it. Previously each page had its own picker,
+  // so someone working a shift had to re-select their store on tasks, then
+  // temperatures, then deliveries. One choice, applied everywhere, remembered
+  // on their profile.
+  const myAllStoreIds = useMemo(() => {
     // Prefer the live opsTeam record, but fall back to the storeIds captured on
     // the login user — so store scope works even before the async opsTeam fetch
     // completes (was causing intermittent "No stores assigned" on temp logs).
@@ -24693,6 +24698,12 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     assigned.forEach(id => ids.add(id));
     return [...ids];
   }, [stores, currentUser.brandIds, currentUser.storeIds, currentUser.role, myOpsMember]);
+
+  // The one line that makes the choice global: every view already reads
+  // myVisibleStoreIds, so narrowing it here narrows all of them at once.
+  const myVisibleStoreIds = useMemo(
+    () => (homeStoreId && myAllStoreIds.includes(homeStoreId)) ? [homeStoreId] : myAllStoreIds,
+    [homeStoreId, myAllStoreIds]);
   const [activeView, setActiveView] = useState("ops-tasks");
   const [moreOpen, setMoreOpen] = useState(false); // EMP_BOTTOMNAV_V1: "More" sheet
 
@@ -25258,6 +25269,24 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
           </div>
         </header>
 
+        {/* GLOBALSTORE 2026-08-05g — one store choice for the whole app. Only
+            shown to people who actually work at more than one site; for the
+            108 staff with a single store there is nothing to pick and nothing
+            to see. */}
+        {myAllStoreIds.length > 1 && (
+          <div className="px-4 py-2 flex items-center gap-2" style={{ background: "#F5EDDF", borderBottom: "1px solid #E8DCC6" }}>
+            <MapPin size={13} style={{ color: "#844429" }}/>
+            <span className="text-[11px] font-semibold" style={{ color: "#8A7B68" }}>Working at</span>
+            <select value={homeStoreId || ""} onChange={e => saveHomeStore(e.target.value || null)}
+              className="px-2.5 py-1 rounded-lg text-xs font-bold flex-1 min-w-0"
+              style={{ background: "#FFFFFF", border: "1px solid #E8DCC6", color: "#3A2E26" }}>
+              <option value="">All my stores</option>
+              {(stores || []).filter(s => myAllStoreIds.includes(s.id) && !s.archivedAt)
+                .map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+            </select>
+          </div>
+        )}
+
         {/* Soft prompt: add a profile photo (skippable) */}
         {needsPhoto && !photoPromptDismissed && (
           <div className="bg-indigo-950/40 border-b border-indigo-500/30 px-4 py-3">
@@ -25299,8 +25328,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
                 onChecklistItemToggle={onChecklistItemToggle} onTempLog={onTempLog} currentUser={currentUser}
                 storeRoles={storeRoles} opsTeam={opsTeam} punchRecords={punchRecords}
                 showDateBar={false}
-                homeStoreId={homeStoreId}
-                onChangeHomeStore={saveHomeStore}
+                hideStorePicker
               />
             </>
           )}
@@ -38271,6 +38299,8 @@ function CollapsibleTasks(props) {
   const KEY = "cb_home_tasks_open";
   // Collapsed by default: the home screen should answer "what needs me",
   // not open onto a full work list.
+  // Collapsed unless the person has explicitly opened it before. The home
+  // screen answers "what needs me", not "here is everything".
   const [open, setOpen] = useState(() => {
     try { return localStorage.getItem(KEY) === "1"; } catch { return false; }
   });
@@ -38292,8 +38322,20 @@ function CollapsibleTasks(props) {
   const pct = mine.length ? Math.round((done / mine.length) * 100) : 0;
 
   // A tile saying only "Today's tasks" tells you nothing about whether to open
-  // it. Name what's actually inside, so the decision can be made at a glance.
-  const kinds = [...new Set(mine.map(a => a.kind || a.type || a.checklistName).filter(Boolean))].slice(0, 3);
+  // it. Break it down by what the work actually IS, with counts, so the
+  // decision to open can be made at a glance.
+  const groups = useMemo(() => {
+    const m = new Map();
+    mine.forEach(a => {
+      const k = a.kind || a.type || (a.tempUnitId ? "Temperature checks" : a.checklistId ? "Checklists" : "Tasks");
+      const label = String(k).replace(/[-_]/g, " ").replace(/^./, c => c.toUpperCase());
+      const cur = m.get(label) || { label, total: 0, done: 0 };
+      cur.total += 1;
+      if (a.signedOffAt || a.completedAt || a.status === "done") cur.done += 1;
+      m.set(label, cur);
+    });
+    return [...m.values()].sort((a, b) => (b.total - b.done) - (a.total - a.done));
+  }, [mine]);
 
   return (
     <div className="rounded-2xl overflow-hidden" style={{ border: "1px solid #E8DCC6", background: "#FDF8EF" }}>
@@ -38310,11 +38352,7 @@ function CollapsibleTasks(props) {
                 : `${left} task${left === 1 ? "" : "s"} to do`}
             </div>
             <div className="text-xs" style={{ color: "#8A7B68" }}>
-              {mine.length === 0
-                ? "Nothing scheduled for you"
-                : kinds.length
-                  ? kinds.join(" · ")
-                  : `${done} of ${mine.length} complete`}
+              {mine.length === 0 ? "Nothing scheduled for you" : `${done} of ${mine.length} complete`}
             </div>
           </div>
           <ChevronDown size={20} style={{ color: "#9A8770", transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }}/>
@@ -38325,9 +38363,26 @@ function CollapsibleTasks(props) {
             <div className="h-2 rounded-full overflow-hidden" style={{ background: "#EFE4D2" }}>
               <div className="h-full rounded-full" style={{ width: `${pct}%`, background: left ? "#B45309" : "#3F6B3A", transition: "width .2s" }}/>
             </div>
-            <div className="flex items-center justify-between mt-1.5">
+            {/* What's actually inside, so nobody has to open it to find out. */}
+            {!open && groups.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-3">
+                {groups.map(g => {
+                  const left = g.total - g.done;
+                  return (
+                    <span key={g.label} className="text-[11px] font-semibold px-2.5 py-1 rounded-lg"
+                      style={left
+                        ? { background: "#FFF4DC", color: "#8A5A0B", border: "1px solid #E5B769" }
+                        : { background: "#EAF3E7", color: "#3F6B3A", border: "1px solid #BBD6B4" }}>
+                      {g.label} {left ? `${left} left` : "✓"}
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+            <div className="flex items-center justify-between mt-2.5">
               <span className="text-[11px] font-semibold" style={{ color: "#8A7B68" }}>{done} of {mine.length} done</span>
-              <span className="text-[11px] font-bold" style={{ color: "#844429" }}>{open ? "Hide" : "Tap to open"}</span>
+              <span className="text-[11px] font-bold px-2.5 py-1 rounded-lg"
+                style={{ background: "#844429", color: "#fff" }}>{open ? "Hide" : "Open tasks"}</span>
             </div>
           </div>
         )}
@@ -38343,7 +38398,7 @@ function CollapsibleTasks(props) {
 //                  read-only with nothing explaining why.
 //   homeStoreId  — their store comes from their profile, set once, instead of
 //                  a dropdown to re-pick on every visit.
-function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists, tempUnits, cleaningTasks, auditTrail, checklistStates, onSignOff, onChecklistItemToggle, onTempLog, currentUser, storeRoles = [], opsTeam = [], punchRecords = [], schedules = [], showDateBar = true, homeStoreId = null, onChangeHomeStore = null }) {
+function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists, tempUnits, cleaningTasks, auditTrail, checklistStates, onSignOff, onChecklistItemToggle, onTempLog, currentUser, storeRoles = [], opsTeam = [], punchRecords = [], schedules = [], showDateBar = true, hideStorePicker = false }) {
   // Date browsing: past days are read-only — compliance is recorded live, not backfilled.
   const [viewDate, setViewDate] = useState(getTodayStr());
   const canWrite = viewDate === getTodayStr();
@@ -38375,7 +38430,7 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
     return (brands || []).filter(b => brandIdsInScope.has(b.id) || isHqOrAbove(user.role) || user.brandIds?.includes(b.id));
   }, [brands, visibleStores, user.role, user.brandIds]);
 
-  const [selStore, setSelStore] = useState(homeStoreId || "all");
+  const [selStore, setSelStore] = useState("all");
   const [expandedId, setExpandedId] = useState(null);
   const [tempVal, setTempVal] = useState("");
   const [tempBusy, setTempBusy] = useState(false);
@@ -38479,22 +38534,9 @@ function TodaysTasks({ brands, stores, visibleStoreIds, assignments, checklists,
     <div className="space-y-6">
       {showDateBar && <OpsDateBar value={viewDate} onChange={setViewDate}/>}
       <div className="flex flex-wrap items-center gap-2">
-        {onChangeHomeStore ? (
-          // On the employee home the store is a SETTING, not a filter: it says
-          // where you're working, with a way to correct it.
-          visibleStores.length > 1 ? (
-            <div className="flex items-center gap-2 text-xs">
-              <span style={{ color: "#8A7B68" }}>Working at</span>
-              <select value={selStore === "all" ? "" : selStore}
-                onChange={e => { const v = e.target.value; setSelStore(v || "all"); onChangeHomeStore(v || null); }}
-                className="px-2.5 py-1.5 rounded-lg text-xs font-semibold"
-                style={{ background: "#FFFFFF", border: "1px solid #E8DCC6", color: "#3A2E26" }}>
-                <option value="">All my stores</option>
-                {visibleStores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
-              </select>
-            </div>
-          ) : null
-        ) : (
+        {/* GLOBALSTORE — no picker here: the store is chosen once in the app
+            header and every view follows it. */}
+        {hideStorePicker ? null : (
           <StoreScopeDropdown stores={visibleStores} brands={brands} value={selStore} onChange={setSelStore} className="w-64"/>
         )}
       </div>
@@ -64888,7 +64930,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: EMPSTORE 2026-08-05f");
+      console.log("CB build: GLOBALSTORE 2026-08-05g");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
