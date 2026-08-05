@@ -23414,6 +23414,74 @@ function PhoneClockInCard({ currentUser, opsTeam = [], stores = [], punchRecords
   );
 }
 
+// ── EMPHOME 2026-08-05d — what needs YOU, above what merely exists ─────────
+// The home screen led with the full task list, so a newly published policy sat
+// in Onboarding where nobody would look for it. Frontline apps put the small
+// number of things requiring action at the top and summarise the rest; a wall
+// of list items on open is the pattern they all moved away from.
+function EmployeeActionCard({ currentUser, employeeId }) {
+  const [items, setItems] = useState([]);
+  const [busy, setBusy] = useState("");
+
+  const load = useCallback(async () => {
+    if (!currentUser?.role) return;
+    try {
+      const [pols, acks] = await Promise.all([
+        fetchActivePoliciesForRole(currentUser.role, {}).catch(() => []),
+        employeeId ? fetchPolicyAcknowledgements(employeeId).catch(() => []) : Promise.resolve([]),
+      ]);
+      const done = new Set((acks || []).map(a => a.policy_key || a.policyKey));
+      // Only MANDATORY unacknowledged ones. An optional policy on the home
+      // screen is noise, and noise is what makes people ignore the card that
+      // matters.
+      setItems((pols || []).filter(p => p.mandatory !== false && !done.has(p.key)));
+    } catch { /* additive; never block the home screen */ }
+  }, [currentUser, employeeId]);
+  useEffect(() => { load(); }, [load]);
+
+  if (!items.length) return null;
+
+  const ack = async (p) => {
+    setBusy(p.key);
+    try { await acknowledgePolicy({ employeeId, policyKey: p.key, policyLabel: p.label }); await load(); }
+    catch { /* ignore */ }
+    setBusy("");
+  };
+
+  return (
+    <div className="rounded-2xl overflow-hidden mb-4" style={{ border: "2px solid #E5B769", background: "#FFF9EE" }}>
+      <div className="px-4 py-2.5 flex items-center gap-2" style={{ background: "#8A5A0B" }}>
+        <AlertTriangle size={14} style={{ color: "#FFF4DC" }}/>
+        <span className="text-[11px] uppercase tracking-widest font-bold" style={{ color: "#FFF4DC" }}>
+          Needs your attention — {items.length}
+        </span>
+      </div>
+      <div className="divide-y" style={{ borderColor: "#F0DFC0" }}>
+        {items.map(p => (
+          <div key={p.key} className="px-4 py-3 flex items-center gap-3 flex-wrap">
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-bold" style={{ color: "#3A2E26" }}>{p.label}</div>
+              <div className="text-[11px]" style={{ color: "#8A7B68" }}>
+                {p.category ? `${p.category} · ` : ""}New policy — please read and confirm
+              </div>
+            </div>
+            {p.docUrl && (
+              <a href={p.docUrl} target="_blank" rel="noreferrer"
+                className="px-3 py-1.5 rounded-lg text-[11px] font-bold"
+                style={{ background: "#F0E6D2", color: "#3A2E26" }}>Read</a>
+            )}
+            <button onClick={() => ack(p)} disabled={busy === p.key}
+              className="px-3.5 py-1.5 rounded-lg text-[11px] font-bold text-white disabled:opacity-40"
+              style={{ background: "#8A5A0B" }}>
+              {busy === p.key ? "Saving…" : "I've read this"}
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function EmployeeHomeGreeting({ currentUser, brands, opsTeam, schedules = [], assignments = [], stores = [], visibleStoreIds = [] }) {
   const myId = currentUser.opsTeamMemberId || currentUser.id;
   const myMember = (opsTeam || []).find(m => m.id === myId);
@@ -25201,7 +25269,8 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
                 currentUser={currentUser} opsTeam={opsTeam} stores={stores}
                 punchRecords={punchRecords || []} onPunchIn={onEmpPunchIn} onPunchOut={onEmpPunchOut}
               />
-              <TodaysTasks
+              <EmployeeActionCard currentUser={currentUser} employeeId={currentUser?.employeeId || currentUser?.id}/>
+              <CollapsibleTasks
                 brands={myBrands} stores={stores} visibleStoreIds={myVisibleStoreIds}
                 assignments={assignments} checklists={checklists}
                 tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail}
@@ -38165,6 +38234,56 @@ function OpsDateBar({ value, onChange, right }) {
         </div>
       )}
       {right}
+    </div>
+  );
+}
+
+// EMPHOME 2026-08-05d — the task list ran the full height of the home screen,
+// so everything else was below the fold and the screen answered "here is all
+// the work" rather than "here is what needs you". Same list, behind a summary
+// you can open. Choice is remembered, so anyone who prefers it open only says
+// so once.
+function CollapsibleTasks(props) {
+  const KEY = "cb_home_tasks_open";
+  const [open, setOpen] = useState(() => {
+    try { return localStorage.getItem(KEY) !== "0"; } catch { return true; }
+  });
+  const toggle = () => {
+    setOpen(v => {
+      const next = !v;
+      try { localStorage.setItem(KEY, next ? "1" : "0"); } catch { /* ignore */ }
+      return next;
+    });
+  };
+
+  // Counted from the same assignments the list uses, so the summary can't
+  // disagree with what's inside it.
+  const today = getTodayStr();
+  const mine = (props.assignments || []).filter(a =>
+    a.date === today && (props.visibleStoreIds || []).includes(a.storeId));
+  const done = mine.filter(a => a.signedOffAt || a.completedAt || a.status === "done").length;
+
+  return (
+    <div className="rounded-2xl overflow-hidden" style={{ border: "1px solid #E8DCC6", background: "#FDF8EF" }}>
+      <button onClick={toggle} className="w-full flex items-center gap-3 px-4 py-3 text-left">
+        <ClipboardList size={16} style={{ color: "#844429" }}/>
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-bold" style={{ color: "#3A2E26" }}>Today's tasks</div>
+          <div className="text-[11px]" style={{ color: "#8A7B68" }}>
+            {mine.length ? `${done} of ${mine.length} done` : "Nothing scheduled for you today"}
+          </div>
+        </div>
+        {mine.length > 0 && (
+          <span className="text-[11px] font-bold px-2 py-0.5 rounded-full"
+            style={done >= mine.length
+              ? { background: "#EAF3E7", color: "#3F6B3A" }
+              : { background: "#FFF4DC", color: "#8A5A0B" }}>
+            {done >= mine.length ? "all done" : `${mine.length - done} left`}
+          </span>
+        )}
+        <ChevronDown size={16} style={{ color: "#9A8770", transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }}/>
+      </button>
+      {open && <div style={{ borderTop: "1px solid #E8DCC6" }}><TodaysTasks {...props}/></div>}
     </div>
   );
 }
@@ -64697,7 +64816,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: DOCTYPE 2026-08-05c");
+      console.log("CB build: EMPHOME 2026-08-05d");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
