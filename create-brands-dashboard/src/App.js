@@ -25399,8 +25399,10 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
             <button onClick={() => { setQuickOpen(true); setMoreOpen(false); }}
               aria-label="Quick add"
               className="relative flex-1 flex flex-col items-center justify-center">
-              <span className="absolute -top-4 w-12 h-12 rounded-full bg-indigo-600 hover:bg-indigo-500 flex items-center justify-center shadow-lg shadow-indigo-900/40 border-4 border-slate-900">
-                <Plus size={22} className="text-white"/>
+              {/* QUICKADD 2026-08-05v — sits lower than it did: at -top-4 it
+                  floated clear of the bar and read as a detached button. */}
+              <span className="absolute -top-1 w-11 h-11 rounded-full bg-indigo-600 hover:bg-indigo-500 flex items-center justify-center shadow-lg shadow-indigo-900/40 border-4 border-slate-900">
+                <Plus size={20} className="text-white"/>
               </span>
             </button>
           )}
@@ -65748,7 +65750,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: QUICKADD 2026-08-05u");
+      console.log("CB build: QUICKADD 2026-08-05v");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
