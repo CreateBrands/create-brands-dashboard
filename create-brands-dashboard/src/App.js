@@ -24744,6 +24744,11 @@ const EMP_NAV_CATALOGUE = {
     { key: "order-supplies",  label: "Order Supplies" },
     { key: "fresh-produce",   label: "Fresh Produce" },
     { key: "central-kitchen", label: "Central Kitchen" },
+    { key: "dist-sales-orders", label: "Sales Orders" },
+    { key: "dist-bills",        label: "Bills" },
+    { key: "dist-picks",        label: "Picking" },
+    { key: "dist-dispatch",     label: "Dispatch" },
+    { key: "dist-items",        label: "Items & Stock" },
   ],
   more: [
     { key: "central-kitchen", label: "Central Kitchen" },
@@ -24766,6 +24771,23 @@ const EMP_NAV_CATALOGUE = {
     { key: "review-qr",       label: "Review QR" },
     { key: "my-review",       label: "Review Impact" },
     { key: "my-expenses",     label: "Submit Expense" },
+    // EMPNAV 2026-08-05q — business modules. Off for everyone unless a role is
+    // explicitly given them; each opens the same screen as the desktop app.
+    { key: "dist-sales-orders", label: "Sales Orders" },
+    { key: "dist-invoices",     label: "Invoices" },
+    { key: "dist-bills",        label: "Bills" },
+    { key: "dist-credit-notes", label: "Credit Notes" },
+    { key: "dist-po",           label: "Purchase Orders" },
+    { key: "dist-grn",          label: "Goods Received" },
+    { key: "dist-picks",        label: "Picking" },
+    { key: "dist-dispatch",     label: "Dispatch" },
+    { key: "dist-fulfilment",   label: "Fulfilment" },
+    { key: "dist-receipts",     label: "Payments Received" },
+    { key: "dist-items",        label: "Items & Stock" },
+    { key: "dist-vendors",      label: "Suppliers" },
+    { key: "dist-customers",    label: "Customers" },
+    { key: "dist-reports",      label: "Distribution Reports" },
+    { key: "purchase-invoices", label: "Purchase Invoices" },
   ],
   // The home screen. The greeting itself isn't listed: it's the header of the
   // page rather than a tile, and a home screen with nothing on it at all is a
@@ -25197,6 +25219,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
   // than threaded from the app root: it's one small table, and a failure to
   // read it must leave the menus exactly as they were, never blank.
   const [navCfg, setNavCfg] = useState(null);
+  const [empConvert, setEmpConvert] = useState(null);   // dist doc → doc conversion handoff
   // EMPNAV 2026-08-05p — the access role, matching the permission system:
   // a custom role if one is assigned, otherwise the built-in they fall back to.
   const myRoleKey = myOpsMember?.accessRoleId || "builtin:staff";
@@ -25275,7 +25298,27 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
   // one. The pool is everything they're already entitled to see, so a role can
   // reorder items or move one between surfaces, but never gain a destination
   // the entitlement checks above didn't already put in their hands.
-  const NAV_POOL = [...PRIMARY_NAV.filter(n => n.key !== "__more"), ...MORE_NAV];
+  // EMPNAV 2026-08-05q — destinations that exist but are in nobody's default
+  // menu. They join the pool so a role can be given them in Setup; leaving them
+  // out of MORE_NAV is what keeps them off everyone else's phone.
+  const EXTRA_NAV = [
+    { key: "dist-sales-orders", label: "Sales Orders",     icon: FileText },
+    { key: "dist-invoices",     label: "Invoices",         icon: FileText },
+    { key: "dist-bills",        label: "Bills",            icon: Receipt },
+    { key: "dist-credit-notes", label: "Credit Notes",     icon: FileText },
+    { key: "dist-po",           label: "Purchase Orders",  icon: ShoppingCart },
+    { key: "dist-grn",          label: "Goods Received",   icon: Package },
+    { key: "dist-picks",        label: "Picking",          icon: ClipboardList },
+    { key: "dist-dispatch",     label: "Dispatch",         icon: Truck },
+    { key: "dist-fulfilment",   label: "Fulfilment",       icon: ClipboardList },
+    { key: "dist-receipts",     label: "Payments Received", icon: Receipt },
+    { key: "dist-items",        label: "Items & Stock",    icon: Package },
+    { key: "dist-vendors",      label: "Suppliers",        icon: Users },
+    { key: "dist-customers",    label: "Customers",        icon: Users },
+    { key: "dist-reports",      label: "Distribution Reports", icon: FileSpreadsheet },
+    { key: "purchase-invoices", label: "Purchase Invoices", icon: FileText },
+  ];
+  const NAV_POOL = [...PRIMARY_NAV.filter(n => n.key !== "__more"), ...MORE_NAV, ...EXTRA_NAV];
   const NAV_PRIMARY = (() => {
     const rest = resolveEmpNav(navCfg?.primary, PRIMARY_NAV.filter(n => n.key !== "__more"), NAV_POOL)
       .filter(n => n.key !== "ops-tasks")
@@ -25773,6 +25816,27 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
               onSubmitMany={onSubmitExpenseMany} accountOptions={myExpAccountOptions} currentUser={currentUser}
             />
           )}
+
+          {/* EMPNAV 2026-08-05q — business modules, reachable from the phone.
+              None of these appear for anyone by default: they only render if an
+              owner has put them in a role's menu in Setup → Employee App Menu.
+              Each one loads its own data from currentUser, which is why they can
+              be dropped in here without threading props through the shell. */}
+          {activeView === "dist-sales-orders" && <DistSalesOrderView currentUser={currentUser} setActiveView={setActiveView}/>}
+          {activeView === "dist-invoices"     && <DistInvoicesView currentUser={currentUser} pendingConvert={empConvert} setPendingConvert={setEmpConvert}/>}
+          {activeView === "dist-bills"        && <DistBillsView currentUser={currentUser} pendingConvert={empConvert} setPendingConvert={setEmpConvert}/>}
+          {activeView === "dist-credit-notes" && <DistCreditNotesView currentUser={currentUser}/>}
+          {activeView === "dist-po"           && <DistPOView currentUser={currentUser}/>}
+          {activeView === "dist-grn"          && <DistGRNView currentUser={currentUser} pendingConvert={empConvert} setPendingConvert={setEmpConvert}/>}
+          {activeView === "dist-picks"        && <DistPicksView currentUser={currentUser} pendingConvert={empConvert} setPendingConvert={setEmpConvert}/>}
+          {activeView === "dist-dispatch"     && <DistDispatchView currentUser={currentUser} pendingConvert={empConvert} setPendingConvert={setEmpConvert}/>}
+          {activeView === "dist-fulfilment"   && <DistFulfilmentView currentUser={currentUser}/>}
+          {activeView === "dist-receipts"     && <DistReceiptsView currentUser={currentUser} pendingConvert={empConvert} setPendingConvert={setEmpConvert}/>}
+          {activeView === "dist-items"        && <DistItemsView currentUser={currentUser}/>}
+          {activeView === "dist-vendors"      && <DistVendorsView currentUser={currentUser} stores={stores}/>}
+          {activeView === "dist-customers"    && <DistCustomersView currentUser={currentUser} stores={stores}/>}
+          {activeView === "dist-reports"      && <DistReportsView />}
+          {activeView === "purchase-invoices" && <InvoicesView currentUser={currentUser}/>}
         </main>
 
         {/* EMP_BOTTOMNAV_V1: fixed bottom tab bar + More sheet */}
@@ -65548,7 +65612,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: EMPNAV 2026-08-05p");
+      console.log("CB build: EMPNAV 2026-08-05q");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
