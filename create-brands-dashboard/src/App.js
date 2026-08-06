@@ -25197,18 +25197,19 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
   // than threaded from the app root: it's one small table, and a failure to
   // read it must leave the menus exactly as they were, never blank.
   const [navCfg, setNavCfg] = useState(null);
-  const myRoleKey = (myOpsMember?.roleIds || []).join(",") || myOpsMember?.roleId || "";
+  // EMPNAV 2026-08-05p — the access role, matching the permission system:
+  // a custom role if one is assigned, otherwise the built-in they fall back to.
+  const myRoleKey = myOpsMember?.accessRoleId || "builtin:staff";
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
         const rows = await fetchRoleAppNav();
-        const mine = new Set([...(myOpsMember?.roleIds || []), myOpsMember?.roleId].filter(Boolean));
-        if (alive) setNavCfg(rows.find(r => mine.has(r.roleId)) || null);
+        if (alive) setNavCfg(rows.find(r => r.roleId === myRoleKey) || null);
       } catch { if (alive) setNavCfg(null); }
     })();
     return () => { alive = false; };
-  }, [myRoleKey]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [myRoleKey]);
 
   // EMP_BOTTOMNAV_V1: four fixed bottom tabs (4th = More opens the sheet)
   const PRIMARY_NAV = [
@@ -36662,7 +36663,19 @@ function RolesManager({ customRoles = [], opsTeam = [], onSaveRole, onArchiveRol
 // as "default" rather than pre-ticked: saving writes a row, and a row means
 // "this exact list from now on", so a role should only get one once someone has
 // actually decided something about it.
-function EmployeeNavSetup({ storeRoles = [] }) {
+// EMPNAV 2026-08-05p — keyed on the ACCESS role (Owner / HQ Staff / Manager /
+// Staff plus the custom roles), not the store job roles. Job roles describe the
+// shift someone is working; access roles are what the permission system already
+// uses, which is what "customise the app per role" has to mean if it's going to
+// line up with everything else.
+const EMPNAV_BUILTIN_ROLES = [
+  { id: "builtin:owner",    name: "Owner" },
+  { id: "builtin:hq_staff", name: "HQ Staff" },
+  { id: "builtin:manager",  name: "Manager" },
+  { id: "builtin:staff",    name: "Staff (anyone with no custom role)" },
+];
+
+function EmployeeNavSetup({ customRoles = [] }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [roleId, setRoleId] = useState("");
@@ -36679,7 +36692,10 @@ function EmployeeNavSetup({ storeRoles = [] }) {
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  const roles = (storeRoles || []).filter(r => !r.archivedAt);
+  const roles = [
+    ...EMPNAV_BUILTIN_ROLES,
+    ...(customRoles || []).filter(r => !r.archivedAt).map(r => ({ id: r.id, name: r.name, custom: true })),
+  ];
   const current = rows.find(r => r.roleId === roleId) || null;
 
   const pick = (id) => {
@@ -36788,7 +36804,7 @@ function EmployeeNavSetup({ storeRoles = [] }) {
           <option value="">{loading ? "Loading…" : "Choose a role…"}</option>
           {roles.map(r => (
             <option key={r.id} value={r.id}>
-              {r.name}{rows.some(x => x.roleId === r.id) ? " — customised" : " — default"}
+              {r.name}{r.custom ? " (custom)" : ""}{rows.some(x => x.roleId === r.id) ? " — customised" : " — default"}
             </option>
           ))}
         </select></label>
@@ -36836,8 +36852,7 @@ function AdminPanelView({
   onAddStore, onUpdateStore, onDeleteStore,
   onLinkFlipdish, onUnlinkFlipdish, onBackfillStoreSales,
   onUpdateKPITargets, onBulkImport,
-  customRoles = [], onSaveRole, onArchiveRole, onAssignMemberRole, initialTab, hideTabs,
-  storeRoles = [],
+  customRoles = [], onSaveRole, onArchiveRole, onAssignMemberRole, initialTab, hideTabs
 }) {
   const [tab, setTab] = useState(initialTab || "locations");
   const [locModal, setLocModal] = useState(null);
@@ -36911,7 +36926,7 @@ function AdminPanelView({
         />
       )}
 
-      {tab==="empnav"&&<EmployeeNavSetup storeRoles={storeRoles}/>}
+      {tab==="empnav"&&<EmployeeNavSetup customRoles={customRoles}/>}
 
       {tab==="roles"&&(
         <div className="bg-slate-900 border border-slate-800 rounded-2xl px-5 py-6 text-sm text-slate-400 space-y-2">
@@ -65533,7 +65548,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: EMPNAV 2026-08-05o");
+      console.log("CB build: EMPNAV 2026-08-05p");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -67657,7 +67672,6 @@ export default function App() {
               onBackfillStoreSales={backfillStoreSales}
               onUpdateKPITargets={updateKPITargets} onBulkImport={handleBulkImport}
               customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} onAssignMemberRole={handleAssignMemberRole}
-              storeRoles={storeRoles}
             />}
             {effectiveActiveView === "setup" && setupPanel === "notifications" && <NotificationsView currentUser={currentUser} onNavigate={setActiveView}/>}
             {effectiveActiveView === "setup" && setupPanel === "store-ordering" && currentUser.role !== "staff" && <StoreOrderingSetupView currentUser={currentUser} stores={stores} opsTeam={opsTeam}/>}
