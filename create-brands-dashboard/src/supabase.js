@@ -18281,6 +18281,7 @@ function dbRoleNavToApp(r) {
     primary: r.primary_keys || null,
     more:    r.more_keys    || null,
     home:    r.home_keys    || null,
+    actions: r.action_keys  || null,
   };
 }
 
@@ -18296,6 +18297,7 @@ export async function upsertRoleAppNav(cfg) {
     primary_keys: cfg.primary || null,
     more_keys:    cfg.more    || null,
     home_keys:    cfg.home    || null,
+    action_keys:  cfg.actions || null,
     updated_at:   new Date().toISOString(),
   };
   const { data, error } = await supabase

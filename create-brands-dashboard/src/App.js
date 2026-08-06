@@ -24799,6 +24799,31 @@ EMP_NAV_CATALOGUE.primary = [
   ...EMP_NAV_CATALOGUE.more,
 ];
 
+// QUICKADD 2026-08-05u — the + button in the middle of the bottom bar. Each
+// action is a destination plus, where the screen supports it, an instruction to
+// open its form straight away. Configured per role like everything else; a role
+// with no actions configured gets the four obvious ones.
+const EMP_QUICK_ACTIONS = [
+  { key: "qa-expense",     label: "Add an expense",   view: "my-expenses",       icon: Receipt },
+  { key: "qa-issue",       label: "Report an issue",  view: "issues",            icon: AlertTriangle, open: true, type: "Issue" },
+  { key: "qa-maintenance", label: "Add maintenance",  view: "issues",            icon: Wrench,        open: true, type: "Maintenance" },
+  { key: "qa-po",          label: "Purchase order",   view: "dist-po",           icon: ShoppingCart },
+  { key: "qa-bill",        label: "Add a bill",       view: "dist-bills",        icon: Receipt },
+  { key: "qa-sales-order", label: "Sales order",      view: "dist-sales-orders", icon: FileText },
+  { key: "qa-grn",         label: "Goods received",   view: "dist-grn",          icon: Package },
+  { key: "qa-invoice",     label: "Raise an invoice", view: "dist-invoices",     icon: FileText },
+  { key: "qa-temp",        label: "Log a temperature", view: "ops-temps",        icon: Thermometer },
+  { key: "qa-delivery",    label: "Log a delivery",   view: "ops-deliveries",    icon: Truck },
+  { key: "qa-eod",         label: "EOD report",       view: "emp-eod",           icon: ClipboardList },
+  { key: "qa-order",       label: "Order supplies",   view: "order-supplies",    icon: ShoppingCart },
+  { key: "qa-petty",       label: "Petty cash entry", view: "petty-cash",        icon: Wallet },
+];
+const EMP_QUICK_DEFAULT = ["qa-expense", "qa-issue", "qa-maintenance", "qa-po"];
+// Assigned here, not inside the object literal above: EMP_QUICK_ACTIONS is
+// declared after it, and reading it up there is a module-load ReferenceError —
+// valid syntax, passes lint, blanks the whole app.
+EMP_NAV_CATALOGUE.actions = EMP_QUICK_ACTIONS.map(a => ({ key: a.key, label: a.label }));
+
 // Schedule and Training can be moved off the bottom bar into the More sheet.
 EMP_NAV_CATALOGUE.more = [
   { key: "emp-schedule", label: "Schedule" },
@@ -25228,6 +25253,8 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
   // read it must leave the menus exactly as they were, never blank.
   const [navCfg, setNavCfg] = useState(null);
   const [empConvert, setEmpConvert] = useState(null);   // dist doc → doc conversion handoff
+  const [quickOpen, setQuickOpen] = useState(false);   // QUICKADD 2026-08-05u
+  const [quickIntent, setQuickIntent] = useState(null); // {view, type} — open that screen's form
   // EMPNAV 2026-08-05p — the access role, matching the permission system:
   // a custom role if one is assigned, otherwise the built-in they fall back to.
   const myRoleKey = myOpsMember?.accessRoleId || "builtin:staff";
@@ -25342,30 +25369,85 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     .filter(n => !NAV_PRIMARY.some(p => p.key === n.key));   // no item in both bars
   const showHomeTile = (k) => !Array.isArray(navCfg?.home) || navCfg.home.includes(k);
 
+  // QUICKADD 2026-08-05u — the + menu, configured per role like the rest. An
+  // action whose destination this person can't reach is dropped, so the shortcut
+  // can never be a way around the entitlement checks.
+  const QUICK_ACTIONS = (Array.isArray(navCfg?.actions) ? navCfg.actions : EMP_QUICK_DEFAULT)
+    .map(k => EMP_QUICK_ACTIONS.find(a => a.key === k))
+    .filter(Boolean)
+    .filter(a => NAV_POOL.some(n => n.key === a.view) || a.view === "ops-tasks");
+
   // EMP_BOTTOMNAV_V1: a primary tab is "active" if it's the current view,
   // OR (for More) if the current view is one of the More items.
   const moreKeys = NAV_MORE.map(n => n.key);
-  const goTo = (key) => { setActiveView(key); setMoreOpen(false); };
+  const goTo = (key) => { setActiveView(key); setMoreOpen(false); setQuickIntent(null); };
 
   const BottomNav = () => (
     <nav className="EMP_BOTTOMNAV_V1 emp-bottomnav fixed bottom-0 inset-x-0 z-30 flex items-stretch justify-around bg-slate-900 border-t border-slate-800/60"
       style={{ paddingBottom: "max(env(safe-area-inset-bottom), 8px)" }}>
-      {NAV_PRIMARY.map(n => {
+      {NAV_PRIMARY.map((n, idx) => {
         const NIcon = n.icon;
         const active = n.key === "__more"
           ? (moreOpen || moreKeys.includes(activeView))
           : (activeView === n.key && !moreOpen);
         return (
-          <button key={n.key}
+          <Fragment key={n.key}>
+          {/* QUICKADD 2026-08-05u — the + sits in the middle of the bar, after
+              the first half of the tabs. It's raised above the bar because a
+              flat fifth tab reads as another destination, and this one isn't. */}
+          {idx === Math.ceil(NAV_PRIMARY.length / 2) && QUICK_ACTIONS.length > 0 && (
+            <button onClick={() => { setQuickOpen(true); setMoreOpen(false); }}
+              aria-label="Quick add"
+              className="relative flex-1 flex flex-col items-center justify-center">
+              <span className="absolute -top-4 w-12 h-12 rounded-full bg-indigo-600 hover:bg-indigo-500 flex items-center justify-center shadow-lg shadow-indigo-900/40 border-4 border-slate-900">
+                <Plus size={22} className="text-white"/>
+              </span>
+            </button>
+          )}
+          <button
             onClick={() => n.key === "__more" ? setMoreOpen(o => !o) : goTo(n.key)}
             className={`relative flex-1 flex flex-col items-center justify-center gap-1 py-2.5 text-[11px] font-semibold transition-colors ${active ? "text-indigo-400" : "text-slate-500 hover:text-slate-300"}`}>
             <NIcon size={20}/>
             <span>{n.label}</span>
             {n.badge && <span className="absolute top-1.5 right-[28%] bg-red-500 text-white text-[10px] leading-none px-1.5 py-0.5 rounded-full font-bold">{n.badge}</span>}
           </button>
+          </Fragment>
         );
       })}
     </nav>
+  );
+
+  // QUICKADD 2026-08-05u — the shortcut sheet. Every action is a destination the
+  // person can already reach; this only saves them the digging.
+  const QuickAddSheet = () => !quickOpen ? null : (
+    <>
+      <div className="fixed inset-0 z-40" style={{ background: "rgba(0,0,0,.6)" }} onClick={() => setQuickOpen(false)}/>
+      <div className="fixed inset-x-0 bottom-0 z-40 rounded-t-3xl bg-slate-900 border-t border-slate-800 p-4"
+        style={{ paddingBottom: "max(env(safe-area-inset-bottom), 16px)" }}>
+        <div className="w-10 h-1 rounded-full bg-slate-700 mx-auto mb-3"/>
+        <div className="text-sm font-bold text-white mb-3">Add</div>
+        <div className="grid grid-cols-2 gap-2">
+          {QUICK_ACTIONS.map(a => {
+            const AIcon = a.icon;
+            return (
+              <button key={a.key}
+                onClick={() => {
+                  setQuickIntent(a.open ? { view: a.view, type: a.type } : null);
+                  setActiveView(a.view);
+                  setQuickOpen(false);
+                }}
+                className="flex items-center gap-2.5 rounded-2xl border border-slate-800 bg-slate-800/40 hover:border-indigo-600/50 px-3 py-3 text-left">
+                <span className="w-9 h-9 rounded-xl bg-slate-800 flex items-center justify-center flex-shrink-0">
+                  <AIcon size={16} className="text-indigo-400"/>
+                </span>
+                <span className="text-sm font-semibold text-white leading-tight">{a.label}</span>
+              </button>
+            );
+          })}
+        </div>
+        <button onClick={() => setQuickOpen(false)} className="w-full mt-3 py-2.5 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold">Cancel</button>
+      </div>
+    </>
   );
 
   const MoreSheet = () => (
@@ -25741,8 +25823,11 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
           )}
           {activeView === "issues" && (
             <EmployeeIssueReporter
+              key={quickIntent?.view === "issues" ? `qa-${quickIntent.type}` : "plain"}
               brands={myBrands} issues={myIssues} currentUser={currentUser}
               onAdd={onAddIssue} onUpdate={onUpdateIssue}
+              autoOpen={quickIntent?.view === "issues"}
+              presetType={quickIntent?.view === "issues" ? quickIntent.type : "Issue"}
             />
           )}
 
@@ -25884,6 +25969,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
 
         {/* EMP_BOTTOMNAV_V1: fixed bottom tab bar + More sheet */}
         <BottomNav />
+        <QuickAddSheet />
         <MoreSheet />
       </div>
     </AuthContext.Provider>
@@ -25892,8 +25978,11 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
 
 // ─── Employee Issue Reporter ──────────────────────────────────────────────────
 // Simplified issue reporting for employees — just report + see your own reports.
-function EmployeeIssueReporter({ brands, issues, currentUser, onAdd, onUpdate }) {
-  const [showForm, setShowForm] = useState(false);
+function EmployeeIssueReporter({ brands, issues, currentUser, onAdd, onUpdate, autoOpen = false, presetType = "Issue" }) {
+  // QUICKADD 2026-08-05u — the + shortcut lands here with the form already open,
+  // and picks the type, so "Add maintenance" doesn't mean "find the form, then
+  // remember to change a dropdown".
+  const [showForm, setShowForm] = useState(!!autoOpen);
   const [form, setFormState] = useState({ brandId: brands[0]?.id || "", title: "", description: "", category: ISSUE_CATEGORIES[0], priority: "Medium", photos: [] });
   const set = (k, v) => setFormState(f => ({ ...f, [k]: v }));
 
@@ -25914,7 +26003,7 @@ function EmployeeIssueReporter({ brands, issues, currentUser, onAdd, onUpdate })
         category: form.category,
         priority: form.priority,
         status: "Open",
-        type: "Issue",
+        type: presetType || "Issue",
         reportedBy: currentUser.name,
         assignedTo: "",
         comments: [],
@@ -36809,7 +36898,7 @@ function EmployeeNavSetup({ customRoles = [] }) {
     setRoleId(id); setMsg(""); setErr("");
     const existing = rows.find(r => r.roleId === id);
     setDraft(existing
-      ? { primary: existing.primary || [], more: existing.more || [], home: existing.home || [] }
+      ? { primary: existing.primary || [], more: existing.more || [], home: existing.home || [], actions: existing.actions || EMP_QUICK_DEFAULT }
       : null);
   };
 
@@ -36818,6 +36907,7 @@ function EmployeeNavSetup({ customRoles = [] }) {
     primary: ["emp-schedule", "emp-training"],
     more: EMP_NAV_CATALOGUE.more.map(i => i.key),
     home: EMP_NAV_CATALOGUE.home.map(i => i.key),
+    actions: EMP_QUICK_DEFAULT,
   });
 
   const toggle = (surface, key) => setDraft(d => {
@@ -36934,6 +37024,9 @@ function EmployeeNavSetup({ customRoles = [] }) {
           {renderSurface("Home screen",
             "The greeting always shows. These are the cards beneath it.",
             "home", EMP_NAV_CATALOGUE.home, null)}
+          {renderSurface("The + button",
+            "Shortcuts in the middle of the bottom bar. Untick them all and the + disappears.",
+            "actions", EMP_NAV_CATALOGUE.actions, null)}
           <div className="flex items-center gap-3">
             <button onClick={save} disabled={busy} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-bold">
               {busy ? "Saving…" : "Save"}
@@ -65655,7 +65748,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: EMPNAV 2026-08-05t");
+      console.log("CB build: QUICKADD 2026-08-05u");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
