@@ -24734,22 +24734,9 @@ function OrderRecorderModal({ storeId, employeeId, employeeName, onClose, autoSt
 const EMP_NAV_CATALOGUE = {
   // Bottom bar. The fourth slot is always More and is not configurable —
   // without it the rest of the app becomes unreachable on a phone.
-  primary: [
-    { key: "ops-tasks",       label: "Home" },
-    { key: "emp-schedule",    label: "Schedule" },
-    { key: "emp-training",    label: "Training" },
-    { key: "ops-temps",       label: "Temperature Log" },
-    { key: "comms",           label: "Communication" },
-    { key: "my-expenses",     label: "Submit Expense" },
-    { key: "order-supplies",  label: "Order Supplies" },
-    { key: "fresh-produce",   label: "Fresh Produce" },
-    { key: "central-kitchen", label: "Central Kitchen" },
-    { key: "dist-sales-orders", label: "Sales Orders" },
-    { key: "dist-bills",        label: "Bills" },
-    { key: "dist-picks",        label: "Picking" },
-    { key: "dist-dispatch",     label: "Dispatch" },
-    { key: "dist-items",        label: "Items & Stock" },
-  ],
+  // Filled in below from the full list: anything that can be a destination can
+  // be a bottom tab, so nothing has to come back here to be made eligible.
+  primary: [],
   more: [
     { key: "central-kitchen", label: "Central Kitchen" },
     { key: "fresh-produce",   label: "Fresh Produce" },
@@ -24800,6 +24787,23 @@ const EMP_NAV_CATALOGUE = {
     { key: "home-tasks",   label: "Today's tasks tile" },
   ],
 };
+
+// EMPNAV 2026-08-05s — every destination is eligible for the bottom bar, not a
+// hand-picked subset. Home leads because it's pinned there; Schedule and
+// Training follow because they're the built-in tabs.
+EMP_NAV_CATALOGUE.primary = [
+  { key: "ops-tasks",    label: "Home" },
+  { key: "emp-schedule", label: "Schedule" },
+  { key: "emp-training", label: "Training" },
+  ...EMP_NAV_CATALOGUE.more,
+];
+
+// Schedule and Training can be moved off the bottom bar into the More sheet.
+EMP_NAV_CATALOGUE.more = [
+  { key: "emp-schedule", label: "Schedule" },
+  { key: "emp-training", label: "Training" },
+  ...EMP_NAV_CATALOGUE.more,
+];
 
 // Resolve one person's menus. `cfg` is their role's row or null; `defaults` is
 // what the shell would have shown anyway. Anything the person isn't entitled to
@@ -65638,7 +65642,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: EMPNAV 2026-08-05r");
+      console.log("CB build: EMPNAV 2026-08-05s");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
