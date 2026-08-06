@@ -24777,6 +24777,7 @@ const EMP_NAV_CATALOGUE = {
     { key: "purchase-invoices", label: "Purchase Invoices" },
     { key: "spend",             label: "Spend (finance)" },
     { key: "petty-cash",        label: "Petty Cash (finance)" },
+    { key: "issues-manage",     label: "Issues & Maintenance (manage all)" },
   ],
   // The home screen. The greeting itself isn't listed: it's the header of the
   // page rather than a tile, and a home screen with nothing on it at all is a
@@ -24816,7 +24817,7 @@ function resolveEmpNav(chosenKeys, defaults, pool) {
 }
 
 function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], assignments, checklists, tempUnits, storeRoles = [],
-  expensePayees = [], bankTransactions = [], cashLedger = [], pettyTarget = 0, pettyHandlers = {},
+  expensePayees = [], bankTransactions = [], cashLedger = [], pettyTarget = 0, pettyHandlers = {}, onDeleteIssue,
   cleaningTasks, auditTrail, checklistStates, tempLogs, deliveries, issues,
   onSignOff, onChecklistItemToggle, onTempLog, onDeliveryAdd, onAddIssue, onUpdateIssue, onAddEntry,
   hdTickets, onAddHdTicket, onUpdateHdTicket, helpdeskLevel = "none", messages, onSendMessage, onMarkRead,
@@ -25326,6 +25327,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     { key: "purchase-invoices", label: "Purchase Invoices", icon: FileText },
     { key: "spend",             label: "Spend",             icon: PoundSterling },
     { key: "petty-cash",        label: "Petty Cash",        icon: Wallet },
+    { key: "issues-manage",     label: "Issues & Maintenance", icon: Wrench },
   ];
   const NAV_POOL = [...PRIMARY_NAV.filter(n => n.key !== "__more"), ...MORE_NAV, ...EXTRA_NAV];
   const NAV_PRIMARY = (() => {
@@ -25724,6 +25726,17 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
               assignments={assignments} auditTrail={auditTrail}
               opsTeam={opsTeam} checklists={checklists} tempUnits={tempUnits}
               cleaningTasks={cleaningTasks}
+            />
+          )}
+          {/* EMPNAV 2026-08-05t — the full Issues & Maintenance dashboard, the
+              same screen as the desktop Ops tab: every issue across their
+              stores, with status, assignment and history. "issues" above stays
+              the report-only form, which is what most staff should have. */}
+          {activeView === "issues-manage" && (
+            <IssuesView
+              brands={myBrands} stores={stores} visibleStoreIds={myVisibleStoreIds}
+              issues={issues} users={users} currentUser={currentUser}
+              onAddIssue={onAddIssue} onUpdateIssue={onUpdateIssue} onDeleteIssue={onDeleteIssue}
             />
           )}
           {activeView === "issues" && (
@@ -65642,7 +65655,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: EMPNAV 2026-08-05s");
+      console.log("CB build: EMPNAV 2026-08-05t");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -67108,7 +67121,7 @@ export default function App() {
           onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}
           onTempLog={handleTempLog} onDeliveryAdd={handleDeliveryAdd}
           onAddEntry={addEntry}
-          onAddIssue={addIssue} onUpdateIssue={updateIssue}
+          onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}
           hdTickets={hdTickets} onAddHdTicket={addHdTicket} onUpdateHdTicket={updateHdTicket}
           helpdeskLevel={helpdeskLevel()}
           messages={messages} onSendMessage={sendMessage} onMarkRead={handleMarkRead}
