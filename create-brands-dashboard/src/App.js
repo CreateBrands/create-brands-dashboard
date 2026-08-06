@@ -24788,6 +24788,8 @@ const EMP_NAV_CATALOGUE = {
     { key: "dist-customers",    label: "Customers" },
     { key: "dist-reports",      label: "Distribution Reports" },
     { key: "purchase-invoices", label: "Purchase Invoices" },
+    { key: "spend",             label: "Spend (finance)" },
+    { key: "petty-cash",        label: "Petty Cash (finance)" },
   ],
   // The home screen. The greeting itself isn't listed: it's the header of the
   // page rather than a tile, and a home screen with nothing on it at all is a
@@ -24810,6 +24812,7 @@ function resolveEmpNav(chosenKeys, defaults, pool) {
 }
 
 function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], assignments, checklists, tempUnits, storeRoles = [],
+  expensePayees = [], bankTransactions = [], cashLedger = [], pettyTarget = 0, pettyHandlers = {},
   cleaningTasks, auditTrail, checklistStates, tempLogs, deliveries, issues,
   onSignOff, onChecklistItemToggle, onTempLog, onDeliveryAdd, onAddIssue, onUpdateIssue, onAddEntry,
   hdTickets, onAddHdTicket, onUpdateHdTicket, helpdeskLevel = "none", messages, onSendMessage, onMarkRead,
@@ -25317,6 +25320,8 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     { key: "dist-customers",    label: "Customers",        icon: Users },
     { key: "dist-reports",      label: "Distribution Reports", icon: FileSpreadsheet },
     { key: "purchase-invoices", label: "Purchase Invoices", icon: FileText },
+    { key: "spend",             label: "Spend",             icon: PoundSterling },
+    { key: "petty-cash",        label: "Petty Cash",        icon: Wallet },
   ];
   const NAV_POOL = [...PRIMARY_NAV.filter(n => n.key !== "__more"), ...MORE_NAV, ...EXTRA_NAV];
   const NAV_PRIMARY = (() => {
@@ -25837,6 +25842,27 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
           {activeView === "dist-customers"    && <DistCustomersView currentUser={currentUser} stores={stores}/>}
           {activeView === "dist-reports"      && <DistReportsView />}
           {activeView === "purchase-invoices" && <InvoicesView currentUser={currentUser}/>}
+
+          {/* EMPNAV 2026-08-05r — Finance. Unlike the distribution screens these
+              don't self-load, so their data is threaded down from the app root;
+              it's already fetched for every session, employee ones included.
+              Note the desktop app also gates these on financeGranted(), which is
+              computed further down and isn't in scope here — so on the phone the
+              gate is the role configuration itself. Only put them in a role that
+              should genuinely see company money. */}
+          {activeView === "spend" && (
+            <SpendDashboardView
+              claims={expenseClaims} payees={expensePayees}
+              bankTransactions={bankTransactions} bankAccounts={bankAccounts}
+              cashAccounts={cashAccounts} cashLedger={cashLedger} stores={stores}
+            />
+          )}
+          {activeView === "petty-cash" && (
+            <PettyCashView
+              accounts={cashAccounts} ledger={cashLedger} stores={stores}
+              target={pettyTarget} handlers={pettyHandlers}
+            />
+          )}
         </main>
 
         {/* EMP_BOTTOMNAV_V1: fixed bottom tab bar + More sheet */}
@@ -65612,7 +65638,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: EMPNAV 2026-08-05q");
+      console.log("CB build: EMPNAV 2026-08-05r");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -67070,6 +67096,8 @@ export default function App() {
         <AnnouncementGate currentUser={currentUser} opsTeam={opsTeam} />
         <EmployeeShell
           currentUser={currentUser} brands={myBrands} stores={stores} opsTeam={opsTeam} users={users} storeRoles={storeRoles}
+          expensePayees={expensePayees} bankTransactions={bankTransactions}
+          cashLedger={cashLedger} pettyTarget={pettyTarget} pettyHandlers={pettyHandlers}
           assignments={assignments} checklists={checklists} tempUnits={tempUnits}
           cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates}
           tempLogs={tempLogs} deliveries={deliveries} issues={issues.filter(i=>currentUser.brandIds.includes(i.brandId))}
