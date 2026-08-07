@@ -10289,6 +10289,7 @@ const mapExpenseClaim = (e) => ({
   status: e.status || "submitted", submittedBy: e.submitted_by || "", submittedById: e.submitted_by_id || null,
   approvedBy: e.approved_by || null, approvedAt: e.approved_at || null, rejectedReason: e.rejected_reason || null,
   reconcileType: e.reconcile_type || null, cashAccountId: e.cash_account_id || null, cashLedgerId: e.cash_ledger_id || null,
+  paidAccountKind: e.paid_account_kind || null, paidAccountId: e.paid_account_id || null,
   bankTxnId: e.bank_txn_id || null, reconciledBy: e.reconciled_by || null, reconciledAt: e.reconciled_at || null,
   createdAt: e.created_at, updatedAt: e.updated_at,
 });
@@ -10731,6 +10732,13 @@ export async function submitExpenseClaim(claim) {
     payee_id: claim.payeeId || null,
     store_id: claim.storeId || null, invoice_id: claim.invoiceId || null, vendor: claim.vendor || null, reference: claim.reference || null,
     receipt_url: claim.receiptUrl || null,
+    // PAIDFROM 2026-08-06 — which of the submitter's assigned accounts the money
+    // actually left. cash_account_id is the existing column Finance reconciles
+    // against, so a cash claim still lands in the cash ledger flow; the kind/id
+    // pair records bank cards too, which had nowhere structured to go before.
+    paid_account_kind: claim.paidAccountKind || null,
+    paid_account_id: claim.paidAccountId || null,
+    cash_account_id: claim.paidAccountKind === "cash" ? (claim.paidAccountId || null) : (claim.cashAccountId || null),
     status: "submitted", submitted_by: claim.submittedBy || null, submitted_by_id: claim.submittedById || null,
     updated_at: new Date().toISOString(),
   };

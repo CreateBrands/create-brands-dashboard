@@ -24294,11 +24294,11 @@ function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
   );
 }
 
-function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [], myClaims = [], onSubmit, onSubmitMany, accountOptions = [], currentUser }) {
+function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [], myClaims = [], onSubmit, onSubmitMany, accountOptions = [], payees = [], currentUser }) {
   const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
   const ec = "w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none";
   const [mode, setMode] = useState("new"); // new | split | mine
-  const [form, setForm] = useState({ vendor:"", expenseTypeId:"", categoryId:"", storeId:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), reference:"", description:"" });
+  const [form, setForm] = useState({ vendor:"", expenseTypeId:"", categoryId:"", storeId:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), reference:"", description:"", accountKey:"" });
   const [busy, setBusy] = useState(false); const [err, setErr] = useState(""); const [ok, setOk] = useState("");
   const setF = (k,v) => setForm(f=>({ ...f, [k]: v }));
   // Receipt scan on the simple form: extract line items so the purchase is
@@ -24349,7 +24349,15 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
     setBusy(true);
     try {
       const itemised = scanLines.length ? scanLines.map(it=>`${it.units}× ${it.desc}`).join("; ").slice(0,500) : "";
+      // PAIDFROM 2026-08-06 — "cash:acc-1" / "bank:acc-2" splits into the pair
+      // the claim stores. A vendor typed by hand stays free text; one that
+      // matches a payee on the list also carries that payee's id, so Finance
+      // gets the link without the person having to care which they used.
+      const [paidKind, paidId] = (form.accountKey || "").split(":");
+      const matchedPayee = (payees || []).find(p => (p.name || "").trim().toLowerCase() === (form.vendor || "").trim().toLowerCase());
       const submittedClaim = await onSubmit?.({ ...form, amount: Number(form.amount), receiptUrl, invoiceId: scanInvoiceId,
+        paidAccountKind: paidKind || null, paidAccountId: paidId || null,
+        payeeId: matchedPayee?.id || null,
         reference: form.reference || itemised });
       // If the purchase is for a store and we have line items, raise the
       // incoming delivery so the store can receive it item by item. Stamp the
@@ -24360,7 +24368,7 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
           { vendor: form.vendor, ref: `${form.expenseDate}-${(form.vendor||"purchase").slice(0,20)}`, claimId: submittedClaim?.id || null }
         ); } catch (e2) { console.error("delivery create failed:", e2.message); }
       }
-      setForm({ vendor:"", expenseTypeId:"", categoryId:"", storeId:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), reference:"", description:"" });
+      setForm({ vendor:"", expenseTypeId:"", categoryId:"", storeId:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), reference:"", description:"", accountKey:"" });
       setReceiptUrl(null); setScanLines([]); setScanInvoiceId(null);
       setOk(`Expense submitted${form.storeId && scanLines.length ? " — delivery raised for the store" : ""}.`); setMode("mine");
       setTimeout(()=>setOk(""), 4000);
@@ -24428,7 +24436,24 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
               </div>
             </div>
           )}
-          <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Vendor / paid to</label><input value={form.vendor} onChange={e=>setF("vendor",e.target.value)} placeholder="Who was paid" className={ec}/></div>
+          {/* PAIDFROM 2026-08-06 — a list to pick from, but still typeable: most
+              expenses go to a known payee, some to a one-off corner shop, and
+              forcing either extreme makes one of those a fight. */}
+          <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Vendor / paid to</label>
+            <input value={form.vendor} onChange={e=>setF("vendor",e.target.value)} list="emp-payee-list"
+              placeholder="Pick from the list or type a name" className={ec}/>
+            <datalist id="emp-payee-list">
+              {(payees || []).map(p => <option key={p.id} value={p.name}/>)}
+            </datalist>
+          </div>
+          {accountOptions.length > 0 && (
+            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Paid from</label>
+              <select value={form.accountKey} onChange={e=>setF("accountKey",e.target.value)} className={ec}>
+                <option value="">—</option>
+                {accountOptions.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+              </select>
+            </div>
+          )}
           {/* No "type" field: the P&L classification comes from CATEGORY, and the
               paying account is fixed at reconciliation — type was a petty-cash
               convenience with no assignment UI, so it's gone from this form. */}
@@ -25922,7 +25947,8 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
             <EmployeeExpenseSubmit
               myTypes={myExpTypes} myCategories={myExpCategories} myStores={myExpStores}
               myClaims={myExpClaims} onSubmit={onSubmitExpense}
-              onSubmitMany={onSubmitExpenseMany} accountOptions={myExpAccountOptions} currentUser={currentUser}
+              onSubmitMany={onSubmitExpenseMany} accountOptions={myExpAccountOptions}
+              payees={expensePayees} currentUser={currentUser}
             />
           )}
 
@@ -65750,7 +65776,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: QUICKADD 2026-08-05v");
+      console.log("CB build: PAIDFROM 2026-08-06a");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
