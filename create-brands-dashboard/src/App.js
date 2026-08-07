@@ -25650,7 +25650,15 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
 
   // Employee-filtered versions
   const myBrands = brands.filter(b => currentUser.brandIds.includes(b.id));
-  const myIssues = issues.filter(i => (currentUser.brandIds || []).includes(i.brandId) || i.reportedBy === currentUser.name);
+  // ISSUESCOPE 2026-08-06e — an employee session carries brandIds: [member.brandId],
+  // ONE brand from their ops_team row. Filtering issues on that alone meant
+  // anyone whose home brand differs from where they actually work saw an empty
+  // list — every count zero — no matter how many stores they were assigned.
+  // Their assigned stores now count too.
+  const myIssues = issues.filter(i =>
+    (currentUser.brandIds || []).includes(i.brandId)
+    || (myAllStoreIds || []).includes(i.storeId)
+    || i.reportedBy === currentUser.name);
 
   return (
     <AuthContext.Provider value={{ user: currentUser }}>
@@ -65945,7 +65953,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: WHYEMPTY 2026-08-06d");
+      console.log("CB build: ISSUESCOPE 2026-08-06e");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -67407,7 +67415,11 @@ export default function App() {
           cashLedger={cashLedger} pettyTarget={pettyTarget} pettyHandlers={pettyHandlers}
           assignments={assignments} checklists={checklists} tempUnits={tempUnits}
           cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates}
-          tempLogs={tempLogs} deliveries={deliveries} issues={issues.filter(i=>currentUser.brandIds.includes(i.brandId))}
+          tempLogs={tempLogs} deliveries={deliveries}
+          issues={issues.filter(i =>
+            (currentUser.brandIds || []).includes(i.brandId)
+            || (currentUser.storeIds || []).includes(i.storeId)
+          )}
           onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle}
           onTempLog={handleTempLog} onDeliveryAdd={handleDeliveryAdd}
           onAddEntry={addEntry}
