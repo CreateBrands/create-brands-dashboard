@@ -43191,6 +43191,15 @@ function StoreAccessCard({ employee, existing, stores = [], brands = [], onUpdat
   const live = (stores || []).filter(s => !s.archivedAt);
   const [sel, setSel] = useState(new Set(employee?.storeIds || []));
   const [brandId, setBrandId] = useState(employee?.brandId || "");
+  // STOREACCESS 2026-08-06c — the profile's `employee` is a memo over opsTeam,
+  // which arrives after this mounts. Seeding state from it once left the card
+  // showing every store unticked and the brand blank, as though the person had
+  // no access at all — and saving from there would have wiped what they had.
+  const empSeed = `${employee?.id || ""}|${(employee?.storeIds || []).join(",")}|${employee?.brandId || ""}`;
+  useEffect(() => {
+    setSel(new Set(employee?.storeIds || []));
+    setBrandId(employee?.brandId || "");
+  }, [empSeed]);   // eslint-disable-line react-hooks/exhaustive-deps
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [msg, setMsg] = useState("");
@@ -65903,7 +65912,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: STOREACCESS 2026-08-06b");
+      console.log("CB build: STOREACCESS 2026-08-06c");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
