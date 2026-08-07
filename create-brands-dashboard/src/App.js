@@ -2129,8 +2129,41 @@ function IssuesView({ brands, stores, visibleStoreIds, issues, users, currentUse
       {visibleIssues.length === 0 && (
         <div className="flex flex-col items-center justify-center py-16 text-slate-500">
           <CheckSquare size={32} className="mb-3 text-slate-700" />
-          <div className="text-sm font-semibold">No issues match your filters</div>
-          <div className="text-xs mt-1">Try adjusting the filters above or report a new issue</div>
+          <div className="text-sm font-semibold">
+            {issues.length === 0 ? "No issues have been reported" : "No issues match your filters"}
+          </div>
+          {/* WHYEMPTY 2026-08-06 — "no issues" and "issues exist but every one of
+              them is outside your scope" look identical and are completely
+              different problems. Naming the filter that emptied the list turns a
+              dead end into something answerable. */}
+          {issues.length > 0 && (() => {
+            const inScopeCount = issues.filter(inScope).length;
+            const outOfScope = issues.length - inScopeCount;
+            const reasons = [];
+            if (outOfScope > 0) reasons.push(
+              selStore !== "all"
+                ? `${outOfScope} at other stores (store filter is set to one site)`
+                : `${outOfScope} outside your store and brand access`
+            );
+            if (filterStatus !== "All")   reasons.push(`status filter: ${filterStatus}`);
+            if (filterPriority !== "All") reasons.push(`priority filter: ${filterPriority}`);
+            if (filterType !== "All")     reasons.push(`type filter: ${filterType}`);
+            if (ownership !== "all")      reasons.push(`ownership filter: ${ownership}`);
+            return (
+              <div className="text-xs mt-2 text-center max-w-sm">
+                <div>{issues.length} issue{issues.length === 1 ? "" : "s"} exist{issues.length === 1 ? "s" : ""}, none shown here.</div>
+                {reasons.length > 0
+                  ? <div className="mt-1 text-slate-400">Filtered out by — {reasons.join("; ")}.</div>
+                  : <div className="mt-1 text-slate-400">No filter is excluding them, which shouldn&#39;t happen — worth reporting.</div>}
+                {outOfScope > 0 && (
+                  <div className="mt-1 text-slate-600">
+                    Your access covers {visibleStores.length} store{visibleStores.length === 1 ? "" : "s"}.
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+          {issues.length === 0 && <div className="text-xs mt-1">Report one to get started</div>}
         </div>
       )}
       <div className="space-y-3">
@@ -65912,7 +65945,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: STOREACCESS 2026-08-06c");
+      console.log("CB build: WHYEMPTY 2026-08-06d");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
