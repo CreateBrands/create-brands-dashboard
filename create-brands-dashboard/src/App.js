@@ -43181,7 +43181,128 @@ function PayrollAttributesTab({ employee, stores, brands, currentUser, onUpdateE
 // doesn't know about ops_team — so the two drifted apart and people ended up
 // half-created. This grants the login FROM the employment record, with the
 // same id, which is what managersAsRoster() de-duplicates on.
-function ManagerAccessTab({ employee, users = [], currentUser, onAddUser, onUpdateUser, onDeleteUser }) {
+// STOREACCESS 2026-08-06 — where someone works is stored in two places that
+// nothing keeps in step: ops_team (brand_id + store_ids) drives the employee
+// side, and the users row (brand_ids + store_ids) drives the manager side.
+// Editing one and not the other is how a manager ends up seeing an empty
+// screen while their employment record looks perfectly correct — so this
+// writes both together and says so when they've already drifted apart.
+function StoreAccessCard({ employee, existing, stores = [], brands = [], onUpdateEmployee, onUpdateUser }) {
+  const live = (stores || []).filter(s => !s.archivedAt);
+  const [sel, setSel] = useState(new Set(employee?.storeIds || []));
+  const [brandId, setBrandId] = useState(employee?.brandId || "");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [msg, setMsg] = useState("");
+
+  const empIds = [...(employee?.storeIds || [])].sort().join(",");
+  const usrIds = [...(existing?.storeIds || [])].sort().join(",");
+  const drifted = !!existing && empIds !== usrIds;
+
+  const toggle = (id) => setSel(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const toggleBrand = (bid) => {
+    const ids = live.filter(s => s.brandId === bid).map(s => s.id);
+    const allOn = ids.every(id => sel.has(id));
+    setSel(prev => {
+      const next = new Set(prev);
+      ids.forEach(id => allOn ? next.delete(id) : next.add(id));
+      return next;
+    });
+  };
+
+  const save = async () => {
+    const storeIds = [...sel];
+    setBusy(true); setErr(""); setMsg("");
+    try {
+      await onUpdateEmployee?.({ id: employee.id, storeIds, brandId: brandId || null });
+      // Brands on the login are derived from the stores actually ticked, so the
+      // two can't disagree about which brands the person can reach.
+      if (existing) {
+        const brandIds = [...new Set(live.filter(s => sel.has(s.id)).map(s => s.brandId).filter(Boolean))];
+        await onUpdateUser?.({ ...existing, storeIds, brandIds });
+        setMsg(`Saved to both their employment record and their login — ${storeIds.length} store(s).`);
+      } else {
+        setMsg(`Saved — ${storeIds.length} store(s).`);
+      }
+    } catch (e) { setErr(e.message || "Couldn't save."); }
+    setBusy(false);
+  };
+
+  const byBrand = brands.map(b => ({ brand: b, list: live.filter(s => s.brandId === b.id) })).filter(g => g.list.length);
+  const orphans = live.filter(s => !brands.some(b => b.id === s.brandId));
+  if (orphans.length) byBrand.push({ brand: { id: "__other", name: "Other" }, list: orphans });
+
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4 space-y-3">
+      <div>
+        <div className="text-sm font-bold text-white">Stores they can access</div>
+        <div className="text-xs text-slate-500 mt-0.5">
+          Drives what they see everywhere — schedules, tasks, issues, orders. Nobody with an empty
+          list appears in any store-scoped screen.
+        </div>
+      </div>
+
+      {drifted && (
+        <div className="rounded-xl border border-amber-600/40 bg-amber-950/20 p-2.5 text-[11px] text-amber-300">
+          Their employment record and their manager login currently list different stores
+          ({(employee?.storeIds || []).length} vs {(existing?.storeIds || []).length}).
+          Saving here sets both to what&#39;s ticked below.
+        </div>
+      )}
+
+      <label className="text-xs text-slate-400 block max-w-xs">Home brand
+        <select value={brandId} onChange={e => setBrandId(e.target.value)}
+          className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white">
+          <option value="">—</option>
+          {brands.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+        </select></label>
+
+      <div className="space-y-3 max-h-80 overflow-y-auto pr-1">
+        {byBrand.map(({ brand, list }) => {
+          const on = list.filter(s => sel.has(s.id)).length;
+          return (
+            <div key={brand.id}>
+              <button onClick={() => toggleBrand(brand.id)}
+                className="text-[11px] font-bold uppercase tracking-wide text-slate-400 hover:text-white mb-1.5">
+                {brand.name} · {on}/{list.length}
+              </button>
+              <div className="grid grid-cols-2 gap-1.5">
+                {list.map(s => {
+                  const isOn = sel.has(s.id);
+                  return (
+                    <button key={s.id} onClick={() => toggle(s.id)}
+                      className={`flex items-center gap-2 rounded-xl px-2.5 py-2 border text-left ${isOn ? "border-indigo-600/40 bg-indigo-950/20" : "border-slate-800"}`}>
+                      <span className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 ${isOn ? "bg-indigo-600" : "bg-slate-800 border border-slate-700"}`}>
+                        {isOn && <Check size={11} className="text-white"/>}
+                      </span>
+                      <span className={`text-xs truncate ${isOn ? "text-white" : "text-slate-500"}`}>{s.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="flex items-center gap-3">
+        <button onClick={save} disabled={busy}
+          className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-bold">
+          {busy ? "Saving…" : `Save ${sel.size} store${sel.size === 1 ? "" : "s"}`}
+        </button>
+        {sel.size === 0 && <span className="text-[11px] text-amber-400">No stores ticked — they&#39;ll see nothing.</span>}
+      </div>
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      {msg && <div className="text-xs text-emerald-400">{msg}</div>}
+    </div>
+  );
+}
+
+function ManagerAccessTab({ employee, users = [], currentUser, onAddUser, onUpdateUser, onDeleteUser, stores = [], brands = [], onUpdateEmployee }) {
   const existing = useMemo(() => {
     const email = (employee?.email || "").trim().toLowerCase();
     return (users || []).find(u => u.id === employee?.id || (email && (u.email || "").trim().toLowerCase() === email)) || null;
@@ -43254,6 +43375,11 @@ function ManagerAccessTab({ employee, users = [], currentUser, onAddUser, onUpda
 
   return (
     <div className="space-y-4 max-w-2xl">
+      <StoreAccessCard
+        employee={employee} existing={existing} stores={stores} brands={brands}
+        onUpdateEmployee={onUpdateEmployee} onUpdateUser={onUpdateUser}
+      />
+
       <div className="rounded-2xl border border-slate-800 bg-slate-900 p-4 space-y-1">
         <div className="text-sm font-bold text-white">How access works here</div>
         <p className="text-xs text-slate-400">
@@ -43661,6 +43787,7 @@ function EmployeeProfileView({
       {tab === "access" && employee && (
         <ManagerAccessTab
           employee={employee} users={users} currentUser={currentUser}
+          stores={stores} brands={brands} onUpdateEmployee={onUpdateEmployee}
           onAddUser={onAddUser} onUpdateUser={onUpdateUser} onDeleteUser={onDeleteUser}
         />
       )}
@@ -65776,7 +65903,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: PAIDFROM 2026-08-06a");
+      console.log("CB build: STOREACCESS 2026-08-06b");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
