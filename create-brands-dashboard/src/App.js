@@ -1210,6 +1210,17 @@ function LocationDropdown({ brands, value, onChange, allLabel = null, className 
 const FACILITY_SITE_TYPES = new Set(["central_kitchen", "distribution", "franchise_ops"]);
 const isShopSite = (s) => !FACILITY_SITE_TYPES.has(s?.siteType);
 
+// OPSFACILITIES 2026-08-06 — the operations SETUP forms (assignments,
+// temperature units, cleaning tasks, checklists) used isShopSite, so Central
+// Kitchen and Distribution could never be given any of them. Both sites run the
+// same operations as a shop — fridges to check, opening and closing routines,
+// cleaning rotas — and the Operations pages themselves already list them, so
+// they appeared but had nothing to show.
+// The ownership test stays for shops (franchise/JV sites aren't ours to set up)
+// but doesn't apply to facilities, which have no ownership model of their own.
+const opsSetupStores = (list) => (list || []).filter(s =>
+  !s.archivedAt && (isShopSite(s) ? s.ownershipModel === "owned" : true));
+
 // COGS engine toggle for the P&L / dashboard figure.
 // false = old engine (item_day_aggregates, base recipe only) — current default.
 // true  = new exact engine (flipdish_sales, base + matched modifiers).
@@ -1995,7 +2006,7 @@ function IssueDetailModal({ issue, brands, users, currentUser, onUpdate, onClose
 }
 
 // ─── Issues Tracker View ──────────────────────────────────────────────────────
-function IssuesView({ brands, stores, visibleStoreIds, issues, users, currentUser, onAddIssue, onUpdateIssue, onDeleteIssue }) {
+function IssuesView({ brands, stores, visibleStoreIds, issues, users, currentUser, onAddIssue, onUpdateIssue, onDeleteIssue, scopeDebug = null }) {
   const { user } = useAuth();
 
   const allVisibleStores = useMemo(
@@ -2164,6 +2175,16 @@ function IssuesView({ brands, stores, visibleStoreIds, issues, users, currentUse
             );
           })()}
           {issues.length === 0 && <div className="text-xs mt-1">Report one to get started</div>}
+          {/* SCOPEDEBUG 2026-08-06f — temporary. There is no console on a phone,
+              so the numbers that decide where the list empties are printed here.
+              Remove once this is settled. */}
+          {scopeDebug && (
+            <div className="text-[10px] mt-4 text-slate-600 font-mono text-center leading-relaxed">
+              <div>fetched {scopeDebug.fetched} · reached screen {scopeDebug.reachedScreen}</div>
+              <div>brands [{scopeDebug.brandIds}]</div>
+              <div>stores assigned {scopeDebug.storeIds} · visible {scopeDebug.visible}</div>
+            </div>
+          )}
         </div>
       )}
       <div className="space-y-3">
@@ -24901,6 +24922,7 @@ function resolveEmpNav(chosenKeys, defaults, pool) {
 
 function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], assignments, checklists, tempUnits, storeRoles = [],
   expensePayees = [], bankTransactions = [], cashLedger = [], pettyTarget = 0, pettyHandlers = {}, onDeleteIssue,
+  allIssuesCount = 0,
   cleaningTasks, auditTrail, checklistStates, tempLogs, deliveries, issues,
   onSignOff, onChecklistItemToggle, onTempLog, onDeliveryAdd, onAddIssue, onUpdateIssue, onAddEntry,
   hdTickets, onAddHdTicket, onUpdateHdTicket, helpdeskLevel = "none", messages, onSendMessage, onMarkRead,
@@ -25886,6 +25908,13 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
             <IssuesView
               brands={myBrands} stores={stores} visibleStoreIds={myVisibleStoreIds}
               issues={issues} users={users} currentUser={currentUser}
+              scopeDebug={{
+                fetched: allIssuesCount,
+                reachedScreen: (issues || []).length,
+                brandIds: (currentUser.brandIds || []).join(",") || "(none)",
+                storeIds: (myAllStoreIds || []).length,
+                visible: (myVisibleStoreIds || []).length,
+              }}
               onAddIssue={onAddIssue} onUpdateIssue={onUpdateIssue} onDeleteIssue={onDeleteIssue}
             />
           )}
@@ -40066,7 +40095,7 @@ function DeliveriesView({ brands, stores, visibleStoreIds, deliveries, onAdd, hi
 // ─── Assignments View ─────────────────────────────────────────────────────────
 function AssignmentFormModal({ brands, stores = [], checklists, tempUnits, cleaningTasks, opsTeam = [], storeRoles = [], storeDepartments = [], item, onSave, onSaveMany, onClose }) {
   const allowedStores = useMemo(
-    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned" && isShopSite(s)),
+    () => opsSetupStores(stores),
     [stores]
   );
 
@@ -46837,7 +46866,7 @@ function TempUnitFormModal({ item, brands, stores = [], storeRoles = [], storeDe
   // Same logic as OpsTeamMemberFormModal: temp units are physical equipment
   // installed at company-owned stores. Franchise/JV stores manage their own.
   const allowedStores = useMemo(
-    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned" && isShopSite(s)),
+    () => opsSetupStores(stores),
     [stores]
   );
 
@@ -46908,7 +46937,7 @@ function CleaningTaskFormModal({ item, brands = [], stores = [], storeRoles = []
   // Per-store cleaning tasks. brand_id is derived from the chosen store
   // so legacy code that filters by brand still works.
   const allowedStores = useMemo(
-    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned" && isShopSite(s)),
+    () => opsSetupStores(stores),
     [stores]
   );
   const [form, setFormState] = useState({
@@ -47494,7 +47523,7 @@ function OpsTeamMemberFormModal({
 
 function ChecklistSettingsFormModal({ item, brands = [], stores = [], storeRoles = [], storeDepartments = [], opsTeam = [], onSave, onClose }) {
   const allowedStores = useMemo(
-    () => (stores || []).filter(s => !s.archivedAt && s.ownershipModel === "owned" && isShopSite(s)),
+    () => opsSetupStores(stores),
     [stores]
   );
   const [name, setName] = useState(item?.name || "");
@@ -65953,7 +65982,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: ISSUESCOPE 2026-08-06e");
+      console.log("CB build: SCOPEDEBUG 2026-08-06f");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -67416,6 +67445,7 @@ export default function App() {
           assignments={assignments} checklists={checklists} tempUnits={tempUnits}
           cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates}
           tempLogs={tempLogs} deliveries={deliveries}
+          allIssuesCount={issues.length}
           issues={issues.filter(i =>
             (currentUser.brandIds || []).includes(i.brandId)
             || (currentUser.storeIds || []).includes(i.storeId)
