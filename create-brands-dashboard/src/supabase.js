@@ -13471,6 +13471,35 @@ const mapDistSO = (o) => ({
 });
 const mapDistSOLine = (l) => ({ id: l.id, soId: l.so_id, itemId: l.item_id, qty: Number(l.qty) || 0, fulfilChannel: l.fulfil_channel || null, attachedToSo: l.attached_to_so ?? false, lineNote: l.line_note || "", uom: l.uom || null, unitPrice: Number(l.unit_price) || 0, discount: Number(l.discount) || 0, discountType: l.discount_type || "percent", taxRateId: l.tax_rate_id || null });
 
+
+// ════════════════════════════════════════════════════════════════════════════
+// SOEVENTS 2026-08-06 — append-only history for a store's order.
+// Every mutation below records what happened, who did it and when. Writes are
+// best-effort and never throw: losing a history line must not fail the action
+// that produced it. Reads come back oldest-first, the order a timeline wants.
+// ════════════════════════════════════════════════════════════════════════════
+export async function logSoEvent(soId, eventType, { actor, note, payload } = {}) {
+  if (!soId || !eventType) return null;
+  try {
+    const { data } = await supabase.from("dist_so_events").insert({
+      so_id: soId, event_type: eventType,
+      actor: actor || null, note: note || null, payload: payload || null,
+    }).select().maybeSingle();
+    return data || null;
+  } catch (e) { console.error("logSoEvent failed:", e.message); return null; }
+}
+
+export async function fetchSoEvents(soId) {
+  if (!soId) return [];
+  const { data, error } = await supabase.from("dist_so_events")
+    .select("*").eq("so_id", soId).order("created_at", { ascending: true });
+  if (error) throw error;
+  return (data || []).map(e => ({
+    id: e.id, soId: e.so_id, type: e.event_type, actor: e.actor || "",
+    note: e.note || "", payload: e.payload || null, at: e.created_at,
+  }));
+}
+
 export async function fetchDistSalesOrders({ customerId, status } = {}) {
   let q = supabase.from("dist_sales_orders").select("*, dist_sales_order_lines(*)").order("created_at", { ascending: false });
   if (customerId) q = q.eq("customer_id", customerId);
@@ -13551,6 +13580,11 @@ export async function createDistSalesOrder(so, lines = []) {
   };
   const { error } = await supabase.from("dist_sales_orders").insert(row);
   if (error) throw error;
+  await logSoEvent(id, "placed", {
+    actor: so.placedBy || so.createdBy || so.salesperson || null,
+    note: `Order placed with ${(lines || []).length} line(s)`,
+    payload: { soNumber: row.so_number, customerId: row.customer_id, status: row.status, lineCount: (lines || []).length },
+  });
   const lr = lines.filter(l => l.itemId && Number(l.qty) > 0).map(l => ({
     id: distId("dsol"), so_id: id, item_id: l.itemId, qty: Number(l.qty) || 0, unit_price: Number(l.unitPrice) || 0,
     discount: Number(l.discount) || 0, discount_type: l.discountType || "percent", tax_rate_id: l.taxRateId || null,
@@ -13637,6 +13671,12 @@ export async function editPendingOrderLines(soId, lines, editorName) {
   if (lr.length) { const { error } = await supabase.from("dist_sales_order_lines").insert(lr); if (error) throw error; }
   const stamp = `Edited by ${editorName || "manager"} on ${new Date().toISOString().slice(0, 10)}`;
   await supabase.from("dist_sales_orders").update({ note: [so.note, stamp].filter(Boolean).join(" · ") }).eq("id", soId);
+  await logSoEvent(soId, "lines_edited", {
+    actor: editorName,
+    note: `Order lines edited — now ${lr.length} line(s)`,
+    payload: { lineCount: lr.length, status: so.status,
+               lines: lr.map(l => ({ itemId: l.item_id, qty: l.qty, unitPrice: l.unit_price })) },
+  });
   return soId;
 }
 
@@ -13680,15 +13720,31 @@ export async function mergePendingOrders(soIds, editorName) {
   const others = ids.filter(id => id !== target.id);
   const stamp = `Merged ${others.length + 1} orders by ${editorName || "manager"} on ${new Date().toISOString().slice(0, 10)}`;
   await supabase.from("dist_sales_orders").update({ note: [target.note, stamp].filter(Boolean).join(" · ") }).eq("id", target.id);
+  await logSoEvent(target.id, "merged", {
+    actor: editorName,
+    note: `Absorbed ${others.length} other order(s)`,
+    payload: { absorbed: others, absorbedNumbers: (sos || []).filter(o => o.id !== target.id).map(o => o.so_number || o.id), lineCount: lr.length },
+  });
   // Cancel the absorbed orders.
   for (const oid of others) {
     await supabase.from("dist_sales_orders").update({ status: "cancelled", note: `Merged into ${target.so_number || target.id}` }).eq("id", oid);
+    await logSoEvent(oid, "merged_into", {
+      actor: editorName,
+      note: `Merged into ${target.so_number || target.id}`,
+      payload: { targetSoId: target.id, targetSoNumber: target.so_number || null },
+    });
   }
   return target.id;
 }
 
-export async function setDistSalesOrderStatus(id, status) {
+export async function setDistSalesOrderStatus(id, status, actor) {
+  const { data: before } = await supabase.from("dist_sales_orders").select("status").eq("id", id).maybeSingle();
   const { error } = await supabase.from("dist_sales_orders").update({ status }).eq("id", id);
+  await logSoEvent(id, status === "confirmed" ? "approved" : status === "cancelled" ? "rejected" : "status", {
+    actor,
+    note: status === "confirmed" ? "Order approved" : status === "cancelled" ? "Order cancelled" : `Status set to ${status}`,
+    payload: { from: before?.status || null, to: status },
+  });
   if (error) throw error;
   if (status === "confirmed") autoPrintSoTicket(id); // warehouse ticket, fire-and-forget
 }
@@ -13816,6 +13872,7 @@ export async function createDistPick(pick, lines = []) {
   }));
   if (lr.length) { const { error: e2 } = await supabase.from("dist_pick_lines").insert(lr); if (e2) throw e2; }
   if (pick.soId) await supabase.from("dist_sales_orders").update({ status: "picking" }).eq("id", pick.soId);
+  if (pick.soId) await logSoEvent(pick.soId, "picked", { note: "Picking started" });
   return id;
 }
 
@@ -14135,6 +14192,7 @@ export async function postDistDispatch(dispatch, lines = []) {
   }
   await supabase.from("dist_dispatches").update({ posted: true }).eq("id", id);
   if (dispatch.soId) await supabase.from("dist_sales_orders").update({ status: "dispatched" }).eq("id", dispatch.soId);
+  if (dispatch.soId) await logSoEvent(dispatch.soId, "dispatched", { note: "Dispatched" });
   if (dispatch.pickId) await supabase.from("dist_picks").update({ status: "dispatched" }).eq("id", dispatch.pickId);
   return id;
 }
@@ -14284,6 +14342,7 @@ export async function postDistInvoice(inv, lines = []) {
   }
   await supabase.from("dist_invoices").update({ posted: true, grand_total: gross }).eq("id", id);
   if (inv.soId) await supabase.from("dist_sales_orders").update({ status: "invoiced" }).eq("id", inv.soId);
+  if (inv.soId) await logSoEvent(inv.soId, "invoiced", { actor: inv.createdBy || null, note: `Invoice ${head.invoice_number} raised`, payload: { invoiceId: id, invoiceNumber: head.invoice_number, total: gross } });
   try {
     const { data: cust2 } = head.customer_id ? await supabase.from("dist_contacts").select("display_name, company").eq("id", head.customer_id).single() : { data: null };
     const { data: items2 } = await supabase.from("dist_items").select("id, name, category");
@@ -16478,12 +16537,21 @@ export async function requestOrderAmendment({ soId, storeId, lines, note, user }
     note: note || null, requested_by: user?.id || null, requested_by_name: user?.name || "",
   });
   if (error) throw error;
+  // The whole proposed basket is recorded, not just a count: "what did they add"
+  // is the question this history exists to answer.
+  await logSoEvent(soId, "amendment_requested", {
+    actor: user?.name || "",
+    note: `Changes requested — ${clean.length} line(s) proposed`,
+    payload: { proposedLines: clean, storeId: storeId || null, requestNote: note || null },
+  });
   return true;
 }
 
-export async function cancelOrderAmendment(amendmentId) {
+export async function cancelOrderAmendment(amendmentId, actor) {
+  const { data: am0 } = await supabase.from("dist_order_amendments").select("so_id").eq("id", amendmentId).maybeSingle();
   const { error } = await supabase.from("dist_order_amendments")
     .update({ status: "cancelled" }).eq("id", amendmentId).eq("status", "pending");
+  if (!error && am0?.so_id) await logSoEvent(am0.so_id, "amendment_cancelled", { actor, note: "Requested changes withdrawn", payload: { amendmentId } });
   if (error) throw error;
   return true;
 }
@@ -16515,6 +16583,13 @@ export async function decideOrderAmendment(amendmentId, approve, user, note) {
     decided_at: new Date().toISOString(), decision_note: note || null,
   }).eq("id", amendmentId);
   if (error) throw error;
+  await logSoEvent(am.so_id, approve ? "amendment_approved" : "amendment_rejected", {
+    actor: user?.name || user?.id || null,
+    note: approve ? "Requested changes approved and applied" : "Requested changes rejected",
+    payload: { amendmentId, decisionNote: note || null,
+               appliedLines: approve && Array.isArray(am.proposed_lines) ? am.proposed_lines : null,
+               requestedBy: am.requested_by_name || null },
+  });
   return { applied: !!approve };
 }
 
@@ -17652,6 +17727,16 @@ export async function confirmStoreDelivery(deliveryId, receivedBy) {
     if (doId) { try { await supabase.from("direct_orders").update({ status: "received" }).eq("id", doId); } catch { /* best-effort */ } }
   }
 
+  // SOEVENTS 2026-08-06 — close the loop on the originating order. The link is
+  // dist_order_id (null for direct-supplier and fresh deliveries, which have no
+  // sales order behind them).
+  if (head.dist_order_id) {
+    await logSoEvent(head.dist_order_id, "received", {
+      actor: receivedBy || null,
+      note: shortfalls > 0 ? `Received by the store, ${shortfalls} line(s) short` : "Received in full by the store",
+      payload: { deliveryId, shortfalls, lineCount: (lines || []).length },
+    });
+  }
   return { confirmed: true, shortfalls };
 }
 

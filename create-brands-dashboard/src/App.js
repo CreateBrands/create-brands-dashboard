@@ -168,6 +168,7 @@ import {
   fetchDistGoodsReceipts, postDistGoodsReceipt,
   fetchDistBills, postDistBill, fetchDistBillPayments, postDistBillPayment,
   fetchDistCustomers, fetchDistPriceList, upsertDistPrice, deleteDistPrice, resolveDistSellPrice,
+  fetchSoEvents,
   fetchDistSalesOrders, createDistSalesOrder, setDistSalesOrderStatus, computeDistCommitted,
   suggestDistFefo, fetchDistPicks, createDistPick, fetchDistDispatches, postDistDispatch,
   fetchDistInvoices, postDistInvoice, fetchDistInvoicePayments, postDistInvoicePayment,
@@ -11757,6 +11758,11 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
               <StatusRow label="Store receipt" value={!receipt ? (detail?.status.dispatched ? "Awaiting store" : "—") : receipt.status === "confirmed" ? (receipt.lines.some(l=>l.short) ? `Received · ${receipt.lines.filter(l=>l.short).length} short` : "Received in full") : "Receiving…"} tone={!receipt ? "text-slate-400" : receipt.status === "confirmed" ? (receipt.lines.some(l=>l.short) ? "text-red-300" : "text-emerald-300") : "text-amber-300"}/>
             </div>
 
+            {/* SOEVENTS 2026-08-06 — the order's own history. The note field used
+                to carry a few appended stamps, which couldn't be attributed or
+                read in order; this is every recorded event, oldest first. */}
+            <SoHistory soId={so.id}/>
+
             {/* AMENDMENT — the store reopened this order; approve applies the
                 proposed lines, reject keeps the original. Blocked once picked. */}
             {amendment && amendment.status === "pending" && (() => {
@@ -11969,6 +11975,91 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
   );
 }
 
+
+// SOEVENTS 2026-08-06 — order history panel. Loads on demand rather than with
+// the order: most people opening an order want the lines, not the audit trail.
+function SoHistory({ soId }) {
+  const [open, setOpen] = useState(false);
+  const [events, setEvents] = useState(null);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (!open || events || !soId) return;
+    let alive = true;
+    fetchSoEvents(soId)
+      .then(rows => { if (alive) setEvents(rows); })
+      .catch(e => { if (alive) setErr(e.message || "Couldn't load the history."); });
+    return () => { alive = false; };
+  }, [open, events, soId]);
+
+  const LABEL = {
+    placed: "Order placed", approved: "Approved", rejected: "Cancelled",
+    status: "Status changed", lines_edited: "Lines edited",
+    merged: "Orders merged in", merged_into: "Merged into another order",
+    amendment_requested: "Store requested changes",
+    amendment_approved: "Changes approved", amendment_rejected: "Changes rejected",
+    amendment_cancelled: "Changes withdrawn", lines_detached: "Lines detached",
+    picked: "Picking started", dispatched: "Dispatched",
+    invoiced: "Invoiced", received: "Received by store",
+  };
+  const TONE = {
+    placed: "bg-slate-600", approved: "bg-emerald-600", rejected: "bg-red-600",
+    amendment_requested: "bg-amber-600", amendment_approved: "bg-emerald-600",
+    amendment_rejected: "bg-red-600", merged: "bg-indigo-600", merged_into: "bg-indigo-600",
+    invoiced: "bg-emerald-600", received: "bg-emerald-600",
+  };
+  const when = (iso) => { try { return new Date(iso).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }); } catch { return iso; } };
+
+  return (
+    <div className="rounded-2xl border border-slate-800 bg-slate-900/50 overflow-hidden">
+      <button onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between px-4 py-3">
+        <span className="text-sm font-bold text-white">History</span>
+        <ChevronDown size={16} className={`text-slate-500 transition-transform ${open ? "rotate-180" : ""}`}/>
+      </button>
+      {open && (
+        <div className="px-4 pb-4">
+          {err && <div className="text-xs text-red-400">{err}</div>}
+          {!events && !err && <div className="text-xs text-slate-500">Loading…</div>}
+          {events && events.length === 0 && (
+            <div className="text-xs text-slate-500">
+              Nothing recorded. Orders placed before history was switched on have none.
+            </div>
+          )}
+          {events && events.length > 0 && (
+            <ol className="space-y-2.5">
+              {events.map(ev => {
+                const added = ev.payload?.proposedLines || ev.payload?.appliedLines || null;
+                return (
+                  <li key={ev.id} className="flex gap-2.5">
+                    <span className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${TONE[ev.type] || "bg-slate-600"}`}/>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-semibold text-white">
+                        {LABEL[ev.type] || ev.type}
+                        {ev.actor && <span className="text-slate-400 font-normal"> · {ev.actor}</span>}
+                      </div>
+                      <div className="text-[11px] text-slate-500">{when(ev.at)}</div>
+                      {ev.note && <div className="text-[11px] text-slate-400 mt-0.5">{ev.note}</div>}
+                      {Array.isArray(added) && added.length > 0 && (
+                        <div className="text-[11px] text-slate-500 mt-1">
+                          {added.length} line(s): {added.slice(0, 6).map(l => `${l.qty}× ${l.itemId}`).join(", ")}
+                          {added.length > 6 ? ` +${added.length - 6} more` : ""}
+                        </div>
+                      )}
+                      {ev.payload?.absorbedNumbers?.length > 0 && (
+                        <div className="text-[11px] text-slate-500 mt-1">From: {ev.payload.absorbedNumbers.join(", ")}</div>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
+            </ol>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DistSalesOrderView({ currentUser, setActiveView }) {
   const [sos, setSos] = useState([]); const [customers, setCustomers] = useState([]); const [items, setItems] = useState([]); const [taxRates, setTaxRates] = useState([]);
   const [loading, setLoading] = useState(true); const [err, setErr] = useState(""); const [creating, setCreating] = useState(null); const [busy, setBusy] = useState(false);
@@ -12005,7 +12096,7 @@ function DistSalesOrderView({ currentUser, setActiveView }) {
     setBusy(true); setErr("");
     try {
       if (creating.id) await updateDistSalesOrder({ ...creating, status }, valid);
-      else await createDistSalesOrder({ ...creating, status, createdBy: currentUser?.id }, valid);
+      else await createDistSalesOrder({ ...creating, status, createdBy: currentUser?.id, placedBy: currentUser?.name || currentUser?.email || "" }, valid);
       setCreating(null); await load();
     }
     catch (e) { setErr(e.message); } setBusy(false);
@@ -17726,7 +17817,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
       let id = null;
       if (distCartLines.length) {
         const lines = distCartLines.map(l => ({ itemId: l.id, qty: l.qty, unitPrice: Number(l.price) || 0, taxRateId: l.taxRateId || null, discount: 0, discountType: "percent", lineNote: lineNotes[l.id] || "", uom: l.itemType === "fresh" ? (lineUoms[l.id] || defaultUomFor(l)) : null }));
-        id = await createDistSalesOrder({ customerId, status: needsApproval ? "pending_approval" : "confirmed", orderDate: new Date().toISOString().slice(0, 10), vatMode: "exclusive", createdBy: currentUser?.id, note: [(supplier || []).filter(sp => sp.id !== "dist").length ? `Suppliers: ${(supplier || []).filter(sp => sp.id !== "dist").map(sp => sp.name).join(", ")}` : "", ...noteParts].filter(Boolean).join(" · ") }, lines);
+        id = await createDistSalesOrder({ customerId, status: needsApproval ? "pending_approval" : "confirmed", orderDate: new Date().toISOString().slice(0, 10), vatMode: "exclusive", createdBy: currentUser?.id, placedBy: currentUser?.name || currentUser?.email || "", note: [(supplier || []).filter(sp => sp.id !== "dist").length ? `Suppliers: ${(supplier || []).filter(sp => sp.id !== "dist").map(sp => sp.name).join(", ")}` : "", ...noteParts].filter(Boolean).join(" · ") }, lines);
       }
       const directPlaced = Object.keys(directGroups).length
         ? await createDirectOrders(activeStoreId, directGroups, currentUser) : [];
@@ -17936,9 +18027,9 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
                         {p.isOwn ? (
                           <span className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold" style={{ backgroundColor: "#EAF3E7", color: "#3F6B3A" }}>Approved</span>
                         ) : (<>
-                        <button onClick={async () => { try { await setDistSalesOrderStatus(p.id, "cancelled"); setPendingApprovals(x => x.filter(y => y.id !== p.id)); } catch (ev) { alert(ev.message); } }}
+                        <button onClick={async () => { try { await setDistSalesOrderStatus(p.id, "cancelled", currentUser?.name || currentUser?.email || ""); setPendingApprovals(x => x.filter(y => y.id !== p.id)); } catch (ev) { alert(ev.message); } }}
                           className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold" style={{ backgroundColor: "#F3EDE2", color: "#9A8770" }}>Reject</button>
-                        <button onClick={async () => { try { await setDistSalesOrderStatus(p.id, "confirmed"); setPendingApprovals(x => x.filter(y => y.id !== p.id)); } catch (ev) { alert(ev.message); } }}
+                        <button onClick={async () => { try { await setDistSalesOrderStatus(p.id, "confirmed", currentUser?.name || currentUser?.email || ""); setPendingApprovals(x => x.filter(y => y.id !== p.id)); } catch (ev) { alert(ev.message); } }}
                           className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold" style={{ backgroundColor: "#5C9442", color: "#fff" }}>Approve</button>
                         </>)}
                       </div>
