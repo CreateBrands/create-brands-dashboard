@@ -42102,6 +42102,15 @@ function HiringView({
   const [searchTerm,      setSearchTerm]      = useState("");
   const [sortMode,        setSortMode]        = useState("newest");
   const [showEmailFailed, setShowEmailFailed] = useState(false);
+  // HIREFILTERS 2026-08-09 — the dropdown fields on the application form are the
+  // ones people actually search by: which site, which role, right-to-work
+  // status, where the application came from. 160 candidates is unusable without
+  // them. "" means no filter on that field.
+  const [brandFilter,  setBrandFilter]  = useState("");
+  const [roleFilter,   setRoleFilter]   = useState("");
+  const [legalFilter,  setLegalFilter]  = useState("");
+  const [sourceFilter, setSourceFilter] = useState("");
+  const [rtwFilter,    setRtwFilter]    = useState("");   // "" | "yes" | "no"
   const [showMinorsOnly,  setShowMinorsOnly]  = useState(false);
 
   // Debounce search input. 200ms delay so the list doesn't re-filter on
@@ -42127,6 +42136,13 @@ function HiringView({
       } else if (statusFilter !== "all") {
         if (app.status !== statusFilter) return false;
       }
+      // HIREFILTERS 2026-08-09 — dropdown filters. Each is skipped when unset.
+      if (brandFilter  && app.brandId !== brandFilter) return false;
+      if (roleFilter   && (app.position || "") !== roleFilter) return false;
+      if (legalFilter  && (app.legalStatus || "") !== legalFilter) return false;
+      if (sourceFilter && (app.source || "") !== sourceFilter) return false;
+      if (rtwFilter === "yes" && !app.rtwVerified) return false;
+      if (rtwFilter === "no"  && app.rtwVerified) return false;
       // Slice 6 chip filters
       if (showEmailFailed && app.emailLinkStatus !== "failed") return false;
       if (showMinorsOnly  && !app.isMinor) return false;
@@ -42159,7 +42175,31 @@ function HiringView({
     }
     return sorted;
   }, [applications, visibleStoreIds, storeScope, statusFilter, showArchived,
-      searchTerm, sortMode, showEmailFailed, showMinorsOnly]);
+      searchTerm, sortMode, showEmailFailed, showMinorsOnly,
+      brandFilter, roleFilter, legalFilter, sourceFilter, rtwFilter]);
+
+  // HIREFILTERS 2026-08-09 — build each dropdown's options from the data in
+  // scope, counted. Scoped by the user's stores but NOT by the other filters,
+  // so the options don't shuffle underneath you as you narrow down.
+  const hireSelectCls = "px-3 py-2 rounded-xl bg-slate-900 border border-slate-700 text-slate-200 text-xs font-semibold focus:outline-none focus:border-indigo-500";
+  const hireFilterOptions = useMemo(() => {
+    const scoped = (applications || []).filter(a =>
+      visibleStoreIds?.includes(a.storeId) && (showArchived || !a.archivedAt));
+    const tally = (get) => {
+      const m = new Map();
+      scoped.forEach(a => { const v = get(a); if (v) m.set(v, (m.get(v) || 0) + 1); });
+      return [...m.entries()].map(([value, count]) => ({ value, count }))
+        .sort((x, y) => y.count - x.count);
+    };
+    return {
+      brands:  tally(a => a.brandId).map(o => ({ ...o, label: brands.find(b => b.id === o.value)?.name || o.value })),
+      roles:   tally(a => (a.position || "").trim()).map(o => ({ ...o, label: o.value })),
+      legal:   tally(a => a.legalStatus).map(o => ({ ...o, label: LEGAL_STATUS_OPTIONS.find(l => l.value === o.value)?.label || o.value })),
+      sources: tally(a => a.source).map(o => ({ ...o, label: o.value.replace(/_/g, " ").replace(/^./, c => c.toUpperCase()) })),
+    };
+  }, [applications, visibleStoreIds, showArchived, brands]);
+  const activeHireFilters = [brandFilter, roleFilter, legalFilter, sourceFilter, rtwFilter].filter(Boolean).length
+    + (storeScope !== "all" ? 1 : 0);
 
   // Counts for the chip filters — show "(N)" next to each option so manager
   // sees how many would match before clicking. Scoped to the user's visible
@@ -42440,6 +42480,48 @@ function HiringView({
             })}
           </select>
         )}
+
+        {/* HIREFILTERS 2026-08-09 — the application's own dropdown fields, as
+            filters. Options are built from the applications actually present,
+            with a count each, so nothing is offered that would return nothing.
+            A field with only one distinct value is hidden: a filter that can't
+            narrow anything is just another control to read past. */}
+        {hireFilterOptions.brands.length > 1 && (
+          <select value={brandFilter} onChange={e => setBrandFilter(e.target.value)} className={hireSelectCls}>
+            <option value="">Any brand</option>
+            {hireFilterOptions.brands.map(o => <option key={o.value} value={o.value}>{o.label} ({o.count})</option>)}
+          </select>
+        )}
+        {hireFilterOptions.roles.length > 1 && (
+          <select value={roleFilter} onChange={e => setRoleFilter(e.target.value)} className={hireSelectCls}>
+            <option value="">Any job role</option>
+            {hireFilterOptions.roles.map(o => <option key={o.value} value={o.value}>{o.label} ({o.count})</option>)}
+          </select>
+        )}
+        {hireFilterOptions.legal.length > 1 && (
+          <select value={legalFilter} onChange={e => setLegalFilter(e.target.value)} className={hireSelectCls}>
+            <option value="">Any right to work</option>
+            {hireFilterOptions.legal.map(o => <option key={o.value} value={o.value}>{o.label} ({o.count})</option>)}
+          </select>
+        )}
+        {hireFilterOptions.sources.length > 1 && (
+          <select value={sourceFilter} onChange={e => setSourceFilter(e.target.value)} className={hireSelectCls}>
+            <option value="">Any source</option>
+            {hireFilterOptions.sources.map(o => <option key={o.value} value={o.value}>{o.label} ({o.count})</option>)}
+          </select>
+        )}
+        <select value={rtwFilter} onChange={e => setRtwFilter(e.target.value)} className={hireSelectCls}>
+          <option value="">RTW checked or not</option>
+          <option value="yes">RTW verified</option>
+          <option value="no">RTW not verified</option>
+        </select>
+        {activeHireFilters > 0 && (
+          <button onClick={() => { setBrandFilter(""); setRoleFilter(""); setLegalFilter(""); setSourceFilter(""); setRtwFilter(""); setStoreScope("all"); }}
+            className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold">
+            Clear {activeHireFilters} filter{activeHireFilters === 1 ? "" : "s"}
+          </button>
+        )}
+
         {/* Status filter chips */}
         <div className="flex flex-wrap items-center gap-1.5">
           <FilterChip active={statusFilter === "active"}    onClick={() => setStatusFilter("active")}   label={`Active (${statusCounts.active})`}/>
