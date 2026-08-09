@@ -8410,11 +8410,16 @@ function DistItemTable({ items, taxRates, lines, setLines, vatMode, setVatMode, 
                         unitPrice: it && it.purchaseRate != null ? it.purchaseRate : "",
                         accountCode: it?.expenseAccountCode || l.accountCode || "",
                       })} />
-                    <button type="button"
-                      onClick={() => upd(i, { isCustom: true, itemId: "", description: "" })}
-                      className="mt-1 text-[10px] font-semibold text-indigo-400 hover:text-indigo-300">
-                      + Not in the list — type it
-                    </button>
+                    {/* CUSTOMLINE 2026-08-06k — only on a row that hasn't got an
+                        item yet. Repeating it under every filled row was noise:
+                        the offer only means anything while you're still choosing. */}
+                    {!l.itemId && (
+                      <button type="button"
+                        onClick={() => upd(i, { isCustom: true, itemId: "", description: "" })}
+                        className="mt-1 text-[10px] font-semibold text-indigo-400 hover:text-indigo-300">
+                        + Not in the list — type it
+                      </button>
+                    )}
                   </>
                 )}
                 <input value={l.lineNote || ""} onChange={e => upd(i, { lineNote: e.target.value })}
