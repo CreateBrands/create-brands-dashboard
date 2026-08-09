@@ -13580,7 +13580,7 @@ export async function updateDistSalesOrder(so, lines = []) {
   if (!so.id) throw new Error("Sales order id required for update.");
   await assertFreshAllowed(so.customerId, lines);   // FRESHACCESS
   const row = {
-    customer_id: so.customerId || null, status: so.status || "draft",
+    customer_id: so.customerId || null,
     order_date: so.orderDate || new Date().toISOString().slice(0, 10),
     expected_ship: so.expectedShip || null, payment_terms: so.paymentTerms || null, reference: so.reference || null,
     delivery_method: so.deliveryMethod || null, salesperson: so.salesperson || null,
@@ -13592,6 +13592,11 @@ export async function updateDistSalesOrder(so, lines = []) {
     note_dist: (so.noteDist || "").trim() || null,
     note_driver: (so.noteDriver || "").trim() || null,
   };
+  // SOSTATUS 2026-08-06 — `status` is deliberately NOT in this row. It used to
+  // be written as `so.status || "draft"`, so saving an edit stamped whatever
+  // status the form was holding back onto the order. An order invoiced after
+  // the form was opened silently reverted to confirmed. Status moves only
+  // through setDistSalesOrderStatus and the picking/dispatch/invoice posts.
   const { error } = await supabase.from("dist_sales_orders").update(row).eq("id", so.id);
   if (error) throw error;
   // Replace lines.
@@ -13839,7 +13844,15 @@ export async function deleteDistPick(pickId) {
   await supabase.from("dist_pick_lines").delete().eq("pick_id", pickId);
   const { error } = await supabase.from("dist_picks").delete().eq("id", pickId);
   if (error) throw error;
-  if (pick?.so_id) await supabase.from("dist_sales_orders").update({ status: "confirmed" }).eq("id", pick.so_id);
+  // SOSTATUS 2026-08-06 — only walk the order back if it hasn't moved past
+  // picking. Forcing "confirmed" unconditionally undid dispatch and invoicing
+  // whenever a pick was deleted and redone on an order already invoiced.
+  if (pick?.so_id) {
+    const { data: so } = await supabase.from("dist_sales_orders").select("status").eq("id", pick.so_id).maybeSingle();
+    if (!so || ["picking", "confirmed"].includes(so.status)) {
+      await supabase.from("dist_sales_orders").update({ status: "confirmed" }).eq("id", pick.so_id);
+    }
+  }
   return true;
 }
 const mapDistDispatch = (d) => ({
