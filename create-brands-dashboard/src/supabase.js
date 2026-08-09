@@ -17598,6 +17598,28 @@ export async function confirmStoreDelivery(deliveryId, receivedBy) {
           });
         }
       } catch (e) { console.error("auto purchase record failed:", e.message); }
+
+      // COSTFOLLOW 2026-08-06 — refresh the store item's reference cost to what
+      // was actually charged on this delivery. cogs_store_items.pack_price was
+      // only ever set once, when the item was first created from the dist
+      // catalogue, so every later price change left stores costing recipes at a
+      // figure that could be months out of date. Receipt is the honest moment
+      // to update it: it's the price the store was really billed, whether that
+      // came from the price list, a negotiated rate or a direct supplier.
+      // Excluded, deliberately: fresh lines resolved by name (their cost sits in
+      // Finance as the driver's card expense) and lines with no cost on them.
+      try {
+        if (!resolvedByName && l.unit_cost != null && Number(l.unit_cost) > 0) {
+          const paid = Math.round(Number(l.unit_cost) * 100) / 100;
+          const { data: si } = await supabase.from("cogs_store_items")
+            .select("pack_price").eq("id", storeItemId).maybeSingle();
+          // Only write when it actually moved, so the row isn't touched on
+          // every delivery of an unchanged item.
+          if (!si || si.pack_price == null || Math.abs(Number(si.pack_price) - paid) >= 0.005) {
+            await supabase.from("cogs_store_items").update({ pack_price: paid }).eq("id", storeItemId);
+          }
+        }
+      } catch (e) { console.error("store item cost refresh failed:", e.message); }
       // Upsert live level (qty += recv; moving cost := latest delivery cost if given)
       const { data: existing } = await supabase.from("store_stock")
         .select("id, qty_on_hand").eq("store_id", storeId).eq("item_id", storeItemId).maybeSingle();
