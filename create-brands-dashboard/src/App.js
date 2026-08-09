@@ -8385,13 +8385,38 @@ function DistItemTable({ items, taxRates, lines, setLines, vatMode, setVatMode, 
                     rate on file, rather than leaving the old one behind).
                     Account code still falls back to what's already typed, since
                     it's usually set per document by hand. */}
-                <SearchableItemSelect items={items} value={l.itemId || ""}
-                  onSelect={(it) => upd(i, {
-                    itemId: it?.id || "",
-                    taxRateId: it?.taxRateId || l.taxRateId,
-                    unitPrice: it && it.purchaseRate != null ? it.purchaseRate : "",
-                    accountCode: it?.expenseAccountCode || l.accountCode || "",
-                  })} />
+                {/* CUSTOMLINE 2026-08-06 — a line that isn't in the catalogue.
+                    Delivery charges, one-off buy-ins, a rebate: real things that
+                    belong on a document but shouldn't become permanent catalogue
+                    items. A custom line keeps item_id null and carries its name
+                    in `description`; everything else on the row behaves the
+                    same, so it prices, taxes and totals like any other. */}
+                {(l.isCustom || (!l.itemId && l.description)) ? (
+                  <div className="flex items-center gap-1">
+                    <input autoFocus value={l.description || ""}
+                      onChange={e => upd(i, { description: e.target.value })}
+                      placeholder="Describe the item or charge"
+                      className="flex-1 min-w-0 px-2 py-1.5 rounded-lg bg-slate-800 border border-amber-700/50 text-xs text-white placeholder-slate-500"/>
+                    <button type="button" title="Pick from the catalogue instead"
+                      onClick={() => upd(i, { isCustom: false, description: "" })}
+                      className="text-slate-500 hover:text-white px-1"><X size={13}/></button>
+                  </div>
+                ) : (
+                  <>
+                    <SearchableItemSelect items={items} value={l.itemId || ""}
+                      onSelect={(it) => upd(i, {
+                        itemId: it?.id || "",
+                        taxRateId: it?.taxRateId || l.taxRateId,
+                        unitPrice: it && it.purchaseRate != null ? it.purchaseRate : "",
+                        accountCode: it?.expenseAccountCode || l.accountCode || "",
+                      })} />
+                    <button type="button"
+                      onClick={() => upd(i, { isCustom: true, itemId: "", description: "" })}
+                      className="mt-1 text-[10px] font-semibold text-indigo-400 hover:text-indigo-300">
+                      + Not in the list — type it
+                    </button>
+                  </>
+                )}
                 <input value={l.lineNote || ""} onChange={e => upd(i, { lineNote: e.target.value })}
                   placeholder="Item note (optional)"
                   className="mt-1 w-full px-2 py-1 rounded-lg bg-slate-900 border border-slate-800 text-[11px] text-amber-300 placeholder-slate-600"/>
@@ -11582,11 +11607,11 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
             docTitle: "SALES ORDER", docNo: so.soNumber,
             meta: [["Customer", customer?.displayName || ""], ["Order date", fmtDate(so.orderDate)], ["Status", (so.status || "").toUpperCase()], ["VAT mode", so.vatMode === "inclusive" ? "Inclusive" : "Exclusive"]],
             columns: [{ label: "Item" }, { label: "Qty", align: "right" }, { label: "Rate", align: "right" }, { label: "Amount", align: "right" }],
-            rows: catPrintRows(so.lines, l => itemById.get(l.itemId)?.category, l => {
+            rows: catPrintRows(so.lines, l => itemById.get(l.itemId)?.category || (l.description ? "Other" : undefined), l => {
               const it = itemById.get(l.itemId); const qty = Number(l.qty) || 0; const rate = Number(l.unitPrice) || 0;
               const disc = Number(l.discount) || 0; const gross = qty * rate;
               const amount = l.discountType === "percent" ? gross * (1 - disc / 100) : gross - disc;
-              return [it?.name || l.itemId, qty, gbp(rate), gbp(amount)];
+              return [it?.name || l.description || l.itemId || "—", qty, gbp(rate), gbp(amount)];
             }),
             totals: [["Subtotal", gbp(totals.subTotal)], ["VAT", gbp(totals.taxTotal)], ...(Number(so.shippingCharge) ? [["Shipping", gbp(so.shippingCharge)]] : []), ["Total", gbp(grand), true]],
             note: "Generated from the Create Brands dashboard.",
@@ -11899,7 +11924,11 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
                           {it?.imageUrl ? <img src={it.imageUrl} alt="" className="w-full h-full object-contain p-0.5"/> : <Package size={14} className="text-slate-300"/>}
                         </div>
                         <div>
-                          <div className="text-white">{cleanName(it?.name) || l.itemId}</div>
+                          {/* CUSTOMLINE 2026-08-06 — a line with no catalogue item
+                              shows what was typed. Falling through to l.itemId
+                              printed a blank cell for custom lines. */}
+                          <div className="text-white">{cleanName(it?.name) || l.description || l.itemId || "—"}</div>
+                          {!it && l.description && <div className="text-[10px] text-amber-600">Custom item</div>}
                           {it && (it.packCount || it.packSize) && <div className="text-[10px] text-slate-500">{it.packCount && it.packCount !== 1 ? `${it.packCount}× ` : ""}{it.packSize || ""}{it.packUnit || ""}</div>}
                           {/* NOTEVIS — was amber-400 italic, which vanished against
                               the cream row. Solid chip, dark text. */}
@@ -12091,7 +12120,9 @@ function DistSalesOrderView({ currentUser, setActiveView }) {
   };
   const save = async (status) => {
     if (!creating?.customerId) { setErr("Pick a customer"); return; }
-    const valid = (creating.lines || []).filter(l => l.itemId && Number(l.qty) > 0);
+    // CUSTOMLINE 2026-08-06 — a line counts if it names something and has a
+    // quantity: either a catalogue item, or a typed description.
+    const valid = (creating.lines || []).filter(l => (l.itemId || (l.description || "").trim()) && Number(l.qty) > 0);
     if (!valid.length) { setErr("Add at least one line"); return; }
     setBusy(true); setErr("");
     try {

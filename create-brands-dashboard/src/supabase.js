@@ -12654,7 +12654,7 @@ const mapDistPO = (o) => ({
   vatMode: o.vat_mode || "exclusive", discountPercent: Number(o.discount_percent) || 0, discountType: o.discount_type || "percent", reference: o.reference || "", paymentTerms: o.payment_terms || "",
   createdBy: o.created_by || null, createdAt: o.created_at, lines: (o.dist_purchase_order_lines || []).map(mapDistPOLine),
 });
-const mapDistPOLine = (l) => ({ id: l.id, poId: l.po_id, itemId: l.item_id, qty: Number(l.qty) || 0, unitPrice: Number(l.unit_price) || 0, taxRateId: l.tax_rate_id || null });
+const mapDistPOLine = (l) => ({ id: l.id, poId: l.po_id, itemId: l.item_id, description: l.description || "", qty: Number(l.qty) || 0, unitPrice: Number(l.unit_price) || 0, taxRateId: l.tax_rate_id || null });
 const mapDistGRN = (g) => ({
   id: g.id, grnNumber: g.grn_number || "", vendorId: g.vendor_id || null, poId: g.po_id || null,
   sourceKind: g.source_kind || "vendor", receivedDate: g.received_date || null, note: g.note || "",
@@ -12703,8 +12703,8 @@ export async function createDistPurchaseOrder(po, lines = []) {
   const { error } = await supabase.from("dist_purchase_orders").insert(row);
   if (error) throw error;
   if (lines.length) {
-    const lr = lines.filter(l => l.itemId && Number(l.qty) > 0).map(l => ({
-      id: distId("dpol"), po_id: id, item_id: l.itemId, qty: Number(l.qty) || 0,
+    const lr = lines.filter(l => (l.itemId || (l.description || "").trim()) && Number(l.qty) > 0).map(l => ({
+      id: distId("dpol"), po_id: id, item_id: l.itemId || null, description: l.description || null, qty: Number(l.qty) || 0,
       unit_price: Number(l.unitPrice) || 0, tax_rate_id: l.taxRateId || null,
     }));
     if (lr.length) { const { error: e2 } = await supabase.from("dist_purchase_order_lines").insert(lr); if (e2) throw e2; }
@@ -13018,8 +13018,8 @@ export async function updateDistPurchaseOrder(po, lines = []) {
     discount_type: po.discountType || "percent", reference: po.reference || null, payment_terms: po.paymentTerms || null,
   }).eq("id", po.id);
   await supabase.from("dist_purchase_order_lines").delete().eq("po_id", po.id);
-  const lr = lines.filter(l => l.itemId && Number(l.qty) > 0).map(l => ({
-    id: distId("dpol"), po_id: po.id, item_id: l.itemId, qty: Number(l.qty) || 0, unit_price: Number(l.unitPrice) || 0, tax_rate_id: l.taxRateId || null,
+  const lr = lines.filter(l => (l.itemId || (l.description || "").trim()) && Number(l.qty) > 0).map(l => ({
+    id: distId("dpol"), po_id: po.id, item_id: l.itemId || null, description: l.description || null, qty: Number(l.qty) || 0, unit_price: Number(l.unitPrice) || 0, tax_rate_id: l.taxRateId || null,
   }));
   if (lr.length) { const { error } = await supabase.from("dist_purchase_order_lines").insert(lr); if (error) throw error; }
   return po.id;
@@ -13469,7 +13469,7 @@ const mapDistSO = (o) => ({
   noteKitchen: o.note_kitchen || "", noteDist: o.note_dist || "", noteDriver: o.note_driver || "",
   createdBy: o.created_by || null, createdAt: o.created_at, lines: (o.dist_sales_order_lines || []).map(mapDistSOLine),
 });
-const mapDistSOLine = (l) => ({ id: l.id, soId: l.so_id, itemId: l.item_id, qty: Number(l.qty) || 0, fulfilChannel: l.fulfil_channel || null, attachedToSo: l.attached_to_so ?? false, lineNote: l.line_note || "", uom: l.uom || null, unitPrice: Number(l.unit_price) || 0, discount: Number(l.discount) || 0, discountType: l.discount_type || "percent", taxRateId: l.tax_rate_id || null });
+const mapDistSOLine = (l) => ({ id: l.id, soId: l.so_id, itemId: l.item_id, description: l.description || "", qty: Number(l.qty) || 0, fulfilChannel: l.fulfil_channel || null, attachedToSo: l.attached_to_so ?? false, lineNote: l.line_note || "", uom: l.uom || null, unitPrice: Number(l.unit_price) || 0, discount: Number(l.discount) || 0, discountType: l.discount_type || "percent", taxRateId: l.tax_rate_id || null });
 
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -13585,8 +13585,8 @@ export async function createDistSalesOrder(so, lines = []) {
     note: `Order placed with ${(lines || []).length} line(s)`,
     payload: { soNumber: row.so_number, customerId: row.customer_id, status: row.status, lineCount: (lines || []).length },
   });
-  const lr = lines.filter(l => l.itemId && Number(l.qty) > 0).map(l => ({
-    id: distId("dsol"), so_id: id, item_id: l.itemId, qty: Number(l.qty) || 0, unit_price: Number(l.unitPrice) || 0,
+  const lr = lines.filter(l => (l.itemId || (l.description || "").trim()) && Number(l.qty) > 0).map(l => ({
+    id: distId("dsol"), so_id: id, item_id: l.itemId || null, description: l.description || null, qty: Number(l.qty) || 0, unit_price: Number(l.unitPrice) || 0,
     discount: Number(l.discount) || 0, discount_type: l.discountType || "percent", tax_rate_id: l.taxRateId || null,
     line_note: (l.lineNote || "").trim() || null, uom: l.uom || null,
   }));
@@ -13635,8 +13635,8 @@ export async function updateDistSalesOrder(so, lines = []) {
   if (error) throw error;
   // Replace lines.
   await supabase.from("dist_sales_order_lines").delete().eq("so_id", so.id);
-  const lr = lines.filter(l => l.itemId && Number(l.qty) > 0).map(l => ({
-    id: distId("dsol"), so_id: so.id, item_id: l.itemId, qty: Number(l.qty) || 0, unit_price: Number(l.unitPrice) || 0,
+  const lr = lines.filter(l => (l.itemId || (l.description || "").trim()) && Number(l.qty) > 0).map(l => ({
+    id: distId("dsol"), so_id: so.id, item_id: l.itemId || null, description: l.description || null, qty: Number(l.qty) || 0, unit_price: Number(l.unitPrice) || 0,
     discount: Number(l.discount) || 0, discount_type: l.discountType || "percent", tax_rate_id: l.taxRateId || null,
     line_note: (l.lineNote || "").trim() || null, uom: l.uom || null,
   }));
