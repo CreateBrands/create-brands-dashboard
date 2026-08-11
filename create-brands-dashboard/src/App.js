@@ -66324,7 +66324,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: PWSESSION 2026-08-11e");
+      console.log("CB build: PWSESSION 2026-08-11f");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -66918,15 +66918,15 @@ export default function App() {
   // The same check covers a deleted login, which also stayed signed in.
   useEffect(() => {
     if (!actualUser || (users || []).length === 0) return;
+    // Employee sessions are built from ops_team and have no row in `users` at
+    // all, so a missing row means nothing for them. Only sessions that came
+    // from the manager login screen carry a password.
+    if (actualUser.role === "employee" || !actualUser.password) return;
     const row = (users || []).find(u => u.id === actualUser.id);
-    if (!row) {
-      localStorage.removeItem("cb_session");
-      localStorage.removeItem("cb_impersonate");
-      setActualUser(null); setImpersonatedUserId(null);
-      showToast("This login no longer exists. Please sign in again.", "error");
-      return;
-    }
-    if (row.password && actualUser.password && row.password !== actualUser.password) {
+    // Deliberately NOT logging out when the row is absent: a partial or scoped
+    // load would sign everyone out at once. Only a positive mismatch — the row
+    // exists and its password differs — is treated as a real change.
+    if (row && row.password && row.password !== actualUser.password) {
       localStorage.removeItem("cb_session");
       localStorage.removeItem("cb_impersonate");
       setActualUser(null); setImpersonatedUserId(null);
