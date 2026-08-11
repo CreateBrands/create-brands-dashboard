@@ -66483,7 +66483,12 @@ export default function App() {
       const sw = reg.active || navigator.serviceWorker.controller;
       if (!sw) return;
       const channel = new MessageChannel();
+      // SHAREDEBUG 2026-08-09 — every failure path here used to be silent: the
+      // app opened, the file never arrived, and there was nothing on screen to
+      // say why. Say something in each case instead.
+      let answered = false;
       channel.port1.onmessage = (e) => {
+        answered = true;
         const d = e.data;
         if (d && d.ok && d.buffer) {
           try {
@@ -66491,11 +66496,29 @@ export default function App() {
               { type: d.name && d.name.toLowerCase().endsWith(".csv") ? "text/csv" : "application/octet-stream" });
             setSharedBankFile(file);
             setActiveView("bank");
-          } catch {}
+          } catch (err) {
+            showToast(`Couldn't read the shared file: ${err.message}`, "error");
+          }
+        } else {
+          showToast(d?.error
+            ? `Share failed: ${d.error}`
+            : "The app opened but no file came through. Share it again, or use Import in the Bank view.", "error");
+          setActiveView("bank");
         }
       };
+      // If the service worker never replies at all it's almost certainly an old
+      // one without the share handler — the exact case the diagnostics screen
+      // reports as "Has share-target handler: NO".
+      setTimeout(() => {
+        if (!answered) {
+          showToast("The service worker didn't respond. Close the app fully and reopen it, then share again.", "error");
+          setActiveView("bank");
+        }
+      }, 4000);
       sw.postMessage({ type: "GET_SHARED_FILE" }, [channel.port2]);
-    }).catch(() => {});
+    }).catch((err) => {
+      showToast(`Share handoff failed: ${err.message}`, "error");
+    });
   }, []);
 
   // Open an employee profile from anywhere (typically Ops Team list).
