@@ -66171,27 +66171,42 @@ export default function App() {
   // help). Unregister any SW + purge caches ONCE, then reload so the fresh
   // bundle loads from the network. After this ships, every future deploy
   // reaches every device on the next load — no more "nothing changed".
+  // SWKEEP 2026-08-09 — this used to unregister EVERY service worker and delete
+  // EVERY cache, guarded only by sessionStorage — which clears when the PWA is
+  // closed, so it ran again on every cold start. That killed the share target:
+  // sharing a statement POSTs to /share-target, and it is the service worker
+  // that intercepts it. With no worker registered the POST goes to the network,
+  // where a static host answers a POST with 405 — the exact error being seen.
+  // It also deleted `cb-shared-file`, the cache the handoff stashes files in.
+  //
+  // The staleness problem it was written for is now handled properly by the
+  // worker itself (skipWaiting + clients.claim) and the controllerchange reload
+  // in the registration effect below. So: purge once per device, ever, keep the
+  // share cache, and never unregister — just force an update instead.
   useEffect(() => {
     (async () => {
       try {
-        if (window.sessionStorage.getItem("cb.swPurged")) return;
+        if (window.localStorage.getItem("cb.swPurged.v2")) return;
+        window.localStorage.setItem("cb.swPurged.v2", "1");
         let purged = false;
-        if (navigator.serviceWorker) {
-          const regs = await navigator.serviceWorker.getRegistrations();
-          for (const r of regs) { await r.unregister(); purged = true; }
-        }
         if (window.caches && caches.keys) {
           const keys = await caches.keys();
-          for (const k of keys) { await caches.delete(k); if (k) purged = true; }
+          for (const k of keys) {
+            if (k === "cb-shared-file") continue;   // a file may be waiting in here
+            await caches.delete(k); purged = true;
+          }
         }
-        window.sessionStorage.setItem("cb.swPurged", "1");
+        if (navigator.serviceWorker) {
+          const regs = await navigator.serviceWorker.getRegistrations();
+          for (const r of regs) { try { await r.update(); } catch {} }
+        }
         if (purged) window.location.reload();
       } catch {}
     })();
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: SCOPEDEBUG 2026-08-06f");
+      console.log("CB build: SWKEEP 2026-08-09e");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
