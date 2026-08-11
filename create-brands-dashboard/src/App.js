@@ -8362,6 +8362,12 @@ function DistVendorPicker({ vendors = [], value, onChange, onCreated, placeholde
 // customer was (choosing the customer reprices every line, which is why the
 // same order could come out right or wrong depending only on the click order).
 function DistItemTable({ items, taxRates, lines, setLines, vatMode, setVatMode, discountPercent, setDiscountPercent, discountType, setDiscountType, priceSide = "purchase", onItemPicked }) {
+  // SELLPRICE 2026-08-11b — which lines deserve a "no price" warning.
+  const itemTypeOf = (id) => (items || []).find(x => x.id === id)?.itemType || "";
+  const unpricedWarn = (l) => (l.itemId || l.description)
+    && (l.unitPrice === "" || Number(l.unitPrice) === 0)
+    && itemTypeOf(l.itemId) !== "fresh";
+
   const upd = (i, patch) => {
     const next = lines.map((l, j) => j === i ? { ...l, ...patch } : l);
     setLines(next);
@@ -8442,18 +8448,17 @@ function DistItemTable({ items, taxRates, lines, setLines, vatMode, setVatMode, 
               </div>
               <div className="col-span-2"><input value={l.accountCode || ""} onChange={e => upd(i, { accountCode: e.target.value })} placeholder="Acct" className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white font-mono"/></div>
               <div className="col-span-1"><input type="number" value={l.qty} onChange={e => upd(i, { qty: e.target.value })} className="w-full px-1.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white text-right"/></div>
-              {/* SELLPRICE 2026-08-11 — a line priced at zero is nearly always an
-                  item with no rate on file rather than a deliberate freebie.
-                  It still saves — that's the agreed behaviour — but it says so
-                  rather than slipping through unnoticed on the total. */}
+              {/* SELLPRICE 2026-08-11b — a zero-priced line is usually an item
+                  with no rate on file rather than a deliberate freebie, so it
+                  says so. FRESH items are the deliberate exception: they're
+                  driver-shopped, detached from the order total and off the
+                  invoice, so having no sell price is correct for them and a
+                  warning would fire on nearly every order. */}
               <div className="col-span-2">
                 <input type="number" value={l.unitPrice} onChange={e => upd(i, { unitPrice: e.target.value })} placeholder="0.00"
                   className={`w-full px-2 py-1.5 rounded-lg bg-slate-800 border text-xs text-white text-right ${
-                    (l.itemId || l.description) && (l.unitPrice === "" || Number(l.unitPrice) === 0)
-                      ? "border-amber-600/70" : "border-slate-700"}`}/>
-                {(l.itemId || l.description) && (l.unitPrice === "" || Number(l.unitPrice) === 0) && (
-                  <div className="text-[10px] text-amber-500 mt-0.5 text-right">No price on file</div>
-                )}
+                    unpricedWarn(l) ? "border-amber-600/70" : "border-slate-700"}`}/>
+                {unpricedWarn(l) && <div className="text-[10px] text-amber-500 mt-0.5 text-right">No price on file</div>}
               </div>
               <div className="col-span-1"><select value={l.taxRateId || ""} onChange={e => upd(i, { taxRateId: e.target.value || null })} className="w-full px-1 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-[11px] text-white"><option value="">—</option>{taxRates.map(t => <option key={t.id} value={t.id}>{t.percent}%</option>)}</select></div>
               <div className="col-span-2 flex items-center justify-end gap-1.5"><span className="text-xs text-white">£{(row._amount || 0).toFixed(2)}</span><button onClick={() => del(i)} className="text-slate-600 hover:text-red-400"><Trash2 size={13}/></button></div>
@@ -12166,7 +12171,8 @@ function DistSalesOrderView({ currentUser, setActiveView }) {
     if (!valid.length) { setErr("Add at least one line"); return; }
     // SELLPRICE 2026-08-11 — zero-priced lines still save, but confirm once so
     // a whole order can't go out at nothing without anyone noticing.
-    const unpriced = valid.filter(l => l.unitPrice === "" || Number(l.unitPrice) === 0);
+    const freshIds = new Set((items || []).filter(x => x.itemType === "fresh").map(x => x.id));
+    const unpriced = valid.filter(l => (l.unitPrice === "" || Number(l.unitPrice) === 0) && !freshIds.has(l.itemId));
     if (unpriced.length && !window.confirm(
       `${unpriced.length} line${unpriced.length === 1 ? " has" : "s have"} no price and will be charged at £0.00.\n\nSave anyway?`)) return;
     setBusy(true); setErr("");
@@ -66318,7 +66324,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: SELLPRICE 2026-08-11c");
+      console.log("CB build: SELLPRICE 2026-08-11d");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
