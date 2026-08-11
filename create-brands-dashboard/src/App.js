@@ -51590,13 +51590,39 @@ function BankView({ bankTransactions = [], bankAccounts = [], stores = [], store
     }
     return "";
   };
+  // STMTFORMATS 2026-08-11 — statement exports vary far more than the two
+  // shapes this handled. Card processors write "10th August 2026 at 07:48";
+  // plenty of banks append a time to a d/m/y date. Both used to fail on every
+  // row, which read as "the app won't take this file" with no clue why.
+  const MONTHS = { jan:1, feb:2, mar:3, apr:4, may:5, jun:6, jul:7, aug:8, sep:9, sept:9, oct:10, nov:11, dec:12 };
   const parseUKDate = (v) => {
     if (v instanceof Date && !isNaN(v)) return `${v.getFullYear()}-${String(v.getMonth()+1).padStart(2,"0")}-${String(v.getDate()).padStart(2,"0")}`;
-    const s = String(v || "").trim();
-    let m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
-    if (m) { let [_, d, mo, y] = m; if (y.length === 2) y = "20" + y; return `${y}-${mo.padStart(2,"0")}-${d.padStart(2,"0")}`; }
-    m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
-    if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+    let s = String(v || "").trim();
+    if (!s) return null;
+    // Drop a trailing time in any of its usual disguises, and ordinal suffixes:
+    // "10th August 2026 at 07:48" -> "10 August 2026".
+    s = s.replace(/\s+at\s+.*$/i, "")
+         .replace(/[T\s]\d{1,2}:\d{2}(:\d{2})?\s*(am|pm)?.*$/i, "")
+         .replace(/(\d{1,2})(st|nd|rd|th)\b/gi, "$1")
+         .trim();
+    // d/m/y or d-m-y (also matches when something followed the date)
+    let m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})/);
+    if (m) { let [, d, mo, y] = m; if (y.length === 2) y = "20" + y; return `${y}-${mo.padStart(2,"0")}-${d.padStart(2,"0")}`; }
+    // ISO
+    m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (m) return `${m[1]}-${m[2].padStart(2,"0")}-${m[3].padStart(2,"0")}`;
+    // "10 August 2026" / "10 Aug 26"
+    m = s.match(/^(\d{1,2})\s+([A-Za-z]{3,})\.?,?\s+(\d{2,4})$/);
+    if (m) {
+      const mo = MONTHS[m[2].slice(0,4).toLowerCase()] || MONTHS[m[2].slice(0,3).toLowerCase()];
+      if (mo) { let y = m[3]; if (y.length === 2) y = "20" + y; return `${y}-${String(mo).padStart(2,"0")}-${m[1].padStart(2,"0")}`; }
+    }
+    // "August 10 2026" / "Aug 10, 2026"
+    m = s.match(/^([A-Za-z]{3,})\.?\s+(\d{1,2}),?\s+(\d{2,4})$/);
+    if (m) {
+      const mo = MONTHS[m[1].slice(0,4).toLowerCase()] || MONTHS[m[1].slice(0,3).toLowerCase()];
+      if (mo) { let y = m[3]; if (y.length === 2) y = "20" + y; return `${y}-${String(mo).padStart(2,"0")}-${m[2].padStart(2,"0")}`; }
+    }
     return null;
   };
   const num = (v) => {
@@ -51608,14 +51634,18 @@ function BankView({ bankTransactions = [], bankAccounts = [], stores = [], store
   const parseRows = (jsonRows) => {
     const out = [], errs = [];
     jsonRows.forEach((row, i) => {
-      const dateRaw = pick(row, ["Date", "Transaction Date", "Date Completed", "Date & Time"]);
+      const dateRaw = pick(row, ["Date", "Transaction Date", "Date Completed", "Date & Time", "Created At", "Timestamp"]);
       const txnDate = parseUKDate(dateRaw);
       if (!txnDate) { if (Object.values(row).some(v => v !== "")) errs.push(`Row ${i+2}: couldn't read date ("${dateRaw}")`); return; }
+      // (headers are reported once, below, when nothing parsed at all)
       const desc = pick(row, ["Description", "Transaction Description", "Details", "Name", "Counterparty"]);
-      const ref  = pick(row, ["Reference", "Payment Reference", "Notes"]);
-      const cat  = pick(row, ["Category", "Type"]);
+      const ref  = pick(row, ["Reference", "Payment Reference", "Notes", "ID", "Transaction ID"]);
+      const cat  = pick(row, ["Category", "Type", "Payment Type", "Transaction Type"]);
       const bal  = num(pick(row, ["Balance", "Running Balance"]));
-      let amount = num(pick(row, ["Amount", "Value"]));
+      // STMTFORMATS 2026-08-11 — card processors label the money column
+      // NET_AMOUNT / GROSS_AMOUNT rather than "Amount". Net is preferred: it's
+      // what actually reaches the account once the processor's fee is taken.
+      let amount = num(pick(row, ["Amount", "Value", "Net Amount", "Amount (GBP)", "Gross Amount", "Total"]));
       if (amount == null) {
         const debit  = num(pick(row, ["Debit", "Money Out", "Paid Out", "Out", "Withdrawal"]));
         const credit = num(pick(row, ["Credit", "Money In", "Paid In", "In", "Deposit"]));
@@ -51630,6 +51660,16 @@ function BankView({ bankTransactions = [], bankAccounts = [], stores = [], store
         amount, balance: bal, category: String(cat).trim(), dedupeKey,
       });
     });
+    // STMTFORMATS 2026-08-11 — when NOTHING parses, the useful thing to show is
+    // which columns the file actually has, not four hundred identical errors.
+    if (out.length === 0 && jsonRows.length > 0) {
+      const cols = Object.keys(jsonRows[0] || {}).join(", ");
+      return { out, errs: [
+        `Nothing could be read from this file. Its columns are: ${cols || "(none found)"}.`,
+        "A statement needs a date column and an amount column. If those are there under different names, send this file over and they can be added.",
+        ...errs.slice(0, 3),
+      ] };
+    }
     return { out, errs };
   };
 
@@ -66238,7 +66278,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: RECONSCOPE 2026-08-11a");
+      console.log("CB build: STMTFORMATS 2026-08-11b");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
