@@ -8356,8 +8356,20 @@ function DistVendorPicker({ vendors = [], value, onChange, onCreated, placeholde
   );
 }
 
-function DistItemTable({ items, taxRates, lines, setLines, vatMode, setVatMode, discountPercent, setDiscountPercent, discountType, setDiscountType }) {
-  const upd = (i, patch) => setLines(lines.map((l, j) => j === i ? { ...l, ...patch } : l));
+// SELLPRICE 2026-08-11 — `priceSide` decides which of the item's two rates
+// fills a new line. It used to be purchaseRate on every document type, so a
+// sales order picked up the COST price whenever the item was chosen before the
+// customer was (choosing the customer reprices every line, which is why the
+// same order could come out right or wrong depending only on the click order).
+function DistItemTable({ items, taxRates, lines, setLines, vatMode, setVatMode, discountPercent, setDiscountPercent, discountType, setDiscountType, priceSide = "purchase", onItemPicked }) {
+  const upd = (i, patch) => {
+    const next = lines.map((l, j) => j === i ? { ...l, ...patch } : l);
+    setLines(next);
+    // SELLPRICE 2026-08-11 — tell the parent an item was chosen, so a sales
+    // order can apply that customer's price list straight away instead of only
+    // when the customer is (re)selected.
+    if (patch.itemId && onItemPicked) onItemPicked(i, patch.itemId);
+  };
   const del = (i) => setLines(lines.filter((_, j) => j !== i));
   const add = () => setLines([...lines, { itemId: "", accountCode: "", qty: 1, unitPrice: "", taxRateId: null }]);
   const totals = distComputeTotals(lines, taxRates, vatMode, discountPercent, discountType);
@@ -8407,7 +8419,9 @@ function DistItemTable({ items, taxRates, lines, setLines, vatMode, setVatMode, 
                       onSelect={(it) => upd(i, {
                         itemId: it?.id || "",
                         taxRateId: it?.taxRateId || l.taxRateId,
-                        unitPrice: it && it.purchaseRate != null ? it.purchaseRate : "",
+                        unitPrice: it ? (priceSide === "sell"
+                          ? (it.sellRate != null ? it.sellRate : "")
+                          : (it.purchaseRate != null ? it.purchaseRate : "")) : "",
                         accountCode: it?.expenseAccountCode || l.accountCode || "",
                       })} />
                     {/* CUSTOMLINE 2026-08-06k — only on a row that hasn't got an
@@ -8428,7 +8442,19 @@ function DistItemTable({ items, taxRates, lines, setLines, vatMode, setVatMode, 
               </div>
               <div className="col-span-2"><input value={l.accountCode || ""} onChange={e => upd(i, { accountCode: e.target.value })} placeholder="Acct" className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white font-mono"/></div>
               <div className="col-span-1"><input type="number" value={l.qty} onChange={e => upd(i, { qty: e.target.value })} className="w-full px-1.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white text-right"/></div>
-              <div className="col-span-2"><input type="number" value={l.unitPrice} onChange={e => upd(i, { unitPrice: e.target.value })} placeholder="0.00" className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-xs text-white text-right"/></div>
+              {/* SELLPRICE 2026-08-11 — a line priced at zero is nearly always an
+                  item with no rate on file rather than a deliberate freebie.
+                  It still saves — that's the agreed behaviour — but it says so
+                  rather than slipping through unnoticed on the total. */}
+              <div className="col-span-2">
+                <input type="number" value={l.unitPrice} onChange={e => upd(i, { unitPrice: e.target.value })} placeholder="0.00"
+                  className={`w-full px-2 py-1.5 rounded-lg bg-slate-800 border text-xs text-white text-right ${
+                    (l.itemId || l.description) && (l.unitPrice === "" || Number(l.unitPrice) === 0)
+                      ? "border-amber-600/70" : "border-slate-700"}`}/>
+                {(l.itemId || l.description) && (l.unitPrice === "" || Number(l.unitPrice) === 0) && (
+                  <div className="text-[10px] text-amber-500 mt-0.5 text-right">No price on file</div>
+                )}
+              </div>
               <div className="col-span-1"><select value={l.taxRateId || ""} onChange={e => upd(i, { taxRateId: e.target.value || null })} className="w-full px-1 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-[11px] text-white"><option value="">—</option>{taxRates.map(t => <option key={t.id} value={t.id}>{t.percent}%</option>)}</select></div>
               <div className="col-span-2 flex items-center justify-end gap-1.5"><span className="text-xs text-white">£{(row._amount || 0).toFixed(2)}</span><button onClick={() => del(i)} className="text-slate-600 hover:text-red-400"><Trash2 size={13}/></button></div>
             </div>
@@ -12123,12 +12149,26 @@ function DistSalesOrderView({ currentUser, setActiveView }) {
     const lines = await Promise.all((creating.lines || []).map(async l => l.itemId ? { ...l, unitPrice: await resolveDistSellPrice(cid, l.itemId) } : l));
     setCreating({ ...creating, customerId: cid, lines });
   };
+  // SELLPRICE 2026-08-11 — reprice one line the moment its item is chosen, so
+  // the customer's price list applies whichever order the form is filled in.
+  // Without this, picking the item after the customer left the catalogue rate
+  // on the line and the price-list rate was never consulted.
+  const repriceLine = async (idx, itemId) => {
+    if (!creating?.customerId || !itemId) return;
+    const price = await resolveDistSellPrice(creating.customerId, itemId);
+    setCreating(c => ({ ...c, lines: (c.lines || []).map((l, j) => j === idx ? { ...l, unitPrice: price } : l) }));
+  };
   const save = async (status) => {
     if (!creating?.customerId) { setErr("Pick a customer"); return; }
     // CUSTOMLINE 2026-08-06 — a line counts if it names something and has a
     // quantity: either a catalogue item, or a typed description.
     const valid = (creating.lines || []).filter(l => (l.itemId || (l.description || "").trim()) && Number(l.qty) > 0);
     if (!valid.length) { setErr("Add at least one line"); return; }
+    // SELLPRICE 2026-08-11 — zero-priced lines still save, but confirm once so
+    // a whole order can't go out at nothing without anyone noticing.
+    const unpriced = valid.filter(l => l.unitPrice === "" || Number(l.unitPrice) === 0);
+    if (unpriced.length && !window.confirm(
+      `${unpriced.length} line${unpriced.length === 1 ? " has" : "s have"} no price and will be charged at £0.00.\n\nSave anyway?`)) return;
     setBusy(true); setErr("");
     try {
       if (creating.id) await updateDistSalesOrder({ ...creating, status }, valid);
@@ -12311,7 +12351,7 @@ function DistSalesOrderView({ currentUser, setActiveView }) {
                 <div className={card} style={cardSty}>
                   <div className={eyebrow} style={headSty}>Items</div>
                   <div className="p-2">
-                  <DistItemTable items={items} taxRates={taxRates} lines={creating.lines} setLines={ls => set({ lines: ls })} vatMode={creating.vatMode} setVatMode={m => set({ vatMode: m })} discountPercent={creating.discountPercent} setDiscountPercent={d => set({ discountPercent: d })} discountType={creating.discountType} setDiscountType={t => set({ discountType: t })}/>
+                  <DistItemTable priceSide="sell" items={items} taxRates={taxRates} lines={creating.lines} setLines={ls => set({ lines: ls })} vatMode={creating.vatMode} setVatMode={m => set({ vatMode: m })} discountPercent={creating.discountPercent} setDiscountPercent={d => set({ discountPercent: d })} discountType={creating.discountType} setDiscountType={t => set({ discountType: t })} onItemPicked={repriceLine}/>
                   </div>
                 </div>
 
@@ -13067,7 +13107,7 @@ function DistInvoicesView({ currentUser, pendingConvert, setPendingConvert }) {
               <label className="text-xs text-slate-400">Salesperson<input value={creating.salesperson || ""} onChange={e => setCreating({ ...creating, salesperson: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
               <label className="text-xs text-slate-400">Subject<input value={creating.subject || ""} onChange={e => setCreating({ ...creating, subject: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
             </div>
-            <DistItemTable items={items} taxRates={taxRates} lines={creating.lines} setLines={ls => setCreating({ ...creating, lines: ls })} vatMode={creating.vatMode} setVatMode={m => setCreating({ ...creating, vatMode: m })} discountPercent={creating.discountPercent} setDiscountPercent={d => setCreating({ ...creating, discountPercent: d })} discountType={creating.discountType} setDiscountType={t => setCreating({ ...creating, discountType: t })}/>
+            <DistItemTable priceSide="sell" items={items} taxRates={taxRates} lines={creating.lines} setLines={ls => setCreating({ ...creating, lines: ls })} vatMode={creating.vatMode} setVatMode={m => setCreating({ ...creating, vatMode: m })} discountPercent={creating.discountPercent} setDiscountPercent={d => setCreating({ ...creating, discountPercent: d })} discountType={creating.discountType} setDiscountType={t => setCreating({ ...creating, discountType: t })}/>
             <div className="grid grid-cols-2 gap-4">
               <label className="text-xs text-slate-400">Customer notes<textarea value={creating.note || ""} onChange={e => setCreating({ ...creating, note: e.target.value })} rows={2} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
               <label className="text-xs text-slate-400">Shipping charge (£)<input type="number" value={creating.shippingCharge || ""} onChange={e => setCreating({ ...creating, shippingCharge: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
@@ -13248,7 +13288,7 @@ function DistCreditNotesView({ currentUser }) {
               <label className="text-xs text-slate-400">Reference#<input value={creating.reference || ""} onChange={e => setCreating({ ...creating, reference: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
               <label className="text-xs text-slate-400">Credit note date *<input type="date" value={creating.cnDate} onChange={e => setCreating({ ...creating, cnDate: e.target.value })} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
             </div>
-            <DistItemTable items={items} taxRates={taxRates} lines={creating.lines} setLines={ls => setCreating({ ...creating, lines: ls })} vatMode={creating.vatMode} setVatMode={m => setCreating({ ...creating, vatMode: m })} discountPercent={creating.discountPercent} setDiscountPercent={d => setCreating({ ...creating, discountPercent: d })} discountType={creating.discountType} setDiscountType={t => setCreating({ ...creating, discountType: t })}/>
+            <DistItemTable priceSide="sell" items={items} taxRates={taxRates} lines={creating.lines} setLines={ls => setCreating({ ...creating, lines: ls })} vatMode={creating.vatMode} setVatMode={m => setCreating({ ...creating, vatMode: m })} discountPercent={creating.discountPercent} setDiscountPercent={d => setCreating({ ...creating, discountPercent: d })} discountType={creating.discountType} setDiscountType={t => setCreating({ ...creating, discountType: t })}/>
             <label className="text-xs text-slate-400 block">Customer notes<textarea value={creating.note || ""} onChange={e => setCreating({ ...creating, note: e.target.value })} rows={2} className="mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white"/></label>
             <div className="flex justify-end gap-2"><button onClick={() => setCreating(null)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Cancel</button><button onClick={() => save("draft")} disabled={busy} className="px-3 py-2 rounded-xl bg-slate-700 hover:bg-slate-600 text-white text-sm font-semibold">Save as draft</button><button onClick={() => save("open")} disabled={busy} className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-semibold">{busy?"Posting…":"Save as open"}</button></div>
           </div>
@@ -66278,7 +66318,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: STMTFORMATS 2026-08-11b");
+      console.log("CB build: SELLPRICE 2026-08-11c");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
