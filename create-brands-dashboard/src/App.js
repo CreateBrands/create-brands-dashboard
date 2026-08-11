@@ -66324,7 +66324,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: SELLPRICE 2026-08-11d");
+      console.log("CB build: PWSESSION 2026-08-11e");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -66910,6 +66910,30 @@ export default function App() {
     }
     return target;
   }, [actualUser, impersonatedUserId, users, opsTeam]);
+
+  // PWSESSION 2026-08-11 — end a session when its password changes.
+  // The session is the whole user row kept in localStorage and restored without
+  // re-checking anything, so changing a password used to leave every existing
+  // session signed in forever — including the one you changed it to lock out.
+  // The same check covers a deleted login, which also stayed signed in.
+  useEffect(() => {
+    if (!actualUser || (users || []).length === 0) return;
+    const row = (users || []).find(u => u.id === actualUser.id);
+    if (!row) {
+      localStorage.removeItem("cb_session");
+      localStorage.removeItem("cb_impersonate");
+      setActualUser(null); setImpersonatedUserId(null);
+      showToast("This login no longer exists. Please sign in again.", "error");
+      return;
+    }
+    if (row.password && actualUser.password && row.password !== actualUser.password) {
+      localStorage.removeItem("cb_session");
+      localStorage.removeItem("cb_impersonate");
+      setActualUser(null); setImpersonatedUserId(null);
+      showToast("The password for this account was changed. Please sign in again.", "error");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [users, actualUser?.id]);
 
   // Re-link a manager/staff member's store assignment from their ops_team
   // profile on EVERY load — not just at fresh login. A restored session (from
