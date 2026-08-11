@@ -66930,11 +66930,30 @@ export default function App() {
   const financeGranted = useCallback(() => {
     if (currentUserRole.scope === "finance_only") return true;
     const baseRole = currentUserRole.baseRole;
-    if (baseRole === "owner" || baseRole === "hq_staff") return true;
+    // FINANCEDENY 2026-08-09 — the person-level exception is now checked BEFORE
+    // the owner/HQ shortcut. It used to come after, so an HQ Staff member was
+    // granted Finance unconditionally: turning it off on their role did nothing,
+    // and even an explicit deny on the exceptions tab was never reached. An
+    // exception that silently doesn't apply to some roles is worse than not
+    // offering one. HQ still gets Finance by default — it just stops being
+    // absolute. Owner is deliberately still absolute below.
     const memberId = currentUser?.opsTeamMemberId || currentUser?.id;
     const personOverride = entityOverrides?.[memberId]?.["entity.finance"];
-    if (personOverride !== undefined) return personOverride;
     const roleOverride = accessPerms?.[currentUserRole.matrixRole]?.["entity.finance"];
+    // FINANCEDENY 2026-08-09c — an explicit OFF now wins over the owner/HQ
+    // shortcut, from either the person or their role. Previously HQ Staff
+    // returned true before these were read, so switching Finance off in Access
+    // & Roles changed nothing and the switch looked broken. Only an explicit
+    // `false` denies: an entity nobody has configured still falls through to
+    // the defaults below, so no existing role loses access by accident.
+    if (baseRole !== "owner") {
+      if (personOverride === false) return false;
+      if (personOverride === undefined && roleOverride === false) return false;
+    }
+    // Owner is deliberately absolute — a stray row must not lock you out of
+    // your own finances with no way back in through the UI.
+    if (baseRole === "owner" || baseRole === "hq_staff") return true;
+    if (personOverride !== undefined) return personOverride;
     if (roleOverride === true) return true;
     return false;
   }, [accessPerms, entityOverrides, currentUser, currentUserRole]);
