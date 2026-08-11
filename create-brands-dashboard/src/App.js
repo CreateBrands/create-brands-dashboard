@@ -50702,13 +50702,13 @@ function AccountsHubView(props) {
       {effTab === "bank" && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} storeFilter={storeFilter} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} categories={categories} categoryRules={categoryRules} onImport={onImport} onUpdateTxn={onUpdateTxn} onDeleteTxn={onDeleteTxn} onSaveAccount={onSaveAccount} onDeleteAccount={onDeleteAccount} onSaveCategory={onSaveCategory} onDeleteCategory={onDeleteCategory} onSaveRule={onSaveRule} onDeleteRule={onDeleteRule} sharedFile={sharedFile} onConsumeSharedFile={onConsumeSharedFile}/>}
       {effTab === "invoices" && <InvoicesView currentUser={currentUser} categories={categories} storeFilter={storeFilter} entityFilter={entityFilter} entities={entities}/>}
       {effTab === "suppliers" && <SuppliersView stores={stores} storeFilter={storeFilter}/>}
-      {effTab === "reconcile" && <ReconciliationView bankTransactions={bankTransactions} stores={stores} storeFilter={storeFilter} cashLedger={cashLedger} cashAccounts={cashAccounts} cashHandlers={cashHandlers} onUpdateTxn={onUpdateTxn} onInvoicePaid={props.onInvoicePaid}/>}
+      {effTab === "reconcile" && <ReconciliationView bankTransactions={bankTransactions} stores={stores} storeFilter={storeFilter} bankAccounts={bankAccounts} entityStoreIds={entityFilter === "all" ? null : entityStores.map(s=>s.id)} cashLedger={cashLedger} cashAccounts={cashAccounts} cashHandlers={cashHandlers} onUpdateTxn={onUpdateTxn} onInvoicePaid={props.onInvoicePaid}/>}
       {effTab === "export" && <AccountsExportView stores={stores} bankTransactions={bankTransactions} categories={categories} storeFilter={storeFilter}/>}
     </div>
   );
 }
 
-function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = "all", cashLedger = [], cashAccounts = [], cashHandlers = {}, onUpdateTxn, onInvoicePaid }) {
+function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = "all", bankAccounts = [], entityStoreIds = null, cashLedger = [], cashAccounts = [], cashHandlers = {}, onUpdateTxn, onInvoicePaid }) {
   const [mode, setMode] = useState("bank"); // bank | cash
   const [matches, setMatches] = useState([]);
   const [invoices, setInvoices] = useState([]);
@@ -50744,11 +50744,35 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
   const matchedTxnIds = useMemo(() => new Set(matches.map(m=>m.bankTxnId)), [matches]);
   const usedSourceIds = useMemo(() => new Set(matches.map(m=>m.sourceType+":"+m.sourceId)), [matches]);
 
+  // RECONSCOPE 2026-08-11 — the Entity and Scope dropdowns say they apply to
+  // all Finance tabs, but this one took storeFilter as a prop and never read
+  // it: every unmatched line showed regardless of what was selected. A bank
+  // line belongs to a store either directly (storeId) or through the account
+  // it landed in, so both count.
+  const scopedTxns = useMemo(() => {
+    const acctStore = new Map((bankAccounts || []).map(a => [a.id, a.storeId || ""]));
+    const storeOf = (t) => t.storeId || acctStore.get(t.accountId) || "";
+    return (bankTransactions || []).filter(t => {
+      const sid = storeOf(t);
+      if (storeFilter !== "all" && sid !== storeFilter) return false;
+      // Entity narrows to that entity's stores. Lines with no store at all stay
+      // visible: hiding them would quietly bury exactly the ones that still
+      // need attention.
+      if (Array.isArray(entityStoreIds) && sid && !entityStoreIds.includes(sid)) return false;
+      return true;
+    });
+  }, [bankTransactions, bankAccounts, storeFilter, entityStoreIds]);
+
   const unmatched = useMemo(
-    () => bankTransactions.filter(t => !matchedTxnIds.has(t.id)).sort((a,b)=>(b.txnDate||"").localeCompare(a.txnDate||"")),
-    [bankTransactions, matchedTxnIds]
+    () => scopedTxns.filter(t => !matchedTxnIds.has(t.id)).sort((a,b)=>(b.txnDate||"").localeCompare(a.txnDate||"")),
+    [scopedTxns, matchedTxnIds]
   );
   const selTxn = bankTransactions.find(t => t.id === selTxnId);
+  // RECONSCOPE 2026-08-11 — drop the selection when a filter change takes it
+  // off the list, so the right-hand pane can't keep working on a hidden line.
+  useEffect(() => {
+    if (selTxnId && !unmatched.some(t => t.id === selTxnId)) setSelTxnId(null);
+  }, [unmatched, selTxnId]);
 
   // Candidate lists for the selected bank line (filter out already-used).
   const candidates = useMemo(() => {
@@ -50941,13 +50965,21 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
       {autoMsg && <div className="rounded-xl px-4 py-2.5 text-xs bg-emerald-950/20 border border-emerald-800/40 text-emerald-300">{autoMsg}</div>}
 
       {loading ? <div className="text-center py-12 text-sm text-slate-500">Loading reconciliation…</div> : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+          {/* RECONSCOPE 2026-08-11 — the panels were pinned to 420/360/300px, so
+              on a desktop screen both columns stopped a third of the way down
+              and everything below sat empty while you scrolled inside two small
+              boxes. They now fill the viewport and scroll internally, which is
+              what a two-pane matching screen wants.
+              (The comment lives inside the div deliberately: directly after the
+              `: (` of a ternary it is an expression, not a JSX child, and the
+              parser rejects it.) */}
           {/* Unmatched bank lines */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden flex flex-col lg:h-[calc(100vh-19rem)] lg:min-h-[420px]">
             <div className="px-4 py-3 border-b border-slate-800 text-sm font-bold text-white flex items-center justify-between">
               <span>Unmatched ({unmatched.length})</span>
             </div>
-            <div className="max-h-[420px] overflow-y-auto divide-y divide-slate-800/50">
+            <div className="flex-1 min-h-0 max-h-[60vh] lg:max-h-none overflow-y-auto divide-y divide-slate-800/50">
               {unmatched.length===0 ? <div className="px-4 py-8 text-center text-xs text-slate-500">Everything's matched 🎉</div>
                 : unmatched.map(t => (
                   <button key={t.id} onClick={()=>selectTxn(t.id)} className={`w-full text-left px-4 py-2.5 hover:bg-slate-800/50 ${selTxnId===t.id?"bg-indigo-950/30 border-l-2 border-indigo-500":""}`}>
@@ -50962,7 +50994,7 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
           </div>
 
           {/* Match builder */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden flex flex-col lg:h-[calc(100vh-19rem)] lg:min-h-[420px]">
             {!selTxn ? (
               <div className="px-4 py-8 text-center text-xs text-slate-500">Select an unmatched bank line to find matches.</div>
             ) : (
@@ -50976,7 +51008,7 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
                     <button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${tab===k?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400"}`}>{l}</button>
                   ))}
                 </div>
-                <div className="max-h-[300px] overflow-y-auto divide-y divide-slate-800/40">
+                <div className="flex-1 min-h-0 max-h-[45vh] lg:max-h-none overflow-y-auto divide-y divide-slate-800/40">
                   {candidates.length===0 ? <div className="px-4 py-6 text-center text-xs text-slate-500">No {tab} candidates in range.</div>
                     : candidates.slice(0,60).map(c => {
                       const on = picked.some(p=>p.type===c.type&&p.id===c.id);
@@ -51011,7 +51043,7 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
       {matchedList.length>0 && (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
           <div className="px-4 py-3 border-b border-slate-800 text-sm font-bold text-white">Matched ({matchedList.length})</div>
-          <div className="divide-y divide-slate-800/50 max-h-[360px] overflow-y-auto">
+          <div className="divide-y divide-slate-800/50 flex-1 min-h-0 max-h-[50vh] lg:max-h-none overflow-y-auto">
             {matchedList.map(({txnId, txn, items, total}) => (
               <div key={txnId} className="px-4 py-2.5">
                 <div className="flex items-center justify-between gap-2">
@@ -66206,7 +66238,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: SWKEEP 2026-08-09e");
+      console.log("CB build: RECONSCOPE 2026-08-11a");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
