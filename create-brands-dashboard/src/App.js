@@ -33003,57 +33003,161 @@ function CentralKitchenDashboard({ brands, stores, opsTeam = [], issues = [], pu
 
 // Multi-select store picker: "All stores", or any subset via checkboxes.
 // value is "all" | string[] (ids). onChange returns the same shape.
-function MultiStorePicker({ stores = [], value, onChange, allowAll = true, className = "" }) {
+function MultiStorePicker({ stores = [], brands = [], value, onChange, allowAll = true, className = "" }) {
+  // STOREPICK 2026-08-15 — the sales dashboard's store selector. Was a flat
+  // unsearchable checkbox list in a w-44 box: with 26 stores that meant
+  // scrolling a long list to find one site, no way to take a whole brand at
+  // once, and a button reading "5 stores" that never said WHICH five.
+  // Now: type-to-filter, brand groups with select-all, a readable summary, and
+  // keyboard escape. Same value contract as before ("all" | id | id[]), so
+  // every caller keeps working untouched.
   const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
   const ref = useRef(null);
+  const searchRef = useRef(null);
+
   useEffect(() => {
     const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
     document.addEventListener("mousedown", h);
     return () => document.removeEventListener("mousedown", h);
   }, []);
+  useEffect(() => {
+    if (!open) { setQ(""); return; }
+    // Focus the search on open — with this many stores, typing is the fast path.
+    const t = setTimeout(() => searchRef.current?.focus(), 30);
+    return () => clearTimeout(t);
+  }, [open]);
+
   const isAll = value === "all";
   const sel = Array.isArray(value) ? value : (isAll ? [] : value ? [value] : []);
   const selSet = new Set(sel);
+  const nameOf = (id) => {
+    const s = stores.find(x => x.id === id);
+    return s ? (s.shortName || s.name) : id;
+  };
+  // Name the stores when there are few enough to read; fall back to a count.
   const label = isAll ? `All stores (${stores.length})`
     : sel.length === 0 ? "Select stores…"
-    : sel.length === 1 ? (stores.find(s => s.id === sel[0])?.shortName || stores.find(s => s.id === sel[0])?.name || "1 store")
-    : `${sel.length} stores`;
+    : sel.length <= 2 ? sel.map(nameOf).join(", ")
+    : `${sel.length} of ${stores.length} stores`;
+
+  const emit = (nextSet) => {
+    const arr = [...nextSet];
+    onChange(arr.length === 0 ? (allowAll ? "all" : [])
+      : (arr.length === stores.length && allowAll) ? "all" : arr);
+  };
   const toggle = (id) => {
     const next = new Set(selSet);
     if (next.has(id)) next.delete(id); else next.add(id);
-    const arr = [...next];
-    onChange(arr.length === 0 ? (allowAll ? "all" : []) : arr.length === stores.length && allowAll ? "all" : arr);
+    emit(next);
   };
+
+  const brandName = (id) => brands.find(b => b.id === id)?.name || "Other";
+  const filtered = stores.filter(s => {
+    if (!q.trim()) return true;
+    const hay = `${s.name || ""} ${s.shortName || ""} ${brandName(s.brandId)}`.toLowerCase();
+    return hay.includes(q.trim().toLowerCase());
+  });
+  // Group by brand, but only when the caller supplied brands AND there's more
+  // than one — five of the six call sites don't pass brands, and without this
+  // they'd get a set of groups all labelled "Other".
+  const groups = (() => {
+    if (!brands.length) return [{ id: "__flat", name: "", list: [...filtered].sort((a, b) => (a.shortName || a.name || "").localeCompare(b.shortName || b.name || "")) }];
+    const m = new Map();
+    filtered.forEach(s => {
+      const k = s.brandId || "__other";
+      if (!m.has(k)) m.set(k, []);
+      m.get(k).push(s);
+    });
+    return [...m.entries()]
+      .map(([id, list]) => ({
+        id, name: brandName(id),
+        list: list.sort((a, b) => (a.shortName || a.name || "").localeCompare(b.shortName || b.name || "")),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  })();
+  const multiBrand = brands.length > 0 && groups.length > 1;
+
+  const toggleBrand = (list) => {
+    const ids = list.map(s => s.id);
+    const allOn = ids.every(id => selSet.has(id));
+    const next = new Set(selSet);
+    ids.forEach(id => allOn ? next.delete(id) : next.add(id));
+    emit(next);
+  };
+
   return (
     <div ref={ref} className={`relative ${className}`}>
       <button onClick={() => setOpen(o => !o)}
+        title={isAll ? "All stores" : sel.map(nameOf).join(", ")}
         className="w-full flex items-center justify-between gap-2 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-sm text-white hover:border-slate-600">
         <span className="truncate">{label}</span>
         <ChevronDown size={15} className={`text-slate-500 transition-transform flex-shrink-0 ${open ? "rotate-180" : ""}`} />
       </button>
       {open && (
-        <div className="absolute z-30 mt-1 left-0 w-full min-w-[14rem] max-w-[18rem] max-h-80 overflow-y-auto bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-1">
-          {allowAll && (
-            <button onClick={() => { onChange("all"); }}
-              className={`w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-slate-800 ${isAll ? "text-amber-400 font-semibold" : "text-slate-300"}`}>
-              <span className={`w-4 h-4 rounded border flex items-center justify-center ${isAll ? "bg-amber-600 border-amber-600" : "border-slate-600"}`}>{isAll && <Check size={11} className="text-white"/>}</span>
-              All stores
-            </button>
-          )}
-          {sel.length > 0 && !isAll && (
-            <button onClick={() => onChange(allowAll ? "all" : [])} className="w-full text-left px-3 py-1.5 text-[11px] text-slate-500 hover:text-white">Clear selection</button>
-          )}
-          <div className="border-t border-slate-800 my-1" />
-          {stores.map(s => {
-            const on = selSet.has(s.id);
-            return (
-              <button key={s.id} onClick={() => toggle(s.id)}
-                className={`w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-slate-800 ${on ? "text-white" : "text-slate-300"}`}>
-                <span className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${on ? "bg-amber-600 border-amber-600" : "border-slate-600"}`}>{on && <Check size={11} className="text-white"/>}</span>
-                <span className="truncate">{s.shortName || s.name}</span>
+        <div className="absolute z-30 mt-1 left-0 w-[20rem] max-w-[90vw] bg-slate-900 border border-slate-700 rounded-xl shadow-2xl overflow-hidden">
+          <div className="p-2 border-b border-slate-800">
+            <input ref={searchRef} value={q} onChange={e => setQ(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === "Escape") { setOpen(false); return; }
+                // Enter with a single match selects it outright — the fast path
+                // for someone who knows the store name.
+                if (e.key === "Enter" && filtered.length === 1) { toggle(filtered[0].id); setQ(""); }
+              }}
+              placeholder={`Search ${stores.length} stores…`}
+              className="w-full px-2.5 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"/>
+          </div>
+
+          <div className="flex items-center justify-between px-3 py-1.5 border-b border-slate-800">
+            {allowAll ? (
+              <button onClick={() => { onChange("all"); setOpen(false); }}
+                className={`text-xs font-semibold ${isAll ? "text-amber-400" : "text-slate-400 hover:text-white"}`}>
+                All stores
               </button>
-            );
-          })}
+            ) : <span/>}
+            <span className="text-[11px] text-slate-500">
+              {isAll ? "everything" : `${sel.length} selected`}
+              {!isAll && sel.length > 0 && (
+                <button onClick={() => onChange(allowAll ? "all" : [])}
+                  className="ml-2 text-slate-500 hover:text-white underline">clear</button>
+              )}
+            </span>
+          </div>
+
+          <div className="max-h-80 overflow-y-auto py-1">
+            {groups.length === 0 && (
+              <div className="px-3 py-4 text-xs text-slate-500 text-center">No store matches “{q}”.</div>
+            )}
+            {groups.map(g => {
+              const on = g.list.filter(s => selSet.has(s.id)).length;
+              return (
+                <div key={g.id}>
+                  {multiBrand && (
+                    <button onClick={() => toggleBrand(g.list)}
+                      className="w-full flex items-center justify-between px-3 pt-2 pb-1 text-[11px] font-bold uppercase tracking-wide text-slate-500 hover:text-white">
+                      <span>{g.name}</span>
+                      <span className="font-normal normal-case">{on}/{g.list.length}</span>
+                    </button>
+                  )}
+                  {g.list.map(s => {
+                    const isOn = selSet.has(s.id);
+                    return (
+                      <button key={s.id} onClick={() => toggle(s.id)}
+                        className={`w-full flex items-center gap-2 px-3 py-2 text-sm hover:bg-slate-800 ${isOn ? "text-white" : "text-slate-300"}`}>
+                        <span className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${isOn ? "bg-amber-600 border-amber-600" : "border-slate-600"}`}>{isOn && <Check size={11} className="text-white"/>}</span>
+                        <span className="truncate">{s.shortName || s.name}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="border-t border-slate-800 px-3 py-2">
+            <button onClick={() => setOpen(false)}
+              className="w-full py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold">Done</button>
+          </div>
         </div>
       )}
     </div>
@@ -33795,7 +33899,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
       {/* Compact top bar: filters + Ask the Data on one row */}
       <div className="flex flex-wrap items-center gap-2.5">
         <PeriodFilterBar preset={preset} onPreset={setPreset} customFrom={customFrom} customTo={customTo} onCustomFrom={setCustomFrom} onCustomTo={setCustomTo} />
-        <MultiStorePicker stores={allStores} value={storeId} onChange={setStoreId} allowAll={isHQ} className="w-44" />
+        <MultiStorePicker stores={allStores} brands={brands} value={storeId} onChange={setStoreId} allowAll={isHQ} className="w-56" />
         {inProgress && prevPeriod && !loading && (
           <span className="inline-flex items-center gap-1.5 text-[11px] text-[#9A8770] bg-[#F3E9D6] border border-[#E8DCC6] rounded-lg px-2.5 py-1.5">
             <Clock size={11} className="text-[#C9854F]"/>
@@ -66324,7 +66428,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: PWSESSION 2026-08-11f");
+      console.log("CB build: STOREPICK 2026-08-15a");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
