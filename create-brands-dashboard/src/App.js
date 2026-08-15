@@ -59558,6 +59558,35 @@ function PayPeriodDetail({
                   </tr>
                 ))}
               </tbody>
+              {/* PPTOTALS 2026-08-15 — the punches tab listed every day and
+                  stopped, so anyone checking a person or a site had to add the
+                  hours up by hand. This totals whatever the filters currently
+                  show, and names it, so it's clear what's being summed. */}
+              {filteredRows.length > 0 && (() => {
+                const t = filteredRows.reduce((a, r) => ({
+                  actual: a.actual + (Number(r.actual) || 0),
+                  sched:  a.sched  + (Number(r.schedHrs) || 0),
+                  people: a.people.add(r.p.employeeId || r.member?.id || r.p.id),
+                }), { actual: 0, sched: 0, people: new Set() });
+                const variance = t.actual - t.sched;
+                return (
+                  <tfoot className="border-t-2 border-slate-700">
+                    <tr className="bg-slate-900/60">
+                      <td className="px-4 py-3 text-xs font-bold text-white" colSpan={4}>
+                        Total — {filteredRows.length} punch{filteredRows.length === 1 ? "" : "es"}
+                        {t.people.size > 1 ? `, ${t.people.size} people` : ""}
+                      </td>
+                      <td className="px-4 py-3 text-right tabular-nums font-bold text-white">{t.actual.toFixed(2)}</td>
+                      <td className="px-4 py-3"/>
+                      <td className="px-4 py-3 text-right tabular-nums font-bold text-slate-300">{t.sched.toFixed(2)}</td>
+                      <td className={`px-4 py-3 text-right tabular-nums font-bold ${variance > 0.05 ? "text-amber-400" : variance < -0.05 ? "text-sky-400" : "text-slate-400"}`}>
+                        {variance >= 0 ? "+" : ""}{variance.toFixed(2)}
+                      </td>
+                      <td className="px-4 py-3"/>
+                    </tr>
+                  </tfoot>
+                );
+              })()}
             </table>
           </div>
         </>
@@ -66428,7 +66457,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: STOREPICK 2026-08-15a");
+      console.log("CB build: PPTOTALS 2026-08-15b");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
