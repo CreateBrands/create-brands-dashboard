@@ -14032,8 +14032,13 @@ export async function fetchDistFulfilmentBoard() {
     const pick = picks.find(p => p.soId === so.id) || null;
     const dispatch = dispatches.find(d => d.soId === so.id) || null;
     const soInvoices = invoices.filter(i => i.soId === so.id);
-    const invoice = soInvoices[0] || null;
-    const fullyPaid = soInvoices.length > 0 && soInvoices.every(i => {
+    // FULFILSTAGE 2026-08-17 — only a POSTED invoice counts as invoiced. A draft
+    // invoice used to light the Invoiced dot green while the order's own status
+    // (which postDistInvoice only advances on posting) stayed at dispatched, so
+    // the list contradicted itself and two orders looked "stuck".
+    const postedInvoices = soInvoices.filter(i => i.posted);
+    const invoice = postedInvoices[0] || null;
+    const fullyPaid = postedInvoices.length > 0 && postedInvoices.every(i => {
       const gt = i.grandTotal != null && i.grandTotal > 0 ? i.grandTotal : 0;
       const p = paidMap.get(i.id) || 0; return gt > 0 ? p + 0.005 >= gt : false;
     });
