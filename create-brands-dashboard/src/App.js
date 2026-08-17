@@ -33013,6 +33013,10 @@ function MultiStorePicker({ stores = [], brands = [], value, onChange, allowAll 
   // every caller keeps working untouched.
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
+  const [shutRaw, setShut] = useState({});
+  // A collapsed group must not hide a search hit — otherwise typing a store
+  // name would appear to find nothing.
+  const shut = q.trim() ? {} : shutRaw;
   const ref = useRef(null);
   const searchRef = useRef(null);
 
@@ -33058,25 +33062,40 @@ function MultiStorePicker({ stores = [], brands = [], value, onChange, allowAll 
     const hay = `${s.name || ""} ${s.shortName || ""} ${brandName(s.brandId)}`.toLowerCase();
     return hay.includes(q.trim().toLowerCase());
   });
-  // Group by brand, but only when the caller supplied brands AND there's more
-  // than one — five of the six call sites don't pass brands, and without this
-  // they'd get a set of groups all labelled "Other".
+  // STOREGROUPS 2026-08-17 — grouped by what a store IS, not which brand owns
+  // it: Own, JV, Franchise, Central Kitchen, Distribution. That is how the
+  // estate is actually talked about, and it makes "all our own sites" one
+  // click. Anything currently selected is also pulled into a "Selected" group
+  // pinned at the top — with 26 stores, checking what you have picked
+  // shouldn't mean scrolling the whole list hunting for ticks. Those stores
+  // still appear in their real group below; it's a shortcut, not a move.
+  const groupOf = (st) => {
+    if (st.siteType === "central_kitchen") return "ck";
+    if (st.siteType === "distribution") return "dist";
+    const om = (st.ownershipModel || "").toLowerCase();
+    if (om === "joint_venture") return "jv";
+    if (om === "franchise") return "franchise";
+    return "own";
+  };
+  const GROUP_META = [
+    ["own", "Own stores"],
+    ["jv", "JV stores"],
+    ["franchise", "Franchise stores"],
+    ["ck", "Central Kitchen"],
+    ["dist", "Distribution"],
+  ];
   const groups = (() => {
-    if (!brands.length) return [{ id: "__flat", name: "", list: [...filtered].sort((a, b) => (a.shortName || a.name || "").localeCompare(b.shortName || b.name || "")) }];
-    const m = new Map();
-    filtered.forEach(s => {
-      const k = s.brandId || "__other";
-      if (!m.has(k)) m.set(k, []);
-      m.get(k).push(s);
+    const byName = (a, b) => (a.shortName || a.name || "").localeCompare(b.shortName || b.name || "");
+    const out = [];
+    const picked = filtered.filter(x => selSet.has(x.id)).sort(byName);
+    if (picked.length) out.push({ id: "__selected", name: `Selected (${sel.length})`, list: picked });
+    GROUP_META.forEach(([key, label]) => {
+      const list = filtered.filter(x => groupOf(x) === key).sort(byName);
+      if (list.length) out.push({ id: key, name: label, list });
     });
-    return [...m.entries()]
-      .map(([id, list]) => ({
-        id, name: brandName(id),
-        list: list.sort((a, b) => (a.shortName || a.name || "").localeCompare(b.shortName || b.name || "")),
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name));
+    return out;
   })();
-  const multiBrand = brands.length > 0 && groups.length > 1;
+  const multiBrand = groups.length > 1;
 
   const toggleBrand = (list) => {
     const ids = list.map(s => s.id);
@@ -33133,13 +33152,22 @@ function MultiStorePicker({ stores = [], brands = [], value, onChange, allowAll 
               return (
                 <div key={g.id}>
                   {multiBrand && (
-                    <button onClick={() => toggleBrand(g.list)}
-                      className="w-full flex items-center justify-between px-3 pt-2 pb-1 text-[11px] font-bold uppercase tracking-wide text-slate-500 hover:text-white">
-                      <span>{g.name}</span>
-                      <span className="font-normal normal-case">{on}/{g.list.length}</span>
-                    </button>
+                    <div className="w-full flex items-center gap-1 px-3 pt-2 pb-1">
+                      {/* Two targets on purpose: the chevron collapses the
+                          group, the label selects all of it. "Show me fewer
+                          rows" and "tick all of these" are different intents. */}
+                      <button onClick={() => setShut(p => ({ ...p, [g.id]: !p[g.id] }))}
+                        className="text-slate-500 hover:text-white text-[10px] w-3 flex-shrink-0">
+                        {shut[g.id] ? "▸" : "▾"}
+                      </button>
+                      <button onClick={() => toggleBrand(g.list)}
+                        className="flex-1 flex items-center justify-between text-[11px] font-bold uppercase tracking-wide text-slate-500 hover:text-white">
+                        <span>{g.name}</span>
+                        <span className="font-normal normal-case">{on}/{g.list.length}</span>
+                      </button>
+                    </div>
                   )}
-                  {g.list.map(s => {
+                  {!shut[g.id] && g.list.map(s => {
                     const isOn = selSet.has(s.id);
                     return (
                       <button key={s.id} onClick={() => toggle(s.id)}
@@ -66457,7 +66485,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: PPTOTALS 2026-08-15b");
+      console.log("CB build: STOREGROUPS 2026-08-17a");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
