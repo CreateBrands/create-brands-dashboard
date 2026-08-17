@@ -33013,10 +33013,15 @@ function MultiStorePicker({ stores = [], brands = [], value, onChange, allowAll 
   // every caller keeps working untouched.
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
-  const [shutRaw, setShut] = useState({});
-  // A collapsed group must not hide a search hit — otherwise typing a store
-  // name would appear to find nothing.
-  const shut = q.trim() ? {} : shutRaw;
+  // Groups start CLOSED. With 26 stores across five groups an all-open list is
+  // a wall of checkboxes; closed, you see the shape of the estate first and
+  // open only the part you want. `openRaw` tracks what's been opened, so the
+  // default needs no seeding when groups appear or disappear.
+  const [openRaw, setOpenGroups] = useState({});
+  // Searching overrides the collapse — otherwise typing a store name into a
+  // closed group would look like no results.
+  const searching = !!q.trim();
+  const isShut = (gid) => !searching && gid !== "__selected" && !openRaw[gid];
   const ref = useRef(null);
   const searchRef = useRef(null);
 
@@ -33151,23 +33156,31 @@ function MultiStorePicker({ stores = [], brands = [], value, onChange, allowAll 
               const on = g.list.filter(s => selSet.has(s.id)).length;
               return (
                 <div key={g.id}>
-                  {multiBrand && (
-                    <div className="w-full flex items-center gap-1 px-3 pt-2 pb-1">
-                      {/* Two targets on purpose: the chevron collapses the
-                          group, the label selects all of it. "Show me fewer
-                          rows" and "tick all of these" are different intents. */}
-                      <button onClick={() => setShut(p => ({ ...p, [g.id]: !p[g.id] }))}
-                        className="text-slate-500 hover:text-white text-[10px] w-3 flex-shrink-0">
-                        {shut[g.id] ? "▸" : "▾"}
-                      </button>
-                      <button onClick={() => toggleBrand(g.list)}
-                        className="flex-1 flex items-center justify-between text-[11px] font-bold uppercase tracking-wide text-slate-500 hover:text-white">
-                        <span>{g.name}</span>
-                        <span className="font-normal normal-case">{on}/{g.list.length}</span>
-                      </button>
-                    </div>
-                  )}
-                  {!shut[g.id] && g.list.map(s => {
+                  {multiBrand && (() => {
+                    const shutNow = isShut(g.id);
+                    const allOn = on === g.list.length && g.list.length > 0;
+                    return (
+                      <div className="w-full flex items-center gap-2 px-3 pt-2 pb-1">
+                        {/* Opening a group and selecting all of it are separate
+                            actions with separate controls — clicking a heading
+                            to open it shouldn't tick 23 stores. */}
+                        <button onClick={() => setOpenGroups(p => ({ ...p, [g.id]: !p[g.id] }))}
+                          className="flex-1 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-400 hover:text-white min-w-0">
+                          <span className="text-[9px] text-slate-500 w-2 flex-shrink-0">{shutNow ? "▸" : "▾"}</span>
+                          <span className="truncate">{g.name}</span>
+                          <span className="font-normal normal-case text-slate-500 flex-shrink-0">{on}/{g.list.length}</span>
+                        </button>
+                        {g.id !== "__selected" && (
+                          <button onClick={() => toggleBrand(g.list)}
+                            title={allOn ? `Clear all ${g.list.length}` : `Select all ${g.list.length}`}
+                            className={`text-[10px] font-semibold px-2 py-0.5 rounded-md border flex-shrink-0 ${allOn ? "border-amber-600/50 text-amber-400" : "border-slate-700 text-slate-400 hover:text-white"}`}>
+                            {allOn ? "Clear" : "All"}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })()}
+                  {!isShut(g.id) && g.list.map(s => {
                     const isOn = selSet.has(s.id);
                     return (
                       <button key={s.id} onClick={() => toggle(s.id)}
@@ -66485,7 +66498,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: STOREGROUPS 2026-08-17a");
+      console.log("CB build: STOREGROUPS 2026-08-17b");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
