@@ -33004,16 +33004,17 @@ function CentralKitchenDashboard({ brands, stores, opsTeam = [], issues = [], pu
 // Multi-select store picker: "All stores", or any subset via checkboxes.
 // value is "all" | string[] (ids). onChange returns the same shape.
 function MultiStorePicker({ stores = [], brands = [], value, onChange, allowAll = true, className = "" }) {
-  // STOREPICK 2026-08-17c — the dashboard's main control, so it earns real
-  // space and real hit targets. Earlier versions failed on three counts: a
-  // 10px chevron nobody could see, rows too tight to aim at, and a panel so
-  // narrow that store names truncated.
+  // STOREPICK 2026-08-17d — built against the cream theme's own tokens
+  // (--cream, --cream-card, --cream-soft, --brown, --ink) rather than Tailwind
+  // slate classes. The previous version relied on .emp-theme remapping slate to
+  // cream, which produced combinations nobody chose: amber text on an amber
+  // tint (unreadable), and a dark grey row hover on a cream panel.
   //
-  // The design language here is the estate itself. Each group carries a colour
-  // bar down its left edge — own sites, JV, franchise, kitchen, distribution —
-  // and that same bar runs down the stores beneath it, so at a glance the list
-  // reads as five blocks of colour rather than 26 identical rows. The bar is
-  // the only ornament; everything else stays quiet.
+  // Group colours are a muted earth set chosen to sit on cream — olive, slate
+  // blue, plum, the brand's burnt orange, and a deep teal. Each group's colour
+  // runs as a bar down its left edge and continues down its stores, so the open
+  // list reads as blocks rather than 26 identical rows. That bar is the only
+  // ornament.
   //
   // Value contract unchanged: "all" | id | id[].
   const [open, setOpen] = useState(false);
@@ -33033,6 +33034,17 @@ function MultiStorePicker({ stores = [], brands = [], value, onChange, allowAll 
     return () => clearTimeout(t);
   }, [open]);
 
+  const T = {
+    card:   "var(--cream-card, #fff)",
+    panel:  "var(--cream, #FDF2E0)",
+    soft:   "var(--cream-soft, #F5EBD9)",
+    deep:   "var(--cream-deep, #EFE3CB)",
+    line:   "rgba(58,36,24,.14)",
+    ink:    "var(--ink, #3A2418)",
+    inkSoft:"var(--ink-soft, #6B5443)",
+    brown:  "var(--brown, #844429)",
+  };
+
   const isAll = value === "all";
   const sel = Array.isArray(value) ? value : (isAll ? [] : value ? [value] : []);
   const selSet = new Set(sel);
@@ -33041,7 +33053,6 @@ function MultiStorePicker({ stores = [], brands = [], value, onChange, allowAll 
     const s = stores.find(x => x.id === id);
     return s ? (s.shortName || s.name) : id;
   };
-
   const label = isAll ? "All stores"
     : sel.length === 0 ? "Select stores"
     : sel.length === 1 ? nameOf(sel[0])
@@ -33058,8 +33069,6 @@ function MultiStorePicker({ stores = [], brands = [], value, onChange, allowAll 
     emit(next);
   };
 
-  // Groups describe what a site IS — that's how the estate gets talked about,
-  // and it makes "all our own shops" a single action.
   const groupOf = (st) => {
     if (st.siteType === "central_kitchen") return "ck";
     if (st.siteType === "distribution") return "dist";
@@ -33068,30 +33077,23 @@ function MultiStorePicker({ stores = [], brands = [], value, onChange, allowAll 
     if (om === "franchise") return "franchise";
     return "own";
   };
+  // Muted earth tones — saturated accents fight a cream background.
   const GROUPS = [
-    { key: "own",       name: "Own stores",      bar: "bg-emerald-400", text: "text-emerald-300" },
-    { key: "jv",        name: "JV stores",       bar: "bg-sky-400",     text: "text-sky-300" },
-    { key: "franchise", name: "Franchise",       bar: "bg-violet-400",  text: "text-violet-300" },
-    { key: "ck",        name: "Central Kitchen", bar: "bg-orange-400",  text: "text-orange-300" },
-    { key: "dist",      name: "Distribution",    bar: "bg-cyan-400",    text: "text-cyan-300" },
+    { key: "own",       name: "Own stores",      c: "#6E8B4E" },
+    { key: "jv",        name: "JV stores",       c: "#4E7A96" },
+    { key: "franchise", name: "Franchise",       c: "#8B5E8B" },
+    { key: "ck",        name: "Central Kitchen", c: "#C4713A" },
+    { key: "dist",      name: "Distribution",    c: "#3F7A6B" },
   ];
 
   const byName = (a, b) => (a.shortName || a.name || "").localeCompare(b.shortName || b.name || "");
-  const matches = (s) => {
-    if (!q.trim()) return true;
-    return `${s.name || ""} ${s.shortName || ""}`.toLowerCase().includes(q.trim().toLowerCase());
-  };
-  const filtered = live.filter(matches);
+  const filtered = live.filter(s =>
+    !q.trim() || `${s.name || ""} ${s.shortName || ""}`.toLowerCase().includes(q.trim().toLowerCase()));
   const searching = !!q.trim();
-
   const sections = GROUPS
     .map(g => ({ ...g, list: filtered.filter(s => groupOf(s) === g.key).sort(byName) }))
     .filter(g => g.list.length);
-
-  const pickedList = filtered.filter(s => selSet.has(s.id)).sort(byName);
-
-  // Closed by default: five headings you can read beats 26 checkboxes you
-  // have to scan. Searching opens everything, or a match could hide.
+  const picked = filtered.filter(s => selSet.has(s.id)).sort(byName);
   const isOpen = (key) => searching || !!openGroups[key];
 
   const toggleGroup = (list) => {
@@ -33102,88 +33104,93 @@ function MultiStorePicker({ stores = [], brands = [], value, onChange, allowAll 
     emit(next);
   };
 
-  const StoreRow = ({ s, bar }) => {
-    const isOn = selSet.has(s.id);
-    return (
-      <button key={s.id} onClick={() => toggle(s.id)}
-        className={`w-full flex items-stretch gap-0 text-left group/row ${isOn ? "bg-slate-800/50" : "hover:bg-slate-800/40"}`}>
-        <span className={`w-[3px] flex-shrink-0 ${bar} ${isOn ? "opacity-100" : "opacity-25 group-hover/row:opacity-60"}`}/>
-        <span className="flex items-center gap-2.5 px-3 py-2.5 flex-1 min-w-0">
-          <span className={`w-[18px] h-[18px] rounded-[5px] border flex items-center justify-center flex-shrink-0 transition-colors ${isOn ? "bg-amber-500 border-amber-500" : "border-slate-600 group-hover/row:border-slate-500"}`}>
-            {isOn && <Check size={12} className="text-slate-900" strokeWidth={3}/>}
-          </span>
-          <span className={`text-[13.5px] truncate ${isOn ? "text-white font-medium" : "text-slate-300"}`}>
-            {s.shortName || s.name}
-          </span>
-        </span>
-      </button>
-    );
-  };
+  const pill = (active) => ({
+    fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999,
+    background: active ? T.brown : T.deep,
+    color: active ? T.card : T.inkSoft,
+    flexShrink: 0, lineHeight: 1.6,
+  });
+  const ghostBtn = (active) => ({
+    fontSize: 11.5, fontWeight: 600, padding: "5px 11px", borderRadius: 9,
+    border: "1px solid " + (active ? T.brown : T.line),
+    background: active ? T.brown : "transparent",
+    color: active ? T.card : T.inkSoft,
+    cursor: "pointer", flexShrink: 0, fontFamily: "inherit",
+  });
 
   return (
     <div ref={ref} className={`relative ${className}`}>
       <button onClick={() => setOpen(o => !o)}
-        className={`w-full flex items-center gap-2 rounded-xl border px-3.5 py-2.5 text-sm transition-colors ${open ? "border-amber-500/60 bg-slate-900" : "border-slate-700 bg-slate-900 hover:border-slate-600"}`}>
-        <span className="flex-1 text-left truncate text-white font-medium">{label}</span>
-        {!isAll && sel.length > 1 && (
-          <span className="text-[11px] font-bold text-slate-900 bg-amber-500 rounded-full px-1.5 py-0.5 leading-none flex-shrink-0">{sel.length}</span>
-        )}
-        <ChevronDown size={16} className={`text-slate-400 flex-shrink-0 transition-transform ${open ? "rotate-180" : ""}`}/>
+        style={{
+          width: "100%", display: "flex", alignItems: "center", gap: 8,
+          padding: "10px 14px", borderRadius: 12, cursor: "pointer",
+          background: T.card, border: "1px solid " + (open ? T.brown : T.line),
+          color: T.ink, fontFamily: "inherit", fontSize: 14, fontWeight: 600,
+        }}>
+        <span style={{ flex: 1, textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+        {!isAll && sel.length > 1 && <span style={pill(true)}>{sel.length}</span>}
+        <ChevronDown size={16} style={{ color: T.inkSoft, flexShrink: 0, transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" }}/>
       </button>
 
       {open && (
-        <div className="absolute z-40 mt-2 left-0 w-[23rem] max-w-[92vw] bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl shadow-black/50 overflow-hidden">
-
-          <div className="p-2.5 border-b border-slate-800">
-            <div className="relative">
-              <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none"/>
+        <div style={{
+          position: "absolute", zIndex: 40, marginTop: 8, left: 0,
+          width: "23rem", maxWidth: "92vw", background: T.card,
+          border: "1px solid " + T.line, borderRadius: 16,
+          boxShadow: "0 18px 50px rgba(58,36,24,.18)", overflow: "hidden",
+        }}>
+          <div style={{ padding: 10, borderBottom: "1px solid " + T.line, background: T.panel }}>
+            <div style={{ position: "relative" }}>
+              <Search size={15} style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: T.inkSoft, pointerEvents: "none" }}/>
               <input ref={searchRef} value={q} onChange={e => setQ(e.target.value)}
                 onKeyDown={e => {
                   if (e.key === "Escape") { if (q) setQ(""); else setOpen(false); }
                   if (e.key === "Enter" && filtered.length === 1) { toggle(filtered[0].id); setQ(""); }
                 }}
                 placeholder={`Search ${live.length} stores`}
-                className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-slate-800/70 border border-slate-700 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-amber-500/60"/>
+                style={{
+                  width: "100%", boxSizing: "border-box", padding: "10px 12px 10px 34px",
+                  borderRadius: 10, border: "1px solid " + T.line, background: T.card,
+                  color: T.ink, fontSize: 14, fontFamily: "inherit", outline: "none",
+                }}/>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-800">
+          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", borderBottom: "1px solid " + T.line }}>
             {allowAll && (
-              <button onClick={() => { onChange("all"); setOpen(false); }}
-                className={`text-xs font-semibold px-2.5 py-1 rounded-lg transition-colors ${isAll ? "bg-amber-500 text-slate-900" : "bg-slate-800 text-slate-300 hover:text-white"}`}>
-                All stores
-              </button>
+              <button onClick={() => { onChange("all"); setOpen(false); }} style={ghostBtn(isAll)}>All stores</button>
             )}
-            <span className="flex-1"/>
-            <span className="text-[11.5px] text-slate-500">
-              {isAll ? `all ${live.length}` : `${sel.length} of ${live.length}`}
-            </span>
+            <span style={{ flex: 1 }}/>
+            <span style={{ fontSize: 11.5, color: T.inkSoft }}>{isAll ? `all ${live.length}` : `${sel.length} of ${live.length}`}</span>
             {!isAll && sel.length > 0 && (
               <button onClick={() => onChange(allowAll ? "all" : [])}
-                className="text-[11.5px] font-semibold text-slate-400 hover:text-white">Clear</button>
+                style={{ fontSize: 11.5, fontWeight: 600, color: T.brown, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit" }}>Clear</button>
             )}
           </div>
 
-          <div className="max-h-[22rem] overflow-y-auto overscroll-contain">
+          <div style={{ maxHeight: "22rem", overflowY: "auto", overscrollBehavior: "contain" }}>
             {sections.length === 0 && (
-              <div className="px-4 py-10 text-center">
-                <div className="text-sm text-slate-400">No store matches “{q}”</div>
-                <button onClick={() => setQ("")} className="text-xs text-amber-400 font-semibold mt-1.5">Clear search</button>
+              <div style={{ padding: "36px 16px", textAlign: "center" }}>
+                <div style={{ fontSize: 13.5, color: T.inkSoft }}>No store matches “{q}”</div>
+                <button onClick={() => setQ("")} style={{ fontSize: 12, fontWeight: 600, color: T.brown, background: "none", border: "none", cursor: "pointer", marginTop: 6, fontFamily: "inherit" }}>Clear search</button>
               </div>
             )}
 
-            {/* What you've already picked, kept in view. These stores also stay
-                in their own group below — this is a summary, not a move. */}
-            {!searching && pickedList.length > 1 && (
-              <div className="border-b border-slate-800/70">
-                <div className="px-3 pt-2.5 pb-1 text-[10.5px] font-bold uppercase tracking-wider text-amber-400/80">Selected</div>
-                <div className="flex flex-wrap gap-1.5 px-3 pb-3">
-                  {pickedList.map(s => (
-                    <button key={s.id} onClick={() => toggle(s.id)}
-                      title="Remove"
-                      className="flex items-center gap-1 text-[12px] bg-amber-500/15 text-amber-200 border border-amber-500/30 rounded-lg pl-2 pr-1.5 py-1 hover:bg-amber-500/25">
-                      <span className="truncate max-w-[9rem]">{s.shortName || s.name}</span>
-                      <X size={11} className="opacity-70"/>
+            {/* Solid chips, not tinted ones — a removable item has to be legible
+                at a glance, and low-contrast tints on cream aren't. */}
+            {!searching && picked.length > 1 && (
+              <div style={{ borderBottom: "1px solid " + T.line, background: T.panel }}>
+                <div style={{ padding: "10px 12px 4px", fontSize: 10.5, fontWeight: 700, letterSpacing: ".08em", color: T.inkSoft }}>SELECTED</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "0 12px 12px" }}>
+                  {picked.map(s => (
+                    <button key={s.id} onClick={() => toggle(s.id)} title="Remove"
+                      style={{
+                        display: "flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 600,
+                        background: T.brown, color: T.card, border: "none",
+                        borderRadius: 8, padding: "5px 7px 5px 10px", cursor: "pointer", fontFamily: "inherit",
+                      }}>
+                      <span style={{ maxWidth: "9rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.shortName || s.name}</span>
+                      <X size={12} style={{ opacity: .8 }}/>
                     </button>
                   ))}
                 </div>
@@ -33195,37 +33202,74 @@ function MultiStorePicker({ stores = [], brands = [], value, onChange, allowAll 
               const allOn = on === g.list.length;
               const shown = isOpen(g.key);
               return (
-                <div key={g.key} className="border-b border-slate-800/70 last:border-b-0">
-                  <div className="flex items-stretch">
-                    {/* Big target: the whole heading opens the group. Selecting
-                        all of it is a separate button, so opening a group to
-                        look inside can't tick 23 stores by accident. */}
+                <div key={g.key} style={{ borderBottom: "1px solid " + T.line }}>
+                  <div style={{ display: "flex", alignItems: "stretch" }}>
+                    {/* The heading opens the group; selecting all of it is a
+                        separate button, so looking inside can't tick 23 stores. */}
                     <button onClick={() => setOpenGroups(p => ({ ...p, [g.key]: !p[g.key] }))}
-                      className="flex-1 flex items-center gap-2.5 px-3 py-3 hover:bg-slate-800/40 min-w-0">
-                      <span className={`w-1 h-5 rounded-full flex-shrink-0 ${g.bar} ${on ? "opacity-100" : "opacity-40"}`}/>
-                      <ChevronDown size={15} className={`flex-shrink-0 text-slate-500 transition-transform ${shown ? "" : "-rotate-90"}`}/>
-                      <span className="text-[13.5px] font-semibold text-slate-200 truncate">{g.name}</span>
-                      <span className={`text-[11px] font-semibold rounded-full px-2 py-0.5 flex-shrink-0 ${on ? "bg-amber-500/20 text-amber-300" : "bg-slate-800 text-slate-500"}`}>
-                        {on ? `${on}/${g.list.length}` : g.list.length}
-                      </span>
+                      onMouseEnter={e => e.currentTarget.style.background = T.soft}
+                      onMouseLeave={e => e.currentTarget.style.background = "transparent"}
+                      style={{
+                        flex: 1, display: "flex", alignItems: "center", gap: 10, minWidth: 0,
+                        padding: "13px 12px", background: "transparent", border: "none",
+                        cursor: "pointer", fontFamily: "inherit", textAlign: "left",
+                      }}>
+                      <span style={{ width: 4, height: 22, borderRadius: 999, background: g.c, opacity: on ? 1 : .45, flexShrink: 0 }}/>
+                      <ChevronDown size={15} style={{ color: T.inkSoft, flexShrink: 0, transform: shown ? "none" : "rotate(-90deg)", transition: "transform .15s" }}/>
+                      <span style={{ fontSize: 14, fontWeight: 600, color: T.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{g.name}</span>
+                      <span style={pill(on > 0)}>{on ? `${on}/${g.list.length}` : g.list.length}</span>
                     </button>
-                    <button onClick={() => toggleGroup(g.list)}
-                      title={allOn ? `Clear ${g.name}` : `Select all of ${g.name}`}
-                      className={`px-3 my-2 mr-2 rounded-lg text-[11.5px] font-semibold border transition-colors flex-shrink-0 ${allOn ? "border-amber-500/40 text-amber-300 bg-amber-500/10" : "border-slate-700 text-slate-400 hover:text-white hover:border-slate-500"}`}>
-                      {allOn ? "Clear" : "All"}
-                    </button>
+                    <span style={{ display: "flex", alignItems: "center", paddingRight: 10 }}>
+                      <button onClick={() => toggleGroup(g.list)}
+                        title={allOn ? `Clear ${g.name}` : `Select all of ${g.name}`}
+                        style={ghostBtn(allOn)}>{allOn ? "Clear" : "All"}</button>
+                    </span>
                   </div>
-                  {shown && <div className="pb-1">{g.list.map(s => <StoreRow key={s.id} s={s} bar={g.bar}/>)}</div>}
+
+                  {shown && (
+                    <div style={{ paddingBottom: 4 }}>
+                      {g.list.map(s => {
+                        const isOn = selSet.has(s.id);
+                        return (
+                          <button key={s.id} onClick={() => toggle(s.id)}
+                            onMouseEnter={e => { if (!isOn) e.currentTarget.style.background = T.soft; }}
+                            onMouseLeave={e => { if (!isOn) e.currentTarget.style.background = "transparent"; }}
+                            style={{
+                              width: "100%", display: "flex", alignItems: "stretch", gap: 0,
+                              background: isOn ? T.soft : "transparent", border: "none",
+                              cursor: "pointer", fontFamily: "inherit", textAlign: "left", padding: 0,
+                            }}>
+                            <span style={{ width: 4, flexShrink: 0, background: g.c, opacity: isOn ? .9 : .25 }}/>
+                            <span style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", flex: 1, minWidth: 0 }}>
+                              <span style={{
+                                width: 18, height: 18, borderRadius: 5, flexShrink: 0,
+                                display: "flex", alignItems: "center", justifyContent: "center",
+                                background: isOn ? T.brown : T.card,
+                                border: "1px solid " + (isOn ? T.brown : T.line),
+                              }}>
+                                {isOn && <Check size={12} style={{ color: T.card }} strokeWidth={3}/>}
+                              </span>
+                              <span style={{ fontSize: 13.5, fontWeight: isOn ? 600 : 500, color: isOn ? T.ink : T.inkSoft, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                {s.shortName || s.name}
+                              </span>
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               );
             })}
           </div>
 
-          <div className="px-3 py-2.5 border-t border-slate-800 bg-slate-900">
+          <div style={{ padding: 10, borderTop: "1px solid " + T.line, background: T.panel }}>
             <button onClick={() => setOpen(false)}
-              className="w-full py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-[13px] font-semibold transition-colors">
-              Done
-            </button>
+              style={{
+                width: "100%", padding: "10px", borderRadius: 10, border: "none",
+                background: T.brown, color: T.card, fontSize: 13.5, fontWeight: 700,
+                cursor: "pointer", fontFamily: "inherit",
+              }}>Done</button>
           </div>
         </div>
       )}
@@ -66525,7 +66569,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: STOREPICK 2026-08-17c");
+      console.log("CB build: STOREPICK 2026-08-17d");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
