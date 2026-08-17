@@ -13737,6 +13737,26 @@ export async function mergePendingOrders(soIds, editorName) {
   return target.id;
 }
 
+
+// SOSTATUS 2026-08-17 — a sales order's status must only ever move FORWARD.
+// Every step of fulfilment writes its own status, and the steps don't happen in
+// a fixed order: invoice an order before the dispatch is confirmed and the
+// dispatch write used to drag it back from `invoiced` to `dispatched`, which is
+// how SO-... appeared "stuck at dispatch" while plainly invoiced.
+// Cancelled is deliberately absent — cancelling is a decision, not a stage, and
+// goes through setDistSalesOrderStatus directly.
+const SO_STAGE = { draft: 0, pending_approval: 1, confirmed: 2, picking: 3, dispatched: 4, invoiced: 5, paid: 6 };
+async function advanceSoStatus(soId, next) {
+  if (!soId || !next) return;
+  const { data: cur } = await supabase.from("dist_sales_orders").select("status").eq("id", soId).maybeSingle();
+  const from = SO_STAGE[cur?.status] ?? -1;
+  const to = SO_STAGE[next] ?? -1;
+  // Unknown or cancelled current status: leave it alone rather than guess.
+  if (cur && !(cur.status in SO_STAGE)) return;
+  if (to <= from) return;
+  await supabase.from("dist_sales_orders").update({ status: next }).eq("id", soId);
+}
+
 export async function setDistSalesOrderStatus(id, status, actor) {
   const { data: before } = await supabase.from("dist_sales_orders").select("status").eq("id", id).maybeSingle();
   const { error } = await supabase.from("dist_sales_orders").update({ status }).eq("id", id);
@@ -13871,7 +13891,7 @@ export async function createDistPick(pick, lines = []) {
     unit_price: Number(l.unitPrice) || 0, tax_rate_id: l.taxRateId || null,
   }));
   if (lr.length) { const { error: e2 } = await supabase.from("dist_pick_lines").insert(lr); if (e2) throw e2; }
-  if (pick.soId) await supabase.from("dist_sales_orders").update({ status: "picking" }).eq("id", pick.soId);
+  await advanceSoStatus(pick.soId, "picking");
   if (pick.soId) await logSoEvent(pick.soId, "picked", { note: "Picking started" });
   return id;
 }
@@ -14191,7 +14211,7 @@ export async function postDistDispatch(dispatch, lines = []) {
     }
   }
   await supabase.from("dist_dispatches").update({ posted: true }).eq("id", id);
-  if (dispatch.soId) await supabase.from("dist_sales_orders").update({ status: "dispatched" }).eq("id", dispatch.soId);
+  await advanceSoStatus(dispatch.soId, "dispatched");
   if (dispatch.soId) await logSoEvent(dispatch.soId, "dispatched", { note: "Dispatched" });
   if (dispatch.pickId) await supabase.from("dist_picks").update({ status: "dispatched" }).eq("id", dispatch.pickId);
   return id;
@@ -14244,7 +14264,7 @@ export async function deleteDistDispatch(dispatchId) {
   const { error } = await supabase.from("dist_dispatches").delete().eq("id", dispatchId);
   if (error) throw error;
   // 4. Reset SO + pick so the order can be re-dispatched.
-  if (head.so_id) await supabase.from("dist_sales_orders").update({ status: "picking" }).eq("id", head.so_id);
+  await advanceSoStatus(head.so_id, "picking");
   if (head.pick_id) await supabase.from("dist_picks").update({ status: "picked" }).eq("id", head.pick_id);
   return true;
 }
@@ -14341,7 +14361,7 @@ export async function postDistInvoice(inv, lines = []) {
     }
   }
   await supabase.from("dist_invoices").update({ posted: true, grand_total: gross }).eq("id", id);
-  if (inv.soId) await supabase.from("dist_sales_orders").update({ status: "invoiced" }).eq("id", inv.soId);
+  await advanceSoStatus(inv.soId, "invoiced");
   if (inv.soId) await logSoEvent(inv.soId, "invoiced", { actor: inv.createdBy || null, note: `Invoice ${head.invoice_number} raised`, payload: { invoiceId: id, invoiceNumber: head.invoice_number, total: gross } });
   try {
     const { data: cust2 } = head.customer_id ? await supabase.from("dist_contacts").select("display_name, company").eq("id", head.customer_id).single() : { data: null };
@@ -14393,7 +14413,7 @@ export async function deleteDistInvoice(invoiceId) {
   // Reset SO so it can be re-invoiced (if no other invoices remain for it).
   if (head.so_id) {
     const others = await fetchDistInvoices({}).catch(() => []);
-    if (!others.some(i => i.soId === head.so_id)) await supabase.from("dist_sales_orders").update({ status: "dispatched" }).eq("id", head.so_id);
+    if (!others.some(i => i.soId === head.so_id)) await advanceSoStatus(head.so_id, "dispatched");
   }
   return true;
 }
