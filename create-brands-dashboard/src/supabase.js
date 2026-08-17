@@ -7638,7 +7638,14 @@ const _invMap = (r) => ({
   allergens: r.allergens || [], reorderPoint: r.reorder_point != null ? Number(r.reorder_point) : null,
   siteId: r.site_id || null, archivedAt: r.archived_at || null,
 });
-function _invBody(p) {
+// INVCOLS 2026-08-17 — cogs_store_items and cogs_ck_items are NOT the same
+// shape. The CK table has allergens, reorder_point and site_id; the store table
+// has none of them. Writing them regardless made Postgres reject the entire
+// statement ("column does not exist"), so a store-item edit saved NOTHING —
+// including the price the person had just typed. Hence "price changes don't
+// persist" on store stock while CK saved fine.
+function _invBody(p, scope) {
+  const ck = scope === "ck";
   const b = {};
   if ("name" in p) b.name = p.name;
   if ("category" in p) b.category = p.category;
@@ -7649,9 +7656,12 @@ function _invBody(p) {
   if ("packPrice" in p) b.pack_price = p.packPrice === "" || p.packPrice == null ? null : Number(p.packPrice);
   if ("notes" in p) b.notes = p.notes;
   if ("location" in p) b.location = p.location || null;
-  if ("allergens" in p) b.allergens = Array.isArray(p.allergens) ? p.allergens : [];
-  if ("reorderPoint" in p) b.reorder_point = p.reorderPoint === "" || p.reorderPoint == null ? null : Number(p.reorderPoint);
-  if ("siteId" in p) b.site_id = p.siteId || null;
+  // allergens exists on the CK table only.
+  if (ck && "allergens" in p) b.allergens = Array.isArray(p.allergens) ? p.allergens : [];
+  // reorder_point exists on the CK table only.
+  if (ck && "reorderPoint" in p) b.reorder_point = p.reorderPoint === "" || p.reorderPoint == null ? null : Number(p.reorderPoint);
+  // site_id exists on the CK table only.
+  if (ck && "siteId" in p) b.site_id = p.siteId || null;
   // Warehouse link (Fix: previously unsaveable from the app — SQL-only).
   if ("distItemId" in p) b.dist_item_id = p.distItemId || null;
   return b;
@@ -7744,7 +7754,7 @@ export async function clearStoreItemOverride(storeId, itemId) {
 // scope: 'store' | 'ck'
 export async function addInventoryItem(scope, patch) {
   const table = scope === "ck" ? "cogs_ck_items" : "cogs_store_items";
-  const body = _invBody(patch);
+  const body = _invBody(patch, scope);
   if (!body.name) body.name = "New item";
   const { data, error } = await supabase.from(table).insert(body).select().single();
   if (error) throw error;
@@ -7752,7 +7762,7 @@ export async function addInventoryItem(scope, patch) {
 }
 export async function updateInventoryItem(scope, id, patch) {
   const table = scope === "ck" ? "cogs_ck_items" : "cogs_store_items";
-  const body = _invBody(patch); body.updated_at = new Date().toISOString();
+  const body = _invBody(patch, scope); body.updated_at = new Date().toISOString();
   const { error } = await supabase.from(table).update(body).eq("id", id);
   if (error) throw error;
 }
@@ -7771,7 +7781,7 @@ export async function bulkAddInventory(scope, rows, wipe = false) {
     if (delErr) throw delErr;
   }
   const bodies = rows.map(r => {
-    const b = _invBody(r);
+    const b = _invBody(r, scope);
     if (!b.name) b.name = "Unnamed item";
     return b;
   });
