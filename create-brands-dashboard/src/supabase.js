@@ -14005,14 +14005,26 @@ export async function fetchDistSalesOrderDetail(soId) {
     fetchDistInvoices({}).catch(() => []),
   ]);
   const soInvoices = invoices.filter(i => i.soId === soId);
+  // FULFILSTAGE 2026-08-18 — same rule as the sales-order list: only a POSTED
+  // invoice counts. A draft used to make this panel read "Invoiced" while the
+  // order's own status stayed at dispatched (postDistInvoice only advances it
+  // on posting), so the screen contradicted itself and the order looked stuck.
+  // Drafts are still returned in `invoices` so the panel can list them.
+  const postedInvoices = soInvoices.filter(i => i.posted);
   let paid = false;
-  if (soInvoices.length) {
-    const paidMap = await fetchDistInvoicePaidMap(soInvoices.map(i => i.id)).catch(() => new Map());
-    paid = soInvoices.every(i => { const gt = i.grandTotal != null && i.grandTotal > 0 ? i.grandTotal : 0; const p = paidMap.get(i.id) || 0; return gt > 0 ? p + 0.005 >= gt : false; });
+  if (postedInvoices.length) {
+    const paidMap = await fetchDistInvoicePaidMap(postedInvoices.map(i => i.id)).catch(() => new Map());
+    paid = postedInvoices.every(i => { const gt = i.grandTotal != null && i.grandTotal > 0 ? i.grandTotal : 0; const p = paidMap.get(i.id) || 0; return gt > 0 ? p + 0.005 >= gt : false; });
   }
   return {
     picks, dispatches, invoices: soInvoices,
-    status: { invoiced: soInvoices.length > 0, paid, picked: picks.length > 0, dispatched: dispatches.length > 0 },
+    status: {
+      invoiced: postedInvoices.length > 0,
+      // A draft exists but isn't posted — worth saying, because "Not Invoiced"
+      // alone would hide the fact that someone has already raised one.
+      invoiceDraft: postedInvoices.length === 0 && soInvoices.length > 0,
+      paid, picked: picks.length > 0, dispatched: dispatches.length > 0,
+    },
   };
 }
 

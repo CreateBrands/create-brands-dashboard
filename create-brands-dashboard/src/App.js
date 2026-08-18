@@ -11812,7 +11812,7 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
             <div className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">Status</div>
             <div className="divide-y divide-slate-800/60">
               <StatusRow label="Order" value={(so.status||"").toUpperCase()} tone={so.status==="dispatched"||so.status==="invoiced"?"text-emerald-300":"text-indigo-300"}/>
-              <StatusRow label="Invoice" value={detail ? (detail.status.invoiced ? "Invoiced" : "Not Invoiced") : "…"} tone={detail?.status.invoiced ? "text-emerald-300" : "text-slate-400"}/>
+              <StatusRow label="Invoice" value={detail ? (detail.status.invoiced ? "Invoiced" : detail.status.invoiceDraft ? "Draft — not posted" : "Not Invoiced") : "…"} tone={detail?.status.invoiced ? "text-emerald-300" : detail?.status.invoiceDraft ? "text-amber-300" : "text-slate-400"}/>
               <StatusRow label="Payment" value={detail ? (detail.status.paid ? "Paid" : "Unpaid") : "…"} tone={detail?.status.paid ? "text-emerald-300" : "text-amber-300"}/>
               <StatusRow label="Picked" value={detail ? (detail.status.picked ? "Picked" : "Pending") : "…"} tone={detail?.status.picked ? "text-emerald-300" : "text-amber-300"}/>
               <StatusRow label="Shipment" value={detail ? (detail.status.dispatched ? "Dispatched" : "Pending") : "…"} tone={detail?.status.dispatched ? "text-emerald-300" : "text-amber-300"}/>
@@ -66569,7 +66569,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: STOREPICK 2026-08-17d");
+      console.log("CB build: FULFILSTAGE 2026-08-18a");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
