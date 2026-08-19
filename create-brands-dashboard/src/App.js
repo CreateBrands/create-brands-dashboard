@@ -51488,8 +51488,12 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
                         </button>
                       ) : (
                         <button onClick={() => selectTxn(isSel ? null : t.id)}
-                          style={{ padding: "6px 11px", borderRadius: 9, border: "1px solid rgba(58,36,24,.20)", background: "transparent", color: "var(--brown,#844429)", fontSize: 11.5, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", fontFamily: "inherit" }}>
-                          Find &amp; match
+                          style={{ padding: "6px 11px", borderRadius: 9,
+                                   border: "1px solid " + (isSel ? "var(--brown,#844429)" : "rgba(58,36,24,.20)"),
+                                   background: isSel ? "var(--brown,#844429)" : "transparent",
+                                   color: isSel ? "#fff" : "var(--brown,#844429)",
+                                   fontSize: 11.5, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", fontFamily: "inherit" }}>
+                          {isSel ? "Close" : "Find & match"}
                         </button>
                       )}
                     </div>
@@ -51544,7 +51548,7 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+        <div className={selTxn ? "grid grid-cols-1 gap-4 items-start" : "hidden"}>
           {/* RECONSCOPE 2026-08-11 — the panels were pinned to 420/360/300px, so
               on a desktop screen both columns stopped a third of the way down
               and everything below sat empty while you scrolled inside two small
@@ -51553,24 +51557,11 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
               (The comment lives inside the div deliberately: directly after the
               `: (` of a ternary it is an expression, not a JSX child, and the
               parser rejects it.) */}
-          {/* Unmatched bank lines */}
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden flex flex-col lg:h-[calc(100vh-19rem)] lg:min-h-[420px]">
-            <div className="px-4 py-3 border-b border-slate-800 text-sm font-bold text-white flex items-center justify-between">
-              <span>Unmatched ({unmatched.length})</span>
-            </div>
-            <div className="flex-1 min-h-0 max-h-[60vh] lg:max-h-none overflow-y-auto divide-y divide-slate-800/50">
-              {unmatched.length===0 ? <div className="px-4 py-8 text-center text-xs text-slate-500">Everything's matched 🎉</div>
-                : unmatched.map(t => (
-                  <button key={t.id} onClick={()=>selectTxn(t.id)} className={`w-full text-left px-4 py-2.5 hover:bg-slate-800/50 ${selTxnId===t.id?"bg-indigo-950/30 border-l-2 border-indigo-500":""}`}>
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-sm text-slate-200 truncate">{t.description||"—"}</span>
-                      <span className={`text-sm font-semibold tabular-nums flex-shrink-0 ${t.amount<0?"text-red-400":"text-emerald-400"}`}>{money(t.amount)}</span>
-                    </div>
-                    <div className="text-[11px] text-slate-500">{t.txnDate}{t.storeId?` · ${storeName(t.storeId)}`:""}</div>
-                  </button>
-                ))}
-            </div>
-          </div>
+          {/* RECONONE 2026-08-19 — the standalone Unmatched list was a second
+              copy of the same 510 lines: you pick a line in the review list
+              above, so choosing one here as well was duplicate work on a
+              duplicate list. Gone. What remains is the picker, and only when a
+              line is actually being worked on. */}
 
           {/* Match builder */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden flex flex-col lg:h-[calc(100vh-19rem)] lg:min-h-[420px]">
@@ -67038,7 +67029,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: RECONDETAIL 2026-08-19f");
+      console.log("CB build: RECONONE 2026-08-19g");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
