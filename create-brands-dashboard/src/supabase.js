@@ -14185,8 +14185,18 @@ export async function advanceDistOrderToInvoice(soId, createdBy) {
   const dispatches = (await fetchDistDispatches({})).filter(d => d.soId === soId);
   const dispatch = dispatches[0];
   if (!dispatch) throw new Error("This order hasn't been dispatched yet.");
+  // FULFILSTAGE 2026-08-18 — only a POSTED invoice blocks a new one. Guarding
+  // on mere existence meant a DRAFT locked the order out of invoicing entirely:
+  // the panel said "Draft — not posted" while this button insisted the order
+  // was already invoiced, with no way forward from either.
   const existing = (await fetchDistInvoices({})).filter(i => i.soId === soId);
-  if (existing.length) throw new Error("This order has already been invoiced.");
+  if (existing.some(i => i.posted)) throw new Error("This order has already been invoiced.");
+  const draft = existing.find(i => !i.posted);
+  if (draft) {
+    // Point at the draft rather than silently creating a second one — two
+    // invoices for one order is worse than being told where the first is.
+    throw new Error(`A draft invoice (${draft.invoiceNumber || "unnumbered"}) already exists for this order. Open it from Invoices and post it.`);
+  }
   const lines = (dispatch.lines || []).map(l => ({ itemId: l.itemId, accountCode: "4000", qty: l.qty, unitPrice: l.unitPrice || 0, taxRateId: l.taxRateId || null }));
   if (!lines.length) throw new Error("This dispatch has no lines to invoice.");
   return postDistInvoice({ soId, dispatchId: dispatch.id, customerId: dispatch.customerId, createdBy, vatMode: "exclusive" }, lines);
