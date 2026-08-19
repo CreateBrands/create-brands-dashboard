@@ -51077,9 +51077,33 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
   // still works exactly as before.
   const splitSuggestions = useMemo(() => {
     if (!selTxn || target <= 0 || picked.length > 0) return [];
+    // Which candidates to search matters more than the search itself. Nearest
+    // by AMOUNT is the wrong window: a £2,000 payment split three ways has
+    // ~£600 parts, so the closest-40 excludes exactly what we need. The parts
+    // of one receipt share a SUPPLIER and a DATE, so rank by that instead and
+    // fall back to amount only to break ties.
+    const txnDay = selTxn.txnDate ? Date.parse(selTxn.txnDate) : null;
+    const words = (selTxn.description || "").toLowerCase().match(/[a-z]{4,}/g) || [];
+    const affinity = (c) => {
+      let score = 0;
+      const label = (c.label || "").toLowerCase();
+      // A supplier name shared with the bank narrative is the strongest signal.
+      if (words.some(w => label.includes(w))) score += 100;
+      const m = (c.label || "").match(/(\d{4}-\d{2}-\d{2})/);
+      if (m && txnDay != null) {
+        const days = Math.abs(Date.parse(m[1]) - txnDay) / 86400000;
+        if (days <= 3) score += 40;
+        else if (days <= 10) score += 25;
+        else if (days <= 31) score += 10;
+      }
+      return score;
+    };
     const pool = candidates
       .filter(c => Math.abs(c.amount) > 0.005 && Math.abs(c.amount) < target - 0.005)
+      .map(c => ({ c, s: affinity(c) }))
+      .sort((a, b) => b.s - a.s || Math.abs(b.c.amount) - Math.abs(a.c.amount))
       .slice(0, 40)
+      .map(x => x.c)
       .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
     if (pool.length < 2) return [];
 
@@ -66640,7 +66664,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: SPLITMATCH 2026-08-18c");
+      console.log("CB build: SPLITMATCH 2026-08-18d");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
