@@ -6912,6 +6912,82 @@ export async function fetchInvoicesForAccounts({ from, to } = {}) {
   }));
 }
 
+// ── BANK RULES (2026-08-19) ─────────────────────────────────────────────────
+// Most unreconciled lines have no document to match against — small repeat
+// supermarket runs, mostly. A rule states the intent once instead of matching
+// the same shop every week.
+export async function fetchBankRules() {
+  const { data, error } = await supabase.from("bank_rules").select("*").order("priority").order("name");
+  if (error) throw error;
+  return (data || []).map(r => ({
+    id: r.id, name: r.name, matchText: r.match_text, direction: r.direction || "spend",
+    accountId: r.account_id || null, minAmount: r.min_amount, maxAmount: r.max_amount,
+    category: r.category || "", storeId: r.store_id || null,
+    autoReconcile: !!r.auto_reconcile, priority: r.priority ?? 100, active: r.active !== false,
+  }));
+}
+
+export async function saveBankRule(rule) {
+  const row = {
+    id: rule.id || `rule-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
+    name: rule.name, match_text: rule.matchText, direction: rule.direction || "spend",
+    account_id: rule.accountId || null,
+    min_amount: rule.minAmount === "" || rule.minAmount == null ? null : Number(rule.minAmount),
+    max_amount: rule.maxAmount === "" || rule.maxAmount == null ? null : Number(rule.maxAmount),
+    category: rule.category || null, store_id: rule.storeId || null,
+    auto_reconcile: !!rule.autoReconcile, priority: Number(rule.priority) || 100,
+    active: rule.active !== false,
+  };
+  const { error } = await supabase.from("bank_rules").upsert(row);
+  if (error) throw error;
+  return row.id;
+}
+
+export async function deleteBankRule(id) {
+  const { error } = await supabase.from("bank_rules").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// Decide which rule claims a transaction. Pure and exported so the preview and
+// the apply use exactly the same logic — a preview that can disagree with what
+// actually happens is worse than no preview.
+export function ruleForTxn(txn, rules) {
+  const desc = (txn.description || "").toUpperCase();
+  const amt = Number(txn.amount) || 0;
+  return rules
+    .filter(r => r.active)
+    .filter(r => desc.includes((r.matchText || "").toUpperCase()))
+    .filter(r => r.direction === "any" || (r.direction === "spend" ? amt < 0 : amt > 0))
+    .filter(r => !r.accountId || r.accountId === txn.accountId)
+    .filter(r => r.minAmount == null || Math.abs(amt) >= Number(r.minAmount))
+    .filter(r => r.maxAmount == null || Math.abs(amt) <= Number(r.maxAmount))
+    .sort((a, b) => (a.priority ?? 100) - (b.priority ?? 100))[0] || null;
+}
+
+// Apply rules to unreconciled transactions. Returns what it did so the UI can
+// report it honestly rather than claiming success.
+export async function applyBankRules(txns, rules) {
+  const hits = [];
+  txns.forEach(t => {
+    if (t.reconciled) return;
+    const rule = ruleForTxn(t, rules);
+    if (rule) hits.push({ txn: t, rule });
+  });
+  let categorised = 0, reconciled = 0;
+  for (const { txn, rule } of hits) {
+    const patch = { rule_id: rule.id };
+    if (rule.category) patch.category = rule.category;
+    if (rule.storeId) patch.store_id = rule.storeId;
+    // Only a rule explicitly marked auto_reconcile closes a line off. The rest
+    // categorise and leave it visible, which is the safer default.
+    if (rule.autoReconcile) { patch.reconciled = true; reconciled++; }
+    else categorised++;
+    const { error } = await supabase.from("bank_transactions").update(patch).eq("id", txn.id);
+    if (error) throw error;
+  }
+  return { matched: hits.length, categorised, reconciled };
+}
+
 // ── Categorisation (Stage 2) ────────────────────────────────────────────────
 export async function fetchTxnCategories() {
   const { data, error } = await supabase.from("transaction_categories").select("*").order("sort_order");

@@ -105,6 +105,9 @@ import {
   listInvoices,
   getInvoiceWithLines,
   getInvoiceFileUrl,
+  // saveBankRule / deleteBankRule exist in supabase.js for the rule editor —
+  // not imported yet because this build only previews and applies.
+  fetchBankRules, ruleForTxn, applyBankRules,
   saveInvoiceLine,
   setInvoiceLineStatus,
   searchCogsIngredients,
@@ -50982,6 +50985,9 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
   const [expandedMatch, setExpandedMatch] = useState(null);
   const [candQ, setCandQ] = useState("");
   const [receipt, setReceipt] = useState(null);   // { url } of the image being viewed
+  const [rules, setRules] = useState([]);
+  const [showRules, setShowRules] = useState(false);
+  const [ruleMsg, setRuleMsg] = useState("");
   const [picked, setPicked] = useState([]);   // [{type,id,label,amount}]
   const [tab, setTab] = useState("invoice");   // invoice | payout | payroll
   const [busy, setBusy] = useState(false);
@@ -51302,6 +51308,42 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
     } catch (e) { alert("Couldn't open that receipt: " + e.message); }
   };
 
+  useEffect(() => { fetchBankRules().then(setRules).catch(() => {}); }, []);
+
+  // What the rules WOULD do, computed with the same function that does it —
+  // a preview that can disagree with the action is worse than none.
+  const rulePreview = useMemo(() => {
+    if (!rules.length) return { hits: [], byRule: [] };
+    const hits = unmatched.map(t => ({ t, r: ruleForTxn(t, rules) })).filter(x => x.r);
+    const m = new Map();
+    hits.forEach(({ t, r }) => {
+      if (!m.has(r.id)) m.set(r.id, { rule: r, count: 0, total: 0 });
+      const e = m.get(r.id); e.count++; e.total += Math.abs(t.amount);
+    });
+    return { hits, byRule: [...m.values()].sort((a, b) => b.count - a.count) };
+  }, [unmatched, rules]);
+
+  const runRules = async () => {
+    if (!rulePreview.hits.length) return;
+    setBusy(true); setRuleMsg("");
+    try {
+      const res = await applyBankRules(unmatched, rules);
+      setRuleMsg(`${res.matched} matched — ${res.categorised} categorised, ${res.reconciled} reconciled.`);
+      // applyBankRules writes straight to the database, so tell the parent to
+      // refresh the rows it changed. onUpdateTxn is the existing channel for
+      // that; passing the values we already wrote keeps the screen in step
+      // without a second round-trip.
+      if (onUpdateTxn) {
+        await Promise.all(rulePreview.hits.map(({ t, r }) =>
+          onUpdateTxn(t.id, {
+            ...(r.category ? { category: r.category } : {}),
+            ...(r.autoReconcile ? { reconciled: true } : {}),
+          })));
+      }
+    } catch (e) { setRuleMsg("Rules failed: " + e.message); }
+    setBusy(false);
+  };
+
   const unmatchTxn = async (txnId) => {
     setBusy(true);
     try {
@@ -51454,6 +51496,65 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
             classes: .emp-theme remaps slate/emerald, which turned the supplier
             names into pale text on a pale panel — unreadable at exactly the
             moment you need to check them. */}
+        {/* BANKRULES 2026-08-19 — most unmatched lines have no document to
+            match against; ~200 of them are the same handful of supermarkets
+            every week. A rule says it once. Nothing is applied until the
+            preview has been read: the counts below are computed with the exact
+            function that does the work. */}
+        {rulePreview.byRule.length > 0 && (
+          <div style={{ background: "var(--cream-card,#fff)", border: "1px solid rgba(58,36,24,.16)", borderRadius: 16, overflow: "hidden", marginBottom: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, padding: "12px 16px", background: "var(--cream-deep,#EFE3CB)", borderBottom: "1px solid rgba(58,36,24,.14)" }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "var(--ink,#3A2418)" }}>
+                  Rules would handle {rulePreview.hits.length} of {unmatched.length}
+                </div>
+                <div style={{ fontSize: 11.5, color: "var(--ink-soft,#6B5443)" }}>
+                  {rulePreview.hits.filter(h => h.r.autoReconcile).length} reconciled · {rulePreview.hits.filter(h => !h.r.autoReconcile).length} categorised for review
+                </div>
+              </div>
+              <span style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                <button onClick={() => setShowRules(v => !v)}
+                  style={{ padding: "7px 12px", borderRadius: 9, border: "1px solid rgba(58,36,24,.20)", background: "transparent", color: "var(--brown,#844429)", fontSize: 12, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                  {showRules ? "Hide rules" : "Rules"}
+                </button>
+                <button onClick={runRules} disabled={busy}
+                  style={{ padding: "7px 14px", borderRadius: 9, border: "none", background: "var(--brown,#844429)", color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer", opacity: busy ? .5 : 1, fontFamily: "inherit" }}>
+                  Apply rules
+                </button>
+              </span>
+            </div>
+
+            {showRules && (
+              <div>
+                {rulePreview.byRule.map(({ rule, count, total }) => (
+                  <div key={rule.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 16px", borderBottom: "1px solid rgba(58,36,24,.10)" }}>
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ fontSize: 13.5, fontWeight: 600, color: "var(--ink,#3A2418)" }}>{rule.name}</span>
+                      <span style={{ fontSize: 11.5, color: "var(--ink-soft,#6B5443)", marginLeft: 8 }}>
+                        contains “{rule.matchText}” → {rule.category || "no category"}
+                        {rule.maxAmount != null ? ` · up to ${money(rule.maxAmount)}` : ""}
+                      </span>
+                    </span>
+                    <span style={{ fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, flexShrink: 0,
+                                   background: rule.autoReconcile ? "#2F6B4F" : "var(--cream-deep,#EFE3CB)",
+                                   color: rule.autoReconcile ? "#fff" : "var(--ink-soft,#6B5443)" }}>
+                      {rule.autoReconcile ? "auto-reconcile" : "review"}
+                    </span>
+                    <span style={{ fontSize: 12.5, color: "var(--ink,#3A2418)", flexShrink: 0, minWidth: 130, textAlign: "right" }}>
+                      {count} line{count === 1 ? "" : "s"} · {money(total)}
+                    </span>
+                  </div>
+                ))}
+                <div style={{ padding: "10px 16px", fontSize: 11.5, color: "var(--ink-soft,#6B5443)" }}>
+                  Rules marked <b>review</b> only set the category and leave the line unmatched, so you can see what they did.
+                  Change a rule to auto-reconcile in Settings once you trust it.
+                </div>
+              </div>
+            )}
+            {ruleMsg && <div style={{ padding: "10px 16px", fontSize: 12.5, fontWeight: 600, color: "var(--brown,#844429)", borderTop: "1px solid rgba(58,36,24,.12)" }}>{ruleMsg}</div>}
+          </div>
+        )}
+
         <div style={{ background: "var(--cream,#FDF2E0)", border: "1px solid rgba(58,36,24,.16)", borderRadius: 16, overflow: "hidden", marginBottom: 16 }}>
           {/* Cream panel, cream-deep header: a white card glares against this
               theme, and the whole page is warm-toned. */}
@@ -67029,7 +67130,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: RECONONE 2026-08-19g");
+      console.log("CB build: BANKRULES 2026-08-19h");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
