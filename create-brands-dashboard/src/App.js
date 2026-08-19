@@ -51082,6 +51082,8 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
   // suggestions, which stay as the fallback for splits with no shared image.
   const receiptGroups = useMemo(() => {
     if (!selTxn || target <= 0 || picked.length > 0 || tab !== "invoice") return [];
+    // A receipt group is a real split, so it DOES outrank a coincidental exact
+    // single — but only when the group's supplier matches the bank line.
     const byImage = new Map();
     candidates.forEach(c => {
       if (!c.imagePath) return;
@@ -51093,8 +51095,16 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
       .slice(0, 3);
   }, [selTxn, target, candidates, picked.length, tab]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Is there a single candidate that already equals the bank line exactly?
+  // If so, no combination should be suggested: one exact invoice always beats
+  // a guessed batch, and offering both invites the wrong choice.
+  const hasExactSingle = useMemo(
+    () => !!selTxn && candidates.some(c => eq(c.amount, target)),
+    [selTxn, candidates, target]);
+
   const splitSuggestions = useMemo(() => {
     if (!selTxn || target <= 0 || picked.length > 0) return [];
+    if (hasExactSingle) return [];
     // Which candidates to search matters more than the search itself. Nearest
     // by AMOUNT is the wrong window: a £2,000 payment split three ways has
     // ~£600 parts, so the closest-40 excludes exactly what we need. The parts
@@ -51125,11 +51135,34 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
       .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
     if (pool.length < 2) return [];
 
+    // A combination is only a plausible split if its parts plausibly belong to
+    // the same purchase. Arithmetic alone produced Sainsbury's ≈ Lidl + Lidl +
+    // International Food, which adds up and means nothing. Require either a
+    // supplier word shared with the bank narrative, or all parts from the SAME
+    // supplier as each other.
+    const txnWords = (selTxn.description || "").toLowerCase().match(/[a-z]{4,}/g) || [];
+    const supplierOf = (c) => (c.label || "").split("·")[0].trim().toLowerCase();
+    const coherent = (combo) => {
+      const suppliers = new Set(combo.map(supplierOf));
+      if (suppliers.size === 1) return true;                       // one supplier, several claims
+      return combo.every(c => txnWords.some(w => supplierOf(c).includes(w)));
+    };
+
     const found = [];
+    const seen = new Set();
     const MAX_RESULTS = 4, MAX_DEPTH = 4;
     const walk = (start, chosen, sum) => {
       if (found.length >= MAX_RESULTS) return;
-      if (chosen.length >= 2 && eq(sum, target)) { found.push([...chosen]); return; }
+      if (chosen.length >= 2 && eq(sum, target)) {
+        if (!coherent(chosen)) return;
+        // Two combinations of identical amounts read as the same suggestion to
+        // a human even when the underlying rows differ — show one.
+        const sig = chosen.map(c => Math.abs(c.amount).toFixed(2)).sort().join("|");
+        if (seen.has(sig)) return;
+        seen.add(sig);
+        found.push([...chosen]);
+        return;
+      }
       if (chosen.length >= MAX_DEPTH || sum > target + 0.005) return;
       for (let i = start; i < pool.length; i++) {
         const c = pool[i];
@@ -66706,7 +66739,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: RECEIPTGROUP 2026-08-19a");
+      console.log("CB build: RECEIPTGROUP 2026-08-19b");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
