@@ -51429,17 +51429,19 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
             classes: .emp-theme remaps slate/emerald, which turned the supplier
             names into pale text on a pale panel — unreadable at exactly the
             moment you need to check them. */}
-        <div style={{ background: "var(--cream-card,#fff)", border: "1px solid rgba(58,36,24,.14)", borderRadius: 16, overflow: "hidden", marginBottom: 16 }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: "1px solid rgba(58,36,24,.14)", background: "var(--cream,#FDF2E0)" }}>
+        <div style={{ background: "var(--cream,#FDF2E0)", border: "1px solid rgba(58,36,24,.16)", borderRadius: 16, overflow: "hidden", marginBottom: 16 }}>
+          {/* Cream panel, cream-deep header: a white card glares against this
+              theme, and the whole page is warm-toned. */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: "1px solid rgba(58,36,24,.14)", background: "var(--cream-deep,#EFE3CB)" }}>
             <span style={{ fontSize: 14, fontWeight: 700, color: "var(--ink,#3A2418)" }}>Review and match ({unmatched.length})</span>
             <span style={{ fontSize: 11.5, color: "var(--ink-soft,#6B5443)" }}>{suggestions.size} suggested</span>
           </div>
           <div style={{ maxHeight: "34rem", overflowY: "auto" }}>
-            {unmatched.slice(0, 100).map(t => {
+            {unmatched.slice(0, 100).map((t, idx) => {
               const sug = suggestions.get(t.id);
               const isSel = selTxnId === t.id;
               return (
-                <div key={t.id} style={{ padding: "10px 12px", borderTop: "1px solid rgba(58,36,24,.10)", background: isSel ? "var(--cream-soft,#F5EBD9)" : "transparent" }}>
+                <div key={t.id} style={{ padding: "10px 12px", borderTop: "1px solid rgba(58,36,24,.10)", background: isSel ? "var(--cream-deep,#EFE3CB)" : (idx % 2 ? "rgba(255,255,255,.45)" : "transparent") }}>
                   <div style={{ display: "flex", alignItems: "stretch", gap: 8 }}>
                     {/* the bank line */}
                     <div style={{ flex: 1, minWidth: 0 }}>
@@ -51470,7 +51472,7 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
                     {/* the proposed match, level with the line it belongs to */}
                     <div style={{ flex: 1, minWidth: 0 }}>
                       {sug ? (
-                        <div style={{ borderRadius: 10, border: "1px solid " + (sug.confident ? "#9BBFA6" : "rgba(58,36,24,.18)"), background: sug.confident ? "#EAF3EC" : "var(--cream,#FDF2E0)", padding: "6px 12px" }}>
+                        <div style={{ borderRadius: 10, border: "1px solid " + (sug.confident ? "#7FA98C" : "rgba(58,36,24,.20)"), background: sug.confident ? "#E4F0E7" : "var(--cream-card,#fff)", padding: "6px 12px" }}>
                           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
                             <span style={{ fontSize: 13.5, color: "var(--ink,#3A2418)", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sug.label}</span>
                             <span style={{ fontSize: 13.5, fontWeight: 700, color: "#2F6B4F", flexShrink: 0 }}>{money(Math.abs(sug.amount))}</span>
@@ -52229,11 +52231,35 @@ function BankView({ bankTransactions = [], bankAccounts = [], stores = [], store
   const parseRows = (jsonRows) => {
     const out = [], errs = [];
     jsonRows.forEach((row, i) => {
-      const dateRaw = pick(row, ["Date", "Transaction Date", "Date Completed", "Date & Time", "Created At", "Timestamp"]);
+      // Transaction date first, export/creation timestamps LAST — a file
+      // carrying both would otherwise stamp every row with the export date,
+      // which is what the London Road import looks like (all rows 2026-08-19).
+      const dateRaw = pick(row, [
+        "Transaction Date", "Date", "Date Completed", "Value Date", "Posting Date",
+        "Booking Date", "Date & Time", "Completed Date", "Started Date",
+        "Timestamp", "Created At",
+      ]);
       const txnDate = parseUKDate(dateRaw);
       if (!txnDate) { if (Object.values(row).some(v => v !== "")) errs.push(`Row ${i+2}: couldn't read date ("${dateRaw}")`); return; }
       // (headers are reported once, below, when nothing parsed at all)
-      const desc = pick(row, ["Description", "Transaction Description", "Details", "Name", "Counterparty"]);
+      // STMTDESC 2026-08-19 — the London Road statement imported with EVERY
+      // description blank, because its column isn't in this list. Banks name it
+      // a dozen ways, so the list is wider now AND falls back to the longest
+      // text value in the row: an unrecognised header should still give the
+      // person something to read, not a dash.
+      let desc = pick(row, [
+        "Description", "Transaction Description", "Details", "Detail", "Name",
+        "Counterparty", "Merchant", "Merchant Name", "Payee", "Paid To", "To / From",
+        "Narrative", "Memo", "Particulars", "Transaction", "Transaction Details",
+        "Reference1", "Description1", "Beneficiary", "Remitter", "Payment Details",
+      ]);
+      if (!desc) {
+        const moneyish = /(amount|balance|debit|credit|value|fee|total|date|time)/i;
+        const best = Object.entries(row)
+          .filter(([k, v]) => typeof v === "string" && v.trim().length > 3 && !moneyish.test(k))
+          .sort((a, b) => String(b[1]).length - String(a[1]).length)[0];
+        desc = best ? String(best[1]).trim() : "";
+      }
       const ref  = pick(row, ["Reference", "Payment Reference", "Notes", "ID", "Transaction ID"]);
       const cat  = pick(row, ["Category", "Type", "Payment Type", "Transaction Type"]);
       const bal  = num(pick(row, ["Balance", "Running Balance"]));
@@ -66902,7 +66928,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: XEROVIEW 2026-08-19d");
+      console.log("CB build: STMTDESC 2026-08-19e");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
