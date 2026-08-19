@@ -14191,11 +14191,14 @@ export async function advanceDistOrderToInvoice(soId, createdBy) {
   // was already invoiced, with no way forward from either.
   const existing = (await fetchDistInvoices({})).filter(i => i.soId === soId);
   if (existing.some(i => i.posted)) throw new Error("This order has already been invoiced.");
-  const draft = existing.find(i => !i.posted);
-  if (draft) {
-    // Point at the draft rather than silently creating a second one — two
-    // invoices for one order is worse than being told where the first is.
-    throw new Error(`A draft invoice (${draft.invoiceNumber || "unnumbered"}) already exists for this order. Open it from Invoices and post it.`);
+  // An unposted invoice is NOT a draft — there is no draft concept here.
+  // postDistInvoice writes the header, then the lines, then flips posted in one
+  // call, so posted=false means that call died partway and left a half-written
+  // invoice. There is no "post" button to send anyone to; the invoice has to be
+  // removed and raised again.
+  const halfWritten = existing.find(i => !i.posted);
+  if (halfWritten) {
+    throw new Error(`Invoice ${halfWritten.invoiceNumber || "(unnumbered)"} for this order was never completed — it failed partway through. Delete it from Invoices, then invoice the order again.`);
   }
   const lines = (dispatch.lines || []).map(l => ({ itemId: l.itemId, accountCode: "4000", qty: l.qty, unitPrice: l.unitPrice || 0, taxRateId: l.taxRateId || null }));
   if (!lines.length) throw new Error("This dispatch has no lines to invoice.");
@@ -14339,13 +14342,24 @@ export async function fetchDistInvoices({ customerId, status } = {}) {
   return (data || []).map(mapDistInvoice);
 }
 // Shared net/vat computation honouring vat mode + document discount (% or value).
+// DISTVAT 2026-08-18 — this used to call distTaxPercent once PER LINE, each a
+// separate round-trip. On a 100-line invoice that's 100 serial requests before
+// postDistInvoice reaches its final statement, so a closed tab or a dropped
+// connection left the invoice half-written: lines saved, grand_total never set,
+// posted never flipped. Four real invoices (59–100 lines) are stuck that way.
+// One query for the whole rate table instead — there are only a handful.
 async function distDocNetVat({ lines, vatMode, discountValue, discountType }) {
   const inclusive = vatMode === "inclusive";
   const dVal = Number(discountValue) || 0;
   const dType = discountType || "percent";
+  const rateMap = new Map();
+  try {
+    const { data } = await supabase.from("dist_tax_rates").select("id, percent");
+    (data || []).forEach(r => rateMap.set(r.id, Number(r.percent) || 0));
+  } catch { /* fall through: everything reads as 0% rather than failing */ }
   const base = [];
   for (const l of lines) {
-    const pct = await distTaxPercent(l.taxRateId);
+    const pct = l.taxRateId ? (rateMap.get(l.taxRateId) || 0) : 0;
     const raw = (Number(l.qty) || 0) * (Number(l.unitPrice) || 0);
     const net = inclusive && pct > 0 ? raw / (1 + pct / 100) : raw;
     base.push({ pct, net });
@@ -14397,7 +14411,11 @@ export async function postDistInvoice(inv, lines = []) {
       } catch (e) { /* best-effort */ }
     }
   }
-  await supabase.from("dist_invoices").update({ posted: true, grand_total: gross }).eq("id", id);
+  // Everything after the line inserts is now cheap, but flip posted regardless
+  // of what the journal did — a half-posted invoice is far worse than one whose
+  // ledger entry needs re-running, and the journal above is already best-effort.
+  const { error: postErr } = await supabase.from("dist_invoices").update({ posted: true, grand_total: gross }).eq("id", id);
+  if (postErr) throw postErr;
   await advanceSoStatus(inv.soId, "invoiced");
   if (inv.soId) await logSoEvent(inv.soId, "invoiced", { actor: inv.createdBy || null, note: `Invoice ${head.invoice_number} raised`, payload: { invoiceId: id, invoiceNumber: head.invoice_number, total: gross } });
   try {
