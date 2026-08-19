@@ -6894,7 +6894,7 @@ export async function fetchEodForAccounts({ from, to } = {}) {
 // Invoices within a date range (supplier costs).
 export async function fetchInvoicesForAccounts({ from, to } = {}) {
   let q = supabase.from("invoices")
-    .select("id, entity, entity_id, supplier_name, invoice_number, invoice_date, total_ex_vat, total_vat, status, payment_status, category")
+    .select("id, entity, entity_id, supplier_name, invoice_number, invoice_date, total_ex_vat, total_vat, status, payment_status, category, image_path")
     .order("invoice_date", { ascending: false });
   if (from) q = q.gte("invoice_date", from);
   if (to)   q = q.lte("invoice_date", to);
@@ -6905,6 +6905,10 @@ export async function fetchInvoicesForAccounts({ from, to } = {}) {
     number: i.invoice_number || "", date: i.invoice_date,
     totalExVat: Number(i.total_ex_vat) || 0, totalVat: Number(i.total_vat) || 0,
     status: i.status || "", paymentStatus: i.payment_status || "unpaid", category: i.category || "",
+    // Split siblings share one receipt image — that link is how reconcile can
+    // offer "these 2 claims are one purchase" with certainty instead of
+    // guessing which amounts happen to add up.
+    imagePath: i.image_path || null,
   }));
 }
 
@@ -10568,7 +10572,7 @@ export async function runBatchMatchInvoiceLines({ dryRun = false, limit = 5000, 
 }
 // ===== end BATCHMATCH V1 ==================================================
 
-export async function synthesizeInvoiceFromItems({ items, storeId, vendor, receiptUrl }) {
+export async function synthesizeInvoiceFromItems({ items, storeId, vendor, receiptUrl, amount, invoiceDate }) {
   const clean = (items || []).filter(it => (it.desc || "").trim());
   if (!clean.length) return { error: "no items" };
   // invoices.id is text with no default — we must supply it. entity_id is a FK
@@ -10584,6 +10588,16 @@ export async function synthesizeInvoiceFromItems({ items, storeId, vendor, recei
     id: invId, entity: "shop", entity_id: entityId,
     supplier_name: vendor || null,
     image_path: receiptUrl || null, status: "uploaded",
+    // RECONTOTAL 2026-08-19 — a synthesized invoice used to carry NO total, so
+    // every receipt-derived invoice showed as £0.00 in reconcile, could never
+    // auto-match and added nothing to a picked total (84 of 84 were zero).
+    // The claim amount is what actually left the bank, so it's the figure to
+    // reconcile against; the parsed line items are only ever an approximation
+    // of it, so they're the fallback rather than the source.
+    total_ex_vat: (amount != null && Number(amount) > 0)
+      ? Number(amount)
+      : (items || []).reduce((a, it) => a + (Number(it.qty || 1) * Number(it.price || 0)), 0) || null,
+    invoice_date: invoiceDate || null,
   });
   if (iErr) return { error: "header: " + iErr.message };
   const rows = clean.map((it, idx) => {
@@ -10639,7 +10653,10 @@ export async function fetchDeliverySourceReceipt(deliveryId) {
   if (!claim.invoice_id && claim.reference) {
     const items = parseReferenceToItems(claim.reference);
     if (items.length) {
-      const res = await synthesizeInvoiceFromItems({ items, storeId: claim.store_id, vendor: claim.vendor, receiptUrl: claim.receipt_url });
+      const res = await synthesizeInvoiceFromItems({
+        items, storeId: claim.store_id, vendor: claim.vendor, receiptUrl: claim.receipt_url,
+        amount: claim.amount, invoiceDate: claim.expense_date,
+      });
       if (res && res.invId) {
         await supabase.from("expense_claims").update({ invoice_id: res.invId }).eq("id", claim.id);
         claim.invoice_id = res.invId;

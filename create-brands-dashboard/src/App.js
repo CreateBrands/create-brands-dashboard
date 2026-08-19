@@ -51044,7 +51044,7 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
     if (tab === "invoice") {
       return invoices
         .filter(i => !usedSourceIds.has("invoice:"+i.id))
-        .map(i => ({ type:"invoice", id:i.id, label:`${i.supplier||i.entity||"Invoice"} · ${i.date||""}`, amount:i.totalExVat }))
+        .map(i => ({ type:"invoice", id:i.id, label:`${i.supplier||i.entity||"Invoice"} · ${i.date||""}`, amount:i.totalExVat, imagePath:i.imagePath }))
         .sort((a,b)=>Math.abs(a.amount-want)-Math.abs(b.amount-want));
     }
     if (tab === "payout") {
@@ -51075,6 +51075,24 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
   // than four shops, or one whose parts are nowhere near the total, won't be
   // found — that's an acceptable miss for a suggestion, and manual ticking
   // still works exactly as before.
+  // RECEIPTGROUP 2026-08-19 — a purchase split across shops becomes several
+  // claims that all reference the SAME receipt image. That link is recorded, so
+  // reconcile shouldn't be guessing which amounts happen to add up: it can say
+  // with certainty "these are one receipt". Shown above the arithmetic
+  // suggestions, which stay as the fallback for splits with no shared image.
+  const receiptGroups = useMemo(() => {
+    if (!selTxn || target <= 0 || picked.length > 0 || tab !== "invoice") return [];
+    const byImage = new Map();
+    candidates.forEach(c => {
+      if (!c.imagePath) return;
+      if (!byImage.has(c.imagePath)) byImage.set(c.imagePath, []);
+      byImage.get(c.imagePath).push(c);
+    });
+    return [...byImage.values()]
+      .filter(g => g.length >= 2 && eq(g.reduce((a, c) => a + Math.abs(c.amount), 0), target))
+      .slice(0, 3);
+  }, [selTxn, target, candidates, picked.length, tab]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const splitSuggestions = useMemo(() => {
     if (!selTxn || target <= 0 || picked.length > 0) return [];
     // Which candidates to search matters more than the search itself. Nearest
@@ -51341,6 +51359,30 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
                     selection already in progress. One tap fills the picks; the
                     normal Confirm flow then applies, so nothing is committed
                     without a human agreeing to it. */}
+                {receiptGroups.length > 0 && (
+                  <div className="border-b border-slate-800 bg-emerald-950/20">
+                    <div className="px-4 pt-3 pb-1 text-[11px] font-bold uppercase tracking-wide text-emerald-400">
+                      One receipt, split across stores
+                    </div>
+                    {receiptGroups.map((g, i) => (
+                      <button key={i} onClick={() => setPicked(g)}
+                        className="w-full text-left px-4 py-2.5 hover:bg-slate-800/50 border-t border-slate-800/40 first:border-t-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-semibold text-emerald-300">{g.length} claims · same receipt</span>
+                          <span className="text-xs tabular-nums text-emerald-400 font-semibold">
+                            {money(g.reduce((a,c)=>a+Math.abs(c.amount),0))}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
+                          {g.map(c => `${c.label} (${money(Math.abs(c.amount))})`).join("  +  ")}
+                        </div>
+                      </button>
+                    ))}
+                    <div className="px-4 pb-2 text-[10.5px] text-slate-500">
+                      These claims share one receipt image, so they were one purchase.
+                    </div>
+                  </div>
+                )}
                 {splitSuggestions.length > 0 && (
                   <div className="border-b border-slate-800 bg-slate-950/40">
                     <div className="px-4 pt-3 pb-1 text-[11px] font-bold uppercase tracking-wide text-amber-400/90">
@@ -66664,7 +66706,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: SPLITMATCH 2026-08-18d");
+      console.log("CB build: RECEIPTGROUP 2026-08-19a");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
