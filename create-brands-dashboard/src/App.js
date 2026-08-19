@@ -51186,6 +51186,79 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
   };
   const selectTxn = (id) => { setSelTxnId(id); setPicked([]); };
 
+  // XEROVIEW 2026-08-19 — a suggestion for every unmatched line at once, so the
+  // screen can show bank line and proposed match side by side with an OK
+  // button, the way Xero does. Previously you had to select a line, wait, read
+  // a list and tick — one transaction at a time across 255 of them.
+  //
+  // Only EXACT amount matches are suggested. A confident one-click OK has to be
+  // right; anything less certain belongs behind Find & match, where a person
+  // looks at it. Ties are broken by supplier words shared with the bank
+  // narrative, then by date proximity.
+  const suggestions = useMemo(() => {
+    const byAmount = new Map();
+    const pools = [
+      ...invoices.filter(i => !usedSourceIds.has("invoice:" + i.id))
+        .map(i => ({ type:"invoice", id:i.id, label:`${i.supplier||i.entity||"Invoice"} · ${i.date||""}`, amount:i.totalExVat, date:i.date })),
+      ...payouts.filter(p => !usedSourceIds.has("payout:" + p.id))
+        .map(p => ({ type:"payout", id:p.id, label:`Flipdish payout · ${storeName(p.storeId)||""} ${p.date}`, amount:p.amount, date:p.date })),
+      ...payruns.filter(p => !usedSourceIds.has("payroll:" + p.id))
+        .map(p => ({ type:"payroll", id:p.id, label:`${p.employeeName||"Payroll"} · ${p.periodEnd||""}`, amount:p.amount, date:p.periodEnd })),
+    ];
+    pools.forEach(c => {
+      const k = Math.abs(Number(c.amount) || 0).toFixed(2);
+      if (k === "0.00") return;
+      if (!byAmount.has(k)) byAmount.set(k, []);
+      byAmount.get(k).push(c);
+    });
+
+    const out = new Map();
+    const claimed = new Set();
+    unmatched.forEach(t => {
+      const bucket = byAmount.get(Math.abs(t.amount).toFixed(2));
+      if (!bucket) return;
+      const free = bucket.filter(c => !claimed.has(c.type + ":" + c.id));
+      if (!free.length) return;
+      // Compare on letters only: the bank writes "SAINSBURYS", the invoice says
+      // "Sainsbury's", and an apostrophe shouldn't cost a correct match its
+      // confidence.
+      const flat = (x) => (x || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const words = (t.description || "").toLowerCase().match(/[a-z]{4,}/g) || [];
+      const day = t.txnDate ? Date.parse(t.txnDate) : null;
+      const score = (c) => {
+        let sc = 0;
+        const label = flat(c.label);
+        if (words.some(w => label.includes(flat(w)))) sc += 100;
+        if (day != null && c.date) {
+          const d = Math.abs(Date.parse(c.date) - day) / 86400000;
+          if (d <= 2) sc += 40; else if (d <= 7) sc += 25; else if (d <= 31) sc += 10;
+        }
+        return sc;
+      };
+      const best = [...free].sort((a, b) => score(b) - score(a))[0];
+      // One source can only pay one line, so reserve it as we go.
+      claimed.add(best.type + ":" + best.id);
+      out.set(t.id, { ...best, confident: score(best) >= 100 });
+    });
+    return out;
+  }, [unmatched, invoices, payouts, payruns, usedSourceIds]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Accept one suggested match without opening the picker.
+  const acceptSuggestion = async (t) => {
+    const sug = suggestions.get(t.id);
+    if (!sug || busy) return;
+    setBusy(true);
+    try {
+      const saved = await addReconMatches([{ bankTxnId: t.id, sourceType: sug.type, sourceId: sug.id, sourceLabel: sug.label, amount: Math.abs(sug.amount), auto: false }]);
+      setMatches(m => [...m, ...saved]);
+      await onUpdateTxn(t.id, { reconciled: true });
+      if (onInvoicePaid && sug.type === "invoice") {
+        await onInvoicePaid(sug.id, t.txnDate || new Date().toISOString().split("T")[0]);
+      }
+    } catch (e) { alert("Couldn't save match: " + e.message); }
+    setBusy(false);
+  };
+
   const confirmMatch = async () => {
     if (!selTxn || picked.length===0) return;
     setBusy(true);
@@ -51343,6 +51416,92 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
       {autoMsg && <div className="rounded-xl px-4 py-2.5 text-xs bg-emerald-950/20 border border-emerald-800/40 text-emerald-300">{autoMsg}</div>}
 
       {loading ? <div className="text-center py-12 text-sm text-slate-500">Loading reconciliation…</div> : (
+        <>
+        {/* XEROVIEW 2026-08-19 — bank line on the left, its proposed match level
+            with it on the right, OK between them. You work straight down the
+            page accepting matches instead of selecting a line, waiting, reading
+            a list and ticking, 255 times. Lines with no confident suggestion
+            fall through to Find & match, which opens the picker below.
+            (The comment sits inside the fragment deliberately: directly after
+            the `: (` of a ternary it is an expression, and the parser rejects
+            it.) */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden mb-4">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800">
+            <span className="text-sm font-bold text-white">Review and match ({unmatched.length})</span>
+            <span className="text-[11px] text-slate-500">{suggestions.size} suggested</span>
+          </div>
+          <div className="max-h-[34rem] overflow-y-auto divide-y divide-slate-800/60">
+            {unmatched.slice(0, 100).map(t => {
+              const sug = suggestions.get(t.id);
+              const isSel = selTxnId === t.id;
+              return (
+                <div key={t.id} className={`px-3 py-2.5 ${isSel ? "bg-slate-800/40" : ""}`}>
+                  <div className="flex items-stretch gap-2">
+                    {/* the bank line */}
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[13px] text-white truncate">{t.description || "—"}</div>
+                      <div className="text-[11px] text-slate-500">
+                        {t.txnDate}{t.storeId ? ` · ${storeName(t.storeId)}` : ""}
+                      </div>
+                    </div>
+                    <div className={`text-[13px] font-semibold tabular-nums self-center flex-shrink-0 ${t.amount < 0 ? "text-rose-400" : "text-emerald-400"}`}>
+                      {money(Math.abs(t.amount))}
+                    </div>
+
+                    {/* the action, between the two sides */}
+                    <div className="flex items-center flex-shrink-0 px-1">
+                      {sug ? (
+                        <button onClick={() => acceptSuggestion(t)} disabled={busy}
+                          title="Accept this match"
+                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-xs font-bold text-white">
+                          OK
+                        </button>
+                      ) : (
+                        <button onClick={() => selectTxn(isSel ? null : t.id)}
+                          className="px-2.5 py-1.5 rounded-lg border border-slate-700 hover:border-slate-500 text-[11px] font-semibold text-slate-400 hover:text-white whitespace-nowrap">
+                          Find &amp; match
+                        </button>
+                      )}
+                    </div>
+
+                    {/* the proposed match, level with the line it belongs to */}
+                    <div className="flex-1 min-w-0">
+                      {sug ? (
+                        <div className="rounded-lg border border-emerald-800/50 bg-emerald-950/25 px-3 py-1.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[13px] text-emerald-100 truncate">{sug.label}</span>
+                            <span className="text-[13px] tabular-nums text-emerald-300 font-semibold flex-shrink-0">{money(Math.abs(sug.amount))}</span>
+                          </div>
+                          {/* An amount can tie by coincidence. Say when the
+                              supplier agrees too, so a careful eye can tell the
+                              difference before clicking OK. */}
+                          <div className="text-[10.5px] text-emerald-500/80">
+                            {sug.confident ? "amount and supplier match" : "amount matches — check the supplier"}
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-[11.5px] text-slate-600 px-1 py-2">No exact match found</div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Find & match opens the full picker inline, under its line. */}
+                  {isSel && !sug && (
+                    <div className="mt-2 text-[11px] text-slate-500 px-1">
+                      Pick the matching records below — the panel is showing candidates for this line.
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {unmatched.length > 100 && (
+              <div className="px-4 py-3 text-[11px] text-slate-500 text-center">
+                Showing the first 100 of {unmatched.length}. Match these and the rest follow.
+              </div>
+            )}
+          </div>
+        </div>
+
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
           {/* RECONSCOPE 2026-08-11 — the panels were pinned to 420/360/300px, so
               on a desktop screen both columns stopped a third of the way down
@@ -51469,6 +51628,7 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
             )}
           </div>
         </div>
+        </>
       )}
 
       {/* Matched list */}
@@ -66739,7 +66899,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: RECEIPTGROUP 2026-08-19b");
+      console.log("CB build: XEROVIEW 2026-08-19c");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
