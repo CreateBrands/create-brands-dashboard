@@ -51425,69 +51425,72 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
             (The comment sits inside the fragment deliberately: directly after
             the `: (` of a ternary it is an expression, and the parser rejects
             it.) */}
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden mb-4">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800">
-            <span className="text-sm font-bold text-white">Review and match ({unmatched.length})</span>
-            <span className="text-[11px] text-slate-500">{suggestions.size} suggested</span>
+        {/* Written with the cream theme's own tokens rather than Tailwind slate
+            classes: .emp-theme remaps slate/emerald, which turned the supplier
+            names into pale text on a pale panel — unreadable at exactly the
+            moment you need to check them. */}
+        <div style={{ background: "var(--cream-card,#fff)", border: "1px solid rgba(58,36,24,.14)", borderRadius: 16, overflow: "hidden", marginBottom: 16 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: "1px solid rgba(58,36,24,.14)", background: "var(--cream,#FDF2E0)" }}>
+            <span style={{ fontSize: 14, fontWeight: 700, color: "var(--ink,#3A2418)" }}>Review and match ({unmatched.length})</span>
+            <span style={{ fontSize: 11.5, color: "var(--ink-soft,#6B5443)" }}>{suggestions.size} suggested</span>
           </div>
-          <div className="max-h-[34rem] overflow-y-auto divide-y divide-slate-800/60">
+          <div style={{ maxHeight: "34rem", overflowY: "auto" }}>
             {unmatched.slice(0, 100).map(t => {
               const sug = suggestions.get(t.id);
               const isSel = selTxnId === t.id;
               return (
-                <div key={t.id} className={`px-3 py-2.5 ${isSel ? "bg-slate-800/40" : ""}`}>
-                  <div className="flex items-stretch gap-2">
+                <div key={t.id} style={{ padding: "10px 12px", borderTop: "1px solid rgba(58,36,24,.10)", background: isSel ? "var(--cream-soft,#F5EBD9)" : "transparent" }}>
+                  <div style={{ display: "flex", alignItems: "stretch", gap: 8 }}>
                     {/* the bank line */}
-                    <div className="flex-1 min-w-0">
-                      <div className="text-[13px] text-white truncate">{t.description || "—"}</div>
-                      <div className="text-[11px] text-slate-500">
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 13.5, color: "var(--ink,#3A2418)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.description || "—"}</div>
+                      <div style={{ fontSize: 11.5, color: "var(--ink-soft,#6B5443)" }}>
                         {t.txnDate}{t.storeId ? ` · ${storeName(t.storeId)}` : ""}
                       </div>
                     </div>
-                    <div className={`text-[13px] font-semibold tabular-nums self-center flex-shrink-0 ${t.amount < 0 ? "text-rose-400" : "text-emerald-400"}`}>
+                    <div style={{ fontSize: 13.5, fontWeight: 600, alignSelf: "center", flexShrink: 0, color: t.amount < 0 ? "#A33A28" : "#2F6B4F" }}>
                       {money(Math.abs(t.amount))}
                     </div>
 
                     {/* the action, between the two sides */}
-                    <div className="flex items-center flex-shrink-0 px-1">
+                    <div style={{ display: "flex", alignItems: "center", flexShrink: 0, padding: "0 4px" }}>
                       {sug ? (
-                        <button onClick={() => acceptSuggestion(t)} disabled={busy}
-                          title="Accept this match"
-                          className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-xs font-bold text-white">
+                        <button onClick={() => acceptSuggestion(t)} disabled={busy} title="Accept this match"
+                          style={{ padding: "6px 14px", borderRadius: 9, border: "none", background: "#2F6B4F", color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer", opacity: busy ? .5 : 1, fontFamily: "inherit" }}>
                           OK
                         </button>
                       ) : (
                         <button onClick={() => selectTxn(isSel ? null : t.id)}
-                          className="px-2.5 py-1.5 rounded-lg border border-slate-700 hover:border-slate-500 text-[11px] font-semibold text-slate-400 hover:text-white whitespace-nowrap">
+                          style={{ padding: "6px 11px", borderRadius: 9, border: "1px solid rgba(58,36,24,.20)", background: "transparent", color: "var(--brown,#844429)", fontSize: 11.5, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", fontFamily: "inherit" }}>
                           Find &amp; match
                         </button>
                       )}
                     </div>
 
                     {/* the proposed match, level with the line it belongs to */}
-                    <div className="flex-1 min-w-0">
+                    <div style={{ flex: 1, minWidth: 0 }}>
                       {sug ? (
-                        <div className="rounded-lg border border-emerald-800/50 bg-emerald-950/25 px-3 py-1.5">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-[13px] text-emerald-100 truncate">{sug.label}</span>
-                            <span className="text-[13px] tabular-nums text-emerald-300 font-semibold flex-shrink-0">{money(Math.abs(sug.amount))}</span>
+                        <div style={{ borderRadius: 10, border: "1px solid " + (sug.confident ? "#9BBFA6" : "rgba(58,36,24,.18)"), background: sug.confident ? "#EAF3EC" : "var(--cream,#FDF2E0)", padding: "6px 12px" }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                            <span style={{ fontSize: 13.5, color: "var(--ink,#3A2418)", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sug.label}</span>
+                            <span style={{ fontSize: 13.5, fontWeight: 700, color: "#2F6B4F", flexShrink: 0 }}>{money(Math.abs(sug.amount))}</span>
                           </div>
                           {/* An amount can tie by coincidence. Say when the
                               supplier agrees too, so a careful eye can tell the
                               difference before clicking OK. */}
-                          <div className="text-[10.5px] text-emerald-500/80">
+                          <div style={{ fontSize: 11, color: sug.confident ? "#2F6B4F" : "#8A5A2C", fontWeight: 600 }}>
                             {sug.confident ? "amount and supplier match" : "amount matches — check the supplier"}
                           </div>
                         </div>
                       ) : (
-                        <div className="text-[11.5px] text-slate-600 px-1 py-2">No exact match found</div>
+                        <div style={{ fontSize: 11.5, color: "var(--ink-soft,#6B5443)", opacity: .7, padding: "8px 4px" }}>No exact match found</div>
                       )}
                     </div>
                   </div>
 
                   {/* Find & match opens the full picker inline, under its line. */}
                   {isSel && !sug && (
-                    <div className="mt-2 text-[11px] text-slate-500 px-1">
+                    <div style={{ marginTop: 8, fontSize: 11.5, color: "var(--ink-soft,#6B5443)", padding: "0 4px" }}>
                       Pick the matching records below — the panel is showing candidates for this line.
                     </div>
                   )}
@@ -51495,7 +51498,7 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
               );
             })}
             {unmatched.length > 100 && (
-              <div className="px-4 py-3 text-[11px] text-slate-500 text-center">
+              <div style={{ padding: "12px 16px", fontSize: 11.5, color: "var(--ink-soft,#6B5443)", textAlign: "center", borderTop: "1px solid rgba(58,36,24,.10)" }}>
                 Showing the first 100 of {unmatched.length}. Match these and the rest follow.
               </div>
             )}
@@ -66899,7 +66902,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: XEROVIEW 2026-08-19c");
+      console.log("CB build: XEROVIEW 2026-08-19d");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
