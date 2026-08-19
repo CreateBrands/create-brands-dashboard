@@ -51063,6 +51063,47 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
   const target = selTxn ? Math.abs(selTxn.amount) : 0;
   const ties = selTxn && eq(pickedTotal, target);
 
+  // SPLITMATCH 2026-08-18 — one purchase split across several shops arrives as
+  // one bank payment and several invoices, so nothing equals the transaction
+  // and auto-match (strictly 1:1) skips it. Finding the two or three that add
+  // up meant scanning the list by eye. This does it: an exact-subset search
+  // over the candidates for the selected line.
+  //
+  // Bounded deliberately. Subset-sum is exponential, and this runs on every
+  // selection in the browser: nearest 40 candidates by amount, combinations of
+  // 2–4, and a hard cap on how many results are collected. A split across more
+  // than four shops, or one whose parts are nowhere near the total, won't be
+  // found — that's an acceptable miss for a suggestion, and manual ticking
+  // still works exactly as before.
+  const splitSuggestions = useMemo(() => {
+    if (!selTxn || target <= 0 || picked.length > 0) return [];
+    const pool = candidates
+      .filter(c => Math.abs(c.amount) > 0.005 && Math.abs(c.amount) < target - 0.005)
+      .slice(0, 40)
+      .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+    if (pool.length < 2) return [];
+
+    const found = [];
+    const MAX_RESULTS = 4, MAX_DEPTH = 4;
+    const walk = (start, chosen, sum) => {
+      if (found.length >= MAX_RESULTS) return;
+      if (chosen.length >= 2 && eq(sum, target)) { found.push([...chosen]); return; }
+      if (chosen.length >= MAX_DEPTH || sum > target + 0.005) return;
+      for (let i = start; i < pool.length; i++) {
+        const c = pool[i];
+        const next = sum + Math.abs(c.amount);
+        if (next > target + 0.005) continue;   // sorted desc, but keep scanning smaller ones
+        chosen.push(c);
+        walk(i + 1, chosen, next);
+        chosen.pop();
+        if (found.length >= MAX_RESULTS) return;
+      }
+    };
+    walk(0, [], 0);
+    // Fewest parts first — a 2-way split is far likelier than a 4-way one.
+    return found.sort((a, b) => a.length - b.length);
+  }, [selTxn, target, candidates, picked.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const togglePick = (c) => {
     setPicked(prev => prev.some(p=>p.type===c.type&&p.id===c.id)
       ? prev.filter(p=>!(p.type===c.type&&p.id===c.id))
@@ -51270,6 +51311,36 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
                     <button key={k} onClick={()=>setTab(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${tab===k?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400"}`}>{l}</button>
                   ))}
                 </div>
+                {/* SPLITMATCH 2026-08-18 — combinations that add up to this bank
+                    line exactly. Shown only when nothing is picked yet, so it
+                    suggests a starting point rather than second-guessing a
+                    selection already in progress. One tap fills the picks; the
+                    normal Confirm flow then applies, so nothing is committed
+                    without a human agreeing to it. */}
+                {splitSuggestions.length > 0 && (
+                  <div className="border-b border-slate-800 bg-slate-950/40">
+                    <div className="px-4 pt-3 pb-1 text-[11px] font-bold uppercase tracking-wide text-amber-400/90">
+                      Split purchase? {splitSuggestions.length === 1 ? "This adds up" : "These add up"}
+                    </div>
+                    {splitSuggestions.map((combo, idx) => (
+                      <button key={idx} onClick={() => setPicked(combo)}
+                        className="w-full text-left px-4 py-2.5 hover:bg-slate-800/50 border-t border-slate-800/40 first:border-t-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-semibold text-amber-300">{combo.length} items</span>
+                          <span className="text-xs tabular-nums text-emerald-400 font-semibold">
+                            {money(combo.reduce((a,c)=>a+Math.abs(c.amount),0))}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
+                          {combo.map(c => `${c.label} (${money(Math.abs(c.amount))})`).join("  +  ")}
+                        </div>
+                      </button>
+                    ))}
+                    <div className="px-4 pb-2 text-[10.5px] text-slate-500">
+                      Tap one to select those lines — check them before confirming.
+                    </div>
+                  </div>
+                )}
                 <div className="flex-1 min-h-0 max-h-[45vh] lg:max-h-none overflow-y-auto divide-y divide-slate-800/40">
                   {candidates.length===0 ? <div className="px-4 py-6 text-center text-xs text-slate-500">No {tab} candidates in range.</div>
                     : candidates.slice(0,60).map(c => {
@@ -66569,7 +66640,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: DISTVAT 2026-08-18b");
+      console.log("CB build: SPLITMATCH 2026-08-18c");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
