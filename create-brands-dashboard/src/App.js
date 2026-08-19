@@ -33020,6 +33020,7 @@ function MultiStorePicker({ stores = [], brands = [], value, onChange, allowAll 
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [openGroups, setOpenGroups] = useState({});
+  const [candQ, setCandQ] = useState("");
   const ref = useRef(null);
   const searchRef = useRef(null);
 
@@ -50978,6 +50979,9 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
   const [payruns, setPayruns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selTxnId, setSelTxnId] = useState(null);
+  const [expandedMatch, setExpandedMatch] = useState(null);
+  const [candQ, setCandQ] = useState("");
+  const [receipt, setReceipt] = useState(null);   // { url } of the image being viewed
   const [picked, setPicked] = useState([]);   // [{type,id,label,amount}]
   const [tab, setTab] = useState("invoice");   // invoice | payout | payroll
   const [busy, setBusy] = useState(false);
@@ -51058,6 +51062,16 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
       .map(p => ({ type:"payroll", id:p.id, label:`${p.employeeName||"Payroll"} · ${p.periodEnd||""}`, amount:p.amount }))
       .sort((a,b)=>Math.abs(a.amount-want)-Math.abs(b.amount-want));
   }, [selTxn, tab, invoices, payouts, payruns, usedSourceIds]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Search matches the label or the amount — people look for either
+  // ("sainsbury", or "117.79" when they have the figure in front of them).
+  const shownCandidates = useMemo(() => {
+    const term = candQ.trim().toLowerCase();
+    if (!term) return candidates;
+    return candidates.filter(c =>
+      (c.label || "").toLowerCase().includes(term) ||
+      Math.abs(c.amount).toFixed(2).includes(term));
+  }, [candidates, candQ]);
 
   const pickedTotal = picked.reduce((a,p)=>a+Math.abs(p.amount),0);
   const target = selTxn ? Math.abs(selTxn.amount) : 0;
@@ -51277,6 +51291,17 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
     setBusy(false);
   };
 
+  // Open the scanned receipt behind an invoice. Storage is private, so the
+  // path has to be signed before it can be displayed.
+  const openReceipt = async (path) => {
+    if (!path) return;
+    try {
+      const url = await getInvoiceFileUrl(path);
+      if (url) setReceipt({ url });
+      else alert("Couldn't open that receipt image.");
+    } catch (e) { alert("Couldn't open that receipt: " + e.message); }
+  };
+
   const unmatchTxn = async (txnId) => {
     setBusy(true);
     try {
@@ -51480,8 +51505,20 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
                           {/* An amount can tie by coincidence. Say when the
                               supplier agrees too, so a careful eye can tell the
                               difference before clicking OK. */}
-                          <div style={{ fontSize: 11, color: sug.confident ? "#2F6B4F" : "#8A5A2C", fontWeight: 600 }}>
-                            {sug.confident ? "amount and supplier match" : "amount matches — check the supplier"}
+                          <div style={{ fontSize: 11, color: sug.confident ? "#2F6B4F" : "#8A5A2C", fontWeight: 600, display: "flex", alignItems: "center", gap: 10 }}>
+                            <span>{sug.confident ? "amount and supplier match" : "amount matches — check the supplier"}</span>
+                            {/* The receipt is the evidence. Being able to look at
+                                it before clicking OK is the difference between
+                                accepting a match and guessing at one. */}
+                            {(() => {
+                              const inv = sug.type === "invoice" ? invoices.find(x => x.id === sug.id) : null;
+                              return inv?.imagePath ? (
+                                <button onClick={(e) => { e.stopPropagation(); openReceipt(inv.imagePath); }}
+                                  style={{ background: "none", border: "none", padding: 0, cursor: "pointer", fontSize: 11, fontWeight: 700, color: "var(--brown,#844429)", textDecoration: "underline" }}>
+                                  view receipt
+                                </button>
+                              ) : null;
+                            })()}
                           </div>
                         </div>
                       ) : (
@@ -51604,15 +51641,31 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
                     </div>
                   </div>
                 )}
+                {/* Search the candidates. With hundreds of invoices, scrolling to
+                    find one supplier is the slowest part of a manual match. */}
+                <div style={{ padding: "8px 12px", borderBottom: "1px solid rgba(58,36,24,.12)" }}>
+                  <input value={candQ} onChange={e => setCandQ(e.target.value)}
+                    placeholder="Search supplier or amount…"
+                    style={{ width: "100%", boxSizing: "border-box", padding: "7px 10px", borderRadius: 8,
+                             border: "1px solid rgba(58,36,24,.18)", background: "var(--cream-card,#fff)",
+                             color: "var(--ink,#3A2418)", fontSize: 13, fontFamily: "inherit", outline: "none" }} />
+                </div>
                 <div className="flex-1 min-h-0 max-h-[45vh] lg:max-h-none overflow-y-auto divide-y divide-slate-800/40">
-                  {candidates.length===0 ? <div className="px-4 py-6 text-center text-xs text-slate-500">No {tab} candidates in range.</div>
-                    : candidates.slice(0,60).map(c => {
+                  {shownCandidates.length===0 ? <div className="px-4 py-6 text-center text-xs text-slate-500">{candQ ? `No ${tab} candidate matches “${candQ}”.` : `No ${tab} candidates in range.`}</div>
+                    : shownCandidates.slice(0,60).map(c => {
                       const on = picked.some(p=>p.type===c.type&&p.id===c.id);
                       const exact = eq(c.amount, Math.abs(selTxn.amount));
                       return (
                         <button key={c.type+c.id} onClick={()=>togglePick(c)} className={`w-full flex items-center gap-2 px-4 py-2 text-left hover:bg-slate-800/50 ${on?"bg-emerald-950/20":""}`}>
                           <span className={`w-4 h-4 rounded flex-shrink-0 border flex items-center justify-center ${on?"bg-emerald-600 border-emerald-500":"border-slate-600"}`}>{on&&<CheckCircle size={11} className="text-white"/>}</span>
                           <span className="text-xs text-slate-300 flex-1 truncate">{c.label}{exact&&<span className="text-emerald-500 ml-1">· exact</span>}</span>
+                          {(() => {
+                            const inv = c.type === "invoice" ? invoices.find(x => x.id === c.id) : null;
+                            return inv?.imagePath ? (
+                              <span onClick={(e) => { e.stopPropagation(); openReceipt(inv.imagePath); }}
+                                className="text-[10.5px] font-bold text-indigo-400 hover:text-indigo-300 flex-shrink-0 cursor-pointer">receipt</span>
+                            ) : null;
+                          })()}
                           <span className="text-xs font-semibold text-slate-200 tabular-nums">{money(c.amount)}</span>
                         </button>
                       );
@@ -51636,25 +51689,82 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
         </>
       )}
 
+      {receipt && (
+        <div onClick={() => setReceipt(null)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.72)", zIndex: 80, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+          <div onClick={e => e.stopPropagation()} style={{ maxWidth: "min(900px, 92vw)", maxHeight: "88vh", display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", color: "#fff", fontSize: 13 }}>
+              <span>Receipt</span>
+              <span>
+                <a href={receipt.url} target="_blank" rel="noreferrer" style={{ color: "#93b8ff", marginRight: 14 }}>open full size</a>
+                <button onClick={() => setReceipt(null)} style={{ background: "none", border: "none", color: "#fff", fontSize: 20, cursor: "pointer", lineHeight: 1 }}>×</button>
+              </span>
+            </div>
+            <img src={receipt.url} alt="Receipt" style={{ maxWidth: "100%", maxHeight: "80vh", objectFit: "contain", borderRadius: 10, background: "#fff" }} />
+          </div>
+        </div>
+      )}
+
       {/* Matched list */}
       {matchedList.length>0 && (
         <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden">
           <div className="px-4 py-3 border-b border-slate-800 text-sm font-bold text-white">Matched ({matchedList.length})</div>
           <div className="divide-y divide-slate-800/50 flex-1 min-h-0 max-h-[50vh] lg:max-h-none overflow-y-auto">
-            {matchedList.map(({txnId, txn, items, total}) => (
-              <div key={txnId} className="px-4 py-2.5">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="text-sm text-slate-200 truncate">{txn.description||"—"} <span className="text-[10px] text-slate-500">{txn.txnDate}</span></div>
-                    <div className="text-[11px] text-slate-500">{items.map(i=>i.sourceLabel).join(" + ")} {items.length>1?`(${items.length} items)`:""}{items.some(i=>i.auto)&&<span className="text-emerald-500 ml-1">· auto</span>}</div>
+            {matchedList.map(({txnId, txn, items, total}) => {
+              const open = expandedMatch === txnId;
+              // A match you can't inspect is a match you can't trust. Expanding
+              // shows every source that made it up, whether the total agrees
+              // with the bank line, and a way through to the underlying record.
+              const drift = Math.abs(Math.abs(txn.amount) - total);
+              return (
+                <div key={txnId} className="px-4 py-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <button onClick={() => setExpandedMatch(open ? null : txnId)} className="min-w-0 text-left flex-1">
+                      <div className="text-sm text-slate-200 truncate">
+                        <span className="text-slate-500 mr-1">{open ? "▾" : "▸"}</span>
+                        {txn.description||"—"} <span className="text-[10px] text-slate-500">{txn.txnDate}</span>
+                      </div>
+                      <div className="text-[11px] text-slate-500 truncate">{items.map(i=>i.sourceLabel).join(" + ")} {items.length>1?`(${items.length} items)`:""}{items.some(i=>i.auto)&&<span className="text-emerald-500 ml-1">· auto</span>}</div>
+                    </button>
+                    <div className="flex items-center gap-2 flex-shrink-0">
+                      {drift > 0.005 && <span className="text-[10px] font-bold text-amber-400" title="The matched sources don't add up to the bank amount">±{money(drift)}</span>}
+                      <span className="text-sm font-semibold tabular-nums text-slate-300">{money(total)}</span>
+                      <button onClick={()=>unmatchTxn(txnId)} disabled={busy} className="text-slate-600 hover:text-red-400 text-xs">unmatch</button>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    <span className="text-sm font-semibold tabular-nums text-slate-300">{money(total)}</span>
-                    <button onClick={()=>unmatchTxn(txnId)} disabled={busy} className="text-slate-600 hover:text-red-400 text-xs">unmatch</button>
-                  </div>
+
+                  {open && (
+                    <div className="mt-2 ml-4 border-l-2 border-slate-800 pl-3 space-y-1.5">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-slate-500">Bank line</span>
+                        <span className="tabular-nums text-slate-300">{money(Math.abs(txn.amount))}</span>
+                      </div>
+                      {items.map((it, i) => {
+                        const inv = it.sourceType === "invoice" ? invoices.find(x => x.id === it.sourceId) : null;
+                        return (
+                          <div key={i} className="flex items-center justify-between gap-2 text-[11.5px]">
+                            <span className="text-slate-300 truncate">
+                              <span className="text-slate-600 mr-1">{it.sourceType}</span>{it.sourceLabel}
+                            </span>
+                            <span className="flex items-center gap-2 flex-shrink-0">
+                              {inv?.imagePath && (
+                                <button onClick={() => openReceipt(inv.imagePath)}
+                                  className="text-[10.5px] text-indigo-400 hover:text-indigo-300 font-semibold">receipt</button>
+                              )}
+                              <span className="tabular-nums text-slate-400">{money(Math.abs(it.amount))}</span>
+                            </span>
+                          </div>
+                        );
+                      })}
+                      <div className={`flex items-center justify-between text-[11px] font-semibold pt-1 border-t border-slate-800 ${drift > 0.005 ? "text-amber-400" : "text-emerald-400"}`}>
+                        <span>{drift > 0.005 ? "Doesn't balance" : "Balances"}</span>
+                        <span className="tabular-nums">{money(total)}</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -66928,7 +67038,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: STMTDESC 2026-08-19e");
+      console.log("CB build: RECONDETAIL 2026-08-19f");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
