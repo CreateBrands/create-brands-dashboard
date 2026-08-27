@@ -13860,6 +13860,55 @@ async function advanceSoStatus(soId, next) {
   await supabase.from("dist_sales_orders").update({ status: next }).eq("id", soId);
 }
 
+// APPROVAL RACE — a manager approving an order Distribution has ALREADY fulfilled.
+//
+// Distribution deliberately sees orders before approval (ORDERVIS) and can pick,
+// dispatch and invoice them. Those steps go through advanceSoStatus, which
+// refuses to move an order backwards. The manager's Approve button did not:
+// it wrote "confirmed" directly. So an order sitting at `invoiced` (stage 5),
+// approved from a screen loaded days earlier, was forced back to `confirmed`
+// (stage 2) and reappeared in Distribution's active list as if it were new
+// work — and got picked and sent a second time.
+//
+// This re-reads the order at the moment of approval and refuses to reverse it.
+// Approving something already fulfilled is a no-op with a clear message, not a
+// silent rewind.
+export async function approveSalesOrder(id, actor) {
+  const { data: cur } = await supabase.from("dist_sales_orders")
+    .select("status, so_number").eq("id", id).maybeSingle();
+  if (!cur) throw new Error("That order no longer exists.");
+
+  if (cur.status === "cancelled") {
+    throw new Error(`${cur.so_number} was cancelled — it can't be approved.`);
+  }
+
+  const stage = SO_STAGE[cur.status] ?? -1;
+  const confirmedStage = SO_STAGE.confirmed;
+
+  // Already at or beyond confirmed: Distribution has it. Record the approval
+  // for the audit trail, but do NOT touch the status.
+  if (stage >= confirmedStage) {
+    await logSoEvent(id, "approved", {
+      actor,
+      note: `Approved after fulfilment had already started — status left at ${cur.status}`,
+      payload: { from: cur.status, to: cur.status, late: true },
+    });
+    return {
+      ok: true,
+      changed: false,
+      status: cur.status,
+      message: `${cur.so_number} had already moved to ${cur.status} — Distribution is handling it. Your approval was recorded but the order was not sent back.`,
+    };
+  }
+
+  await supabase.from("dist_sales_orders").update({ status: "confirmed" }).eq("id", id);
+  await logSoEvent(id, "approved", {
+    actor, note: "Order approved",
+    payload: { from: cur.status, to: "confirmed" },
+  });
+  return { ok: true, changed: true, status: "confirmed" };
+}
+
 export async function setDistSalesOrderStatus(id, status, actor) {
   const { data: before } = await supabase.from("dist_sales_orders").select("status").eq("id", id).maybeSingle();
   const { error } = await supabase.from("dist_sales_orders").update({ status }).eq("id", id);
