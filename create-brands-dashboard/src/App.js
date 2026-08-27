@@ -67371,7 +67371,14 @@ export default function App() {
   // Entity landing: which brand/entity the user has stepped into. null = show
   // the entity picker (tiles). Persisted so a refresh keeps you in the entity.
   const [selectedEntityBrand, setSelectedEntityBrand] = useState(() => {
-    try { return localStorage.getItem("cb_entity") || null; } catch { return null; }
+    try {
+      // Only restore an entity for a session that is still logged in. Without
+      // this, a phone already stuck inside an entity stays stuck: the entity is
+      // restored before login, so logging out and back in lands in the same
+      // dead workspace. No session means start at the entity picker.
+      if (!localStorage.getItem("cb_session")) { localStorage.removeItem("cb_entity"); return null; }
+      return localStorage.getItem("cb_entity") || null;
+    } catch { return null; }
   });
   const chooseEntity = useCallback((brandId) => {
     setSelectedEntityBrand(brandId);
@@ -67741,6 +67748,17 @@ export default function App() {
     setImpersonatedUserId(null);
     localStorage.removeItem("cb_session");
     localStorage.removeItem("cb_impersonate");
+    // Logging out must also clear WHERE the last person was, not just who they
+    // were. cb_entity survived logout, so a phone last used inside the Finance
+    // workspace dropped the next person straight back into it — and a store
+    // manager can see nothing there, so they got the finance tab bar over an
+    // empty page with no way out. Same for the remembered view and the #v/
+    // hash, which would otherwise restore a page the new user cannot open.
+    localStorage.removeItem("cb_entity");
+    localStorage.removeItem("cb.lastView");
+    setSelectedEntityBrand(null);
+    setActiveView("dashboard");
+    try { window.history.replaceState(null, "", window.location.pathname + window.location.search); } catch {}
     setLoginMode("employee");
   }, []);
 
