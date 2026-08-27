@@ -17370,6 +17370,11 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [amendments, setAmendments] = useState({});     // soId -> latest amendment
   const [amendOrder, setAmendOrder] = useState(null);   // { so, lines:[{itemId,qty,unitPrice,taxRateId}] } being edited
+  // Expanding a past order to see what was actually on it. Lines are fetched
+  // once per order and cached, so reopening is instant and we do not hammer
+  // the API while someone scrolls their history.
+  const [openOrderId, setOpenOrderId] = useState(null);
+  const [orderLines, setOrderLines] = useState({});      // soId -> lines | "loading" | "error"
   const [amendNote, setAmendNote] = useState("");
   const [amendBusy, setAmendBusy] = useState(false);
   const [addSearch, setAddSearch] = useState("");
@@ -17570,6 +17575,19 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
     /* eslint-disable-next-line */
   }, [historyOpen]);
   const itemName = (id) => cleanName(catalogue.find(c => c.id === id)?.name || id);
+  const toggleOrderOpen = async (so) => {
+    if (openOrderId === so.id) { setOpenOrderId(null); return; }
+    setOpenOrderId(so.id);
+    if (orderLines[so.id] && orderLines[so.id] !== "error") return;
+    setOrderLines(m => ({ ...m, [so.id]: "loading" }));
+    try {
+      const lines = await fetchOrderLinesLight(so.id);
+      setOrderLines(m => ({ ...m, [so.id]: lines }));
+    } catch {
+      setOrderLines(m => ({ ...m, [so.id]: "error" }));
+    }
+  };
+
   const openAmend = async (so) => {
     try {
       const lines = await fetchOrderLinesLight(so.id);
@@ -18663,16 +18681,47 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
                 return (
                   <div key={o.id} className="rounded-2xl p-4 space-y-2" style={{ backgroundColor: "#FDF8EF", border: `1px solid ${pending ? "#E0A664" : "#E8DCC6"}` }}>
                     <div className="flex items-center justify-between gap-2">
-                      <div>
-                        <div className="text-sm font-bold" style={{ color: "#3A2E26" }}>{o.soNumber} <span className="font-normal" style={{ color: "#9A8770" }}>· {o.orderDate}</span></div>
-                        <div className="text-[11px]" style={{ color: "#9A8770" }}>{priceFmt(o.total || 0)} excl. VAT</div>
-                      </div>
+                      <button onClick={() => toggleOrderOpen(o)} className="flex items-center gap-2 text-left min-w-0 flex-1">
+                        <span className="text-xs flex-shrink-0" style={{ color: "#9A8770", transform: openOrderId === o.id ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>
+                        <span className="min-w-0">
+                          <span className="block text-sm font-bold" style={{ color: "#3A2E26" }}>{o.soNumber} <span className="font-normal" style={{ color: "#9A8770" }}>· {o.orderDate}</span></span>
+                          <span className="block text-[11px]" style={{ color: "#9A8770" }}>
+                            {(() => {
+                              // The stored header total is often 0 on these orders, so once we
+                              // have the lines we show what they actually add up to rather than
+                              // repeating a zero that tells nobody anything.
+                              const ls = orderLines[o.id];
+                              const stored = Number(o.total) || 0;
+                              if (Array.isArray(ls)) {
+                                const sum = ls.reduce((t, l) => t + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0);
+                                return `${priceFmt(sum || stored)} excl. VAT · ${ls.length} line${ls.length === 1 ? "" : "s"}`;
+                              }
+                              return `${priceFmt(stored)} excl. VAT · tap to see items`;
+                            })()}
+                          </span>
+                        </span>
+                      </button>
                       <span className="px-2 py-1 rounded-lg text-[10px] font-bold flex-shrink-0" style={
                         pending ? { background: "#FFF6E8", color: "#B45309" } :
                         o.status === "dispatched" ? { background: "#EAF3E7", color: "#3F6B3A" } :
                         { background: "#F3EADA", color: "#6B5D4F" }
                       }>{pending ? "CHANGES AWAITING APPROVAL" : (o.status || "").toUpperCase()}</span>
                     </div>
+                    {openOrderId === o.id && (
+                      <div className="rounded-xl overflow-hidden" style={{ border: "1px solid #E8DCC6", backgroundColor: "#FFFFFF" }}>
+                        {orderLines[o.id] === "loading" && <div className="px-3 py-3 text-[12px]" style={{ color: "#9A8770" }}>Loading items…</div>}
+                        {orderLines[o.id] === "error" && <div className="px-3 py-3 text-[12px]" style={{ color: "#B3261E" }}>Couldn't load the items on this order.</div>}
+                        {Array.isArray(orderLines[o.id]) && orderLines[o.id].length === 0 && <div className="px-3 py-3 text-[12px]" style={{ color: "#9A8770" }}>No items recorded on this order.</div>}
+                        {Array.isArray(orderLines[o.id]) && orderLines[o.id].map((l, li) => (
+                          <div key={l.itemId + ":" + li} className="px-3 py-2 flex items-baseline gap-3" style={{ borderTop: li ? "1px solid #F0E7D6" : "none" }}>
+                            <span className="text-sm font-bold tabular-nums flex-shrink-0" style={{ color: "#844429", minWidth: 30 }}>{l.qty}×</span>
+                            <span className="text-sm min-w-0 flex-1" style={{ color: "#3A2E26" }}>{itemName(l.itemId)}</span>
+                            <span className="text-[11px] tabular-nums flex-shrink-0" style={{ color: "#9A8770" }}>{priceFmt(l.unitPrice)}</span>
+                            <span className="text-[12px] font-semibold tabular-nums flex-shrink-0" style={{ color: "#3A2E26", minWidth: 54, textAlign: "right" }}>{priceFmt((Number(l.qty) || 0) * (Number(l.unitPrice) || 0))}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     {am && am.status === "rejected" && <div className="text-[11px] rounded-lg px-2 py-1" style={{ background: "#FBEAEA", color: "#B3261E" }}>Change request declined{am.decisionNote ? `: ${am.decisionNote}` : ""} — the original order stands.</div>}
                     {am && am.status === "approved" && <div className="text-[11px] rounded-lg px-2 py-1" style={{ background: "#EAF3E7", color: "#3F6B3A" }}>Changes approved by {am.decidedBy || "Distribution"} — the order below is the updated version.</div>}
                     {pending && (
