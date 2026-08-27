@@ -40254,9 +40254,14 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
               <div className="flex flex-wrap gap-2 mt-2.5 text-[11px]">
                 <span className="px-2 py-1 rounded-lg font-bold" style={{ background: "#EFE3CC", color: C.ink }}>{lines.length} lines · £{dispVal.toFixed(2)} dispatched</span>
                 <span className="px-2 py-1 rounded-lg font-bold" style={{ background: totalVal < dispVal - 0.005 ? "#FBEAD5" : "#E7F0E4", color: totalVal < dispVal - 0.005 ? "#9A5B00" : "#3F6B3A" }}>Receiving £{totalVal.toFixed(2)}</span>
-                <span className="px-2 py-1 rounded-lg font-bold" style={{ background: linked === lines.length ? "#E7F0E4" : "#FBEAD5", color: linked === lines.length ? "#3F6B3A" : "#9A5B00" }}>
-                  {linked}/{lines.length} linked to stock{linked < lines.length ? " — unlinked lines book the purchase but won't move inventory. Match items in the expense/invoice review (matches are remembered)." : ""}
+                <span className="px-2 py-1 rounded-lg font-bold whitespace-nowrap" style={{ background: linked === lines.length ? "#E7F0E4" : "#FBEAD5", color: linked === lines.length ? "#3F6B3A" : "#9A5B00" }}>
+                  {linked}/{lines.length} linked to stock
                 </span>
+                {linked < lines.length && (
+                  <span className="basis-full text-[11px] leading-snug font-semibold" style={{ color: "#9A5B00" }}>
+                    Unlinked lines book the purchase but won't move inventory — match them in the expense review.
+                  </span>
+                )}
                 {receipt && receipt.claim && (
                   <button onClick={() => setShowReceipt(true)} className="px-2 py-1 rounded-lg font-bold flex items-center gap-1" style={{ background: "#EAF0F6", color: "#185FA5" }}>
                     <FileText size={12}/> View original receipt
@@ -40273,9 +40278,9 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
             const short = got < disp; const unlinked = !l.store_item_id;
             return (
               <div key={l.id} className="rounded-xl p-3" style={{ background: C.cream, border:`1px solid ${short?C.amber:C.line}` }}>
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                   <div className="min-w-0">
-                    <div className="text-sm font-bold truncate" style={{ color: C.ink }}>{l.item_name}</div>
+                    <div className="text-sm font-bold break-words" style={{ color: C.ink }}>{l.item_name}</div>
                     {l.line_note && <div className="text-[11px] italic font-semibold" style={{ color: "#9A5B00" }}>📝 {l.line_note}</div>}
                     <div className="text-[11px]" style={{ color: C.inkFaint }}>
                       Expected: {disp}
@@ -40286,15 +40291,15 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
                       {unlinked && <span style={{ color: C.inkFaint }}> · ⚠ not linked</span>}
                     </div>
                   </div>
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-2 flex-shrink-0">
                     <button onClick={() => { const v = Math.max(0, got - 1); setRecv(r => ({ ...r, [l.id]: v })); persistLine(l.id, v); }}
-                      className="w-7 h-7 rounded-lg text-lg font-bold" style={{ background:"#F3EADA", color: C.ink }}>−</button>
-                    <input type="number" value={recv[l.id] ?? ""}
+                      className="w-10 h-10 sm:w-8 sm:h-8 rounded-lg text-xl sm:text-lg font-bold flex-shrink-0" style={{ background:"#F3EADA", color: C.ink }}>−</button>
+                    <input type="number" inputMode="decimal" value={recv[l.id] ?? ""}
                       onChange={e => { setRecv(r => ({ ...r, [l.id]: e.target.value })); setRecorded(r => ({ ...r, [l.id]: false })); }}
                       onBlur={e => persistLine(l.id, e.target.value)}
-                      className="w-14 text-center rounded-lg py-1 text-sm font-bold" style={{ background:"#fff", border:`1px solid ${C.line}`, color: C.ink }}/>
+                      className="w-16 sm:w-14 text-center rounded-lg py-2 sm:py-1 text-base sm:text-sm font-bold flex-shrink-0" style={{ background:"#fff", border:`1px solid ${C.line}`, color: C.ink }}/>
                     <button onClick={() => { const v = got + 1; setRecv(r => ({ ...r, [l.id]: v })); persistLine(l.id, v); }}
-                      className="w-7 h-7 rounded-lg text-lg font-bold" style={{ background:"#F3EADA", color: C.ink }}>+</button>
+                      className="w-10 h-10 sm:w-8 sm:h-8 rounded-lg text-xl sm:text-lg font-bold flex-shrink-0" style={{ background:"#F3EADA", color: C.ink }}>+</button>
                     {(() => {
                       // RECVFIX: green means SAVED, not "the box happens to hold
                       // the dispatched number". Prefilling made every untouched
@@ -40304,7 +40309,7 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
                       return (
                         <button disabled={saving}
                           onClick={() => { const v = isSaved ? 0 : disp; setRecv(r => ({ ...r, [l.id]: v })); persistLine(l.id, isSaved ? null : v); }}
-                          className="ml-1 px-3 h-7 rounded-lg text-xs font-bold flex items-center gap-1 whitespace-nowrap disabled:opacity-60"
+                          className="ml-auto sm:ml-1 px-4 h-10 sm:h-8 rounded-lg text-sm sm:text-xs font-bold flex items-center justify-center gap-1 whitespace-nowrap disabled:opacity-60 flex-shrink-0"
                           style={isSaved ? { background: C.green, color: "#fff" } : { background: "#F3EADA", color: C.accent, border: `1px solid ${C.line}` }}>
                           {saving ? "saving…" : isSaved ? <><CheckCircle size={13}/> Received</> : "Mark received"}
                         </button>
