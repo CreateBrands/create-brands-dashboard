@@ -2618,6 +2618,22 @@ export async function runFlipdishSync(body = {}) {
   if (process.env.REACT_APP_SYNC_SECRET) headers["x-sync-secret"] = process.env.REACT_APP_SYNC_SECRET;
   const { data, error } = await supabase.functions.invoke("flipdish-rms-sync", { body, headers });
   if (error) throw error;
+  // Bring the APP's own sales across at the same time. Tablet and CB POS orders
+  // live in menu_orders and only reach flipdish_sales via the 06:55 cron, so
+  // without this the dashboard is a day behind for everything sold on our own
+  // tills while Flipdish figures are current. Same rolling window as above.
+  // Best-effort: a bridge problem must never break the Flipdish sync.
+  try {
+    const to = (body && body.to) ? body.to : new Date().toISOString().slice(0, 10);
+    const from = (body && body.from) ? body.from
+      : new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+    const { error: bridgeErr } = await supabase.rpc("sync_menu_orders_to_sales", { p_from: from, p_to: to });
+    if (bridgeErr) console.error("app sales bridge failed:", bridgeErr.message);
+    // Rebuild the aggregates for the same window, using the existing RPC with
+    // its real signature (a date range, not a day count).
+    else await supabase.rpc("rebuild_store_day_aggregates", { p_from: from, p_to: to });
+  } catch (e) { console.error("app sales bridge failed:", e.message); }
+
   // PHASE 4: after sales land, deplete store stock from those sales (best-effort,
   // idempotent per sale). Never let a depletion issue break the sync itself.
   try { await _depleteAllStoresRollingWindow(body); } catch (e) { console.error("post-sync depletion failed:", e.message); }
@@ -13858,55 +13874,6 @@ async function advanceSoStatus(soId, next) {
   if (cur && !(cur.status in SO_STAGE)) return;
   if (to <= from) return;
   await supabase.from("dist_sales_orders").update({ status: next }).eq("id", soId);
-}
-
-// APPROVAL RACE — a manager approving an order Distribution has ALREADY fulfilled.
-//
-// Distribution deliberately sees orders before approval (ORDERVIS) and can pick,
-// dispatch and invoice them. Those steps go through advanceSoStatus, which
-// refuses to move an order backwards. The manager's Approve button did not:
-// it wrote "confirmed" directly. So an order sitting at `invoiced` (stage 5),
-// approved from a screen loaded days earlier, was forced back to `confirmed`
-// (stage 2) and reappeared in Distribution's active list as if it were new
-// work — and got picked and sent a second time.
-//
-// This re-reads the order at the moment of approval and refuses to reverse it.
-// Approving something already fulfilled is a no-op with a clear message, not a
-// silent rewind.
-export async function approveSalesOrder(id, actor) {
-  const { data: cur } = await supabase.from("dist_sales_orders")
-    .select("status, so_number").eq("id", id).maybeSingle();
-  if (!cur) throw new Error("That order no longer exists.");
-
-  if (cur.status === "cancelled") {
-    throw new Error(`${cur.so_number} was cancelled — it can't be approved.`);
-  }
-
-  const stage = SO_STAGE[cur.status] ?? -1;
-  const confirmedStage = SO_STAGE.confirmed;
-
-  // Already at or beyond confirmed: Distribution has it. Record the approval
-  // for the audit trail, but do NOT touch the status.
-  if (stage >= confirmedStage) {
-    await logSoEvent(id, "approved", {
-      actor,
-      note: `Approved after fulfilment had already started — status left at ${cur.status}`,
-      payload: { from: cur.status, to: cur.status, late: true },
-    });
-    return {
-      ok: true,
-      changed: false,
-      status: cur.status,
-      message: `${cur.so_number} had already moved to ${cur.status} — Distribution is handling it. Your approval was recorded but the order was not sent back.`,
-    };
-  }
-
-  await supabase.from("dist_sales_orders").update({ status: "confirmed" }).eq("id", id);
-  await logSoEvent(id, "approved", {
-    actor, note: "Order approved",
-    payload: { from: cur.status, to: "confirmed" },
-  });
-  return { ok: true, changed: true, status: "confirmed" };
 }
 
 export async function setDistSalesOrderStatus(id, status, actor) {
