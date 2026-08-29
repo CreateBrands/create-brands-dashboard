@@ -192,7 +192,7 @@ import {
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
-  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, approveSalesOrder, fetchStoreOrderPrefs, saveStoreOrderPrefs, fetchChatGroups, createChatGroup, updateChatGroup, deleteChatGroup, deleteChatThread, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment, editPendingOrderLines, mergePendingOrders, fetchDeliverySourceReceipt, synthesizeInvoiceFromItems, normalizeReceiptDescription,
+  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, fetchStoreOrderPrefs, saveStoreOrderPrefs, fetchChatGroups, createChatGroup, updateChatGroup, deleteChatGroup, deleteChatThread, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment, editPendingOrderLines, mergePendingOrders, fetchDeliverySourceReceipt, synthesizeInvoiceFromItems, normalizeReceiptDescription,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
   fetchFreshOrderCustomers, saveFreshOrderCustomers, freshAccessActive, setSoFreshAttached, deletePayPeriod, setSoTeamNotes, uploadIssuePhoto,
@@ -17370,11 +17370,6 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [amendments, setAmendments] = useState({});     // soId -> latest amendment
   const [amendOrder, setAmendOrder] = useState(null);   // { so, lines:[{itemId,qty,unitPrice,taxRateId}] } being edited
-  // Expanding a past order to see what was actually on it. Lines are fetched
-  // once per order and cached, so reopening is instant and we do not hammer
-  // the API while someone scrolls their history.
-  const [openOrderId, setOpenOrderId] = useState(null);
-  const [orderLines, setOrderLines] = useState({});      // soId -> lines | "loading" | "error"
   const [amendNote, setAmendNote] = useState("");
   const [amendBusy, setAmendBusy] = useState(false);
   const [addSearch, setAddSearch] = useState("");
@@ -17575,19 +17570,6 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
     /* eslint-disable-next-line */
   }, [historyOpen]);
   const itemName = (id) => cleanName(catalogue.find(c => c.id === id)?.name || id);
-  const toggleOrderOpen = async (so) => {
-    if (openOrderId === so.id) { setOpenOrderId(null); return; }
-    setOpenOrderId(so.id);
-    if (orderLines[so.id] && orderLines[so.id] !== "error") return;
-    setOrderLines(m => ({ ...m, [so.id]: "loading" }));
-    try {
-      const lines = await fetchOrderLinesLight(so.id);
-      setOrderLines(m => ({ ...m, [so.id]: lines }));
-    } catch {
-      setOrderLines(m => ({ ...m, [so.id]: "error" }));
-    }
-  };
-
   const openAmend = async (so) => {
     try {
       const lines = await fetchOrderLinesLight(so.id);
@@ -18132,14 +18114,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
                         ) : (<>
                         <button onClick={async () => { try { await setDistSalesOrderStatus(p.id, "cancelled", currentUser?.name || currentUser?.email || ""); setPendingApprovals(x => x.filter(y => y.id !== p.id)); } catch (ev) { alert(ev.message); } }}
                           className="px-2.5 py-1.5 rounded-lg text-[11px] font-semibold" style={{ backgroundColor: "#F3EDE2", color: "#9A8770" }}>Reject</button>
-                        <button onClick={async () => { try {
-                            // Guarded: refuses to drag an order Distribution has already
-                            // fulfilled back to "confirmed", which used to make it look
-                            // like new work and get sent twice.
-                            const r = await approveSalesOrder(p.id, currentUser?.name || currentUser?.email || "");
-                            setPendingApprovals(x => x.filter(y => y.id !== p.id));
-                            if (r && r.changed === false && r.message) alert(r.message);
-                          } catch (ev) { alert(ev.message); } }}
+                        <button onClick={async () => { try { await setDistSalesOrderStatus(p.id, "confirmed", currentUser?.name || currentUser?.email || ""); setPendingApprovals(x => x.filter(y => y.id !== p.id)); } catch (ev) { alert(ev.message); } }}
                           className="px-2.5 py-1.5 rounded-lg text-[11px] font-bold" style={{ backgroundColor: "#5C9442", color: "#fff" }}>Approve</button>
                         </>)}
                       </div>
@@ -18688,47 +18663,16 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
                 return (
                   <div key={o.id} className="rounded-2xl p-4 space-y-2" style={{ backgroundColor: "#FDF8EF", border: `1px solid ${pending ? "#E0A664" : "#E8DCC6"}` }}>
                     <div className="flex items-center justify-between gap-2">
-                      <button onClick={() => toggleOrderOpen(o)} className="flex items-center gap-2 text-left min-w-0 flex-1">
-                        <span className="text-xs flex-shrink-0" style={{ color: "#9A8770", transform: openOrderId === o.id ? "rotate(90deg)" : "none", transition: "transform .15s" }}>▶</span>
-                        <span className="min-w-0">
-                          <span className="block text-sm font-bold" style={{ color: "#3A2E26" }}>{o.soNumber} <span className="font-normal" style={{ color: "#9A8770" }}>· {o.orderDate}</span></span>
-                          <span className="block text-[11px]" style={{ color: "#9A8770" }}>
-                            {(() => {
-                              // The stored header total is often 0 on these orders, so once we
-                              // have the lines we show what they actually add up to rather than
-                              // repeating a zero that tells nobody anything.
-                              const ls = orderLines[o.id];
-                              const stored = Number(o.total) || 0;
-                              if (Array.isArray(ls)) {
-                                const sum = ls.reduce((t, l) => t + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0);
-                                return `${priceFmt(sum || stored)} excl. VAT · ${ls.length} line${ls.length === 1 ? "" : "s"}`;
-                              }
-                              return `${priceFmt(stored)} excl. VAT · tap to see items`;
-                            })()}
-                          </span>
-                        </span>
-                      </button>
+                      <div>
+                        <div className="text-sm font-bold" style={{ color: "#3A2E26" }}>{o.soNumber} <span className="font-normal" style={{ color: "#9A8770" }}>· {o.orderDate}</span></div>
+                        <div className="text-[11px]" style={{ color: "#9A8770" }}>{priceFmt(o.total || 0)} excl. VAT</div>
+                      </div>
                       <span className="px-2 py-1 rounded-lg text-[10px] font-bold flex-shrink-0" style={
                         pending ? { background: "#FFF6E8", color: "#B45309" } :
                         o.status === "dispatched" ? { background: "#EAF3E7", color: "#3F6B3A" } :
                         { background: "#F3EADA", color: "#6B5D4F" }
                       }>{pending ? "CHANGES AWAITING APPROVAL" : (o.status || "").toUpperCase()}</span>
                     </div>
-                    {openOrderId === o.id && (
-                      <div className="rounded-xl overflow-hidden" style={{ border: "1px solid #E8DCC6", backgroundColor: "#FFFFFF" }}>
-                        {orderLines[o.id] === "loading" && <div className="px-3 py-3 text-[12px]" style={{ color: "#9A8770" }}>Loading items…</div>}
-                        {orderLines[o.id] === "error" && <div className="px-3 py-3 text-[12px]" style={{ color: "#B3261E" }}>Couldn't load the items on this order.</div>}
-                        {Array.isArray(orderLines[o.id]) && orderLines[o.id].length === 0 && <div className="px-3 py-3 text-[12px]" style={{ color: "#9A8770" }}>No items recorded on this order.</div>}
-                        {Array.isArray(orderLines[o.id]) && orderLines[o.id].map((l, li) => (
-                          <div key={l.itemId + ":" + li} className="px-3 py-2 flex items-baseline gap-3" style={{ borderTop: li ? "1px solid #F0E7D6" : "none" }}>
-                            <span className="text-sm font-bold tabular-nums flex-shrink-0" style={{ color: "#844429", minWidth: 30 }}>{l.qty}×</span>
-                            <span className="text-sm min-w-0 flex-1" style={{ color: "#3A2E26" }}>{itemName(l.itemId)}</span>
-                            <span className="text-[11px] tabular-nums flex-shrink-0" style={{ color: "#9A8770" }}>{priceFmt(l.unitPrice)}</span>
-                            <span className="text-[12px] font-semibold tabular-nums flex-shrink-0" style={{ color: "#3A2E26", minWidth: 54, textAlign: "right" }}>{priceFmt((Number(l.qty) || 0) * (Number(l.unitPrice) || 0))}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
                     {am && am.status === "rejected" && <div className="text-[11px] rounded-lg px-2 py-1" style={{ background: "#FBEAEA", color: "#B3261E" }}>Change request declined{am.decisionNote ? `: ${am.decisionNote}` : ""} — the original order stands.</div>}
                     {am && am.status === "approved" && <div className="text-[11px] rounded-lg px-2 py-1" style={{ background: "#EAF3E7", color: "#3F6B3A" }}>Changes approved by {am.decidedBy || "Distribution"} — the order below is the updated version.</div>}
                     {pending && (
@@ -35823,7 +35767,7 @@ function UserEditorModal({ user: editUser, brands, stores = [], onSave, onClose 
 // each row to payroll_periods and exports a clean Excel package for the accountant
 // (loans are NEVER included). Loudly flags any employee whose rate can't be
 // resolved (e.g. minimum-wage with no configured band rate or missing DOB).
-function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
+function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployeeProfile }) {
   const ExcelJS = useExcelJS();
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -36510,7 +36454,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
         const otOpen = rows.filter(r => r.otPending > 0);
         if (!stillIn.length && !otOpen.length) return null;
         return (
-          <div className="text-xs text-amber-200 bg-amber-950/30 border border-amber-700/50 rounded-xl px-4 py-3 space-y-1">
+          <div className="text-xs text-amber-900 bg-amber-50 border border-amber-400 rounded-xl px-4 py-3 space-y-1">
             {stillIn.length > 0 && (
               <div>
                 <strong>⚠ {stillIn.length} employee(s) have punches still clocked in</strong> — those shifts have no end time, so they are not paid on this run: {stillIn.map(r => `${r.name} (${r.openPunches})`).join(", ")}
@@ -36526,7 +36470,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
       })()}
 
       {zeroPaid.length > 0 && (
-        <div className="text-xs text-red-200 bg-red-950/40 border border-red-700/50 rounded-xl px-4 py-3">
+        <div className="text-xs text-red-900 bg-red-50 border border-red-400 rounded-xl px-4 py-3">
           <strong>⚠ {zeroPaid.length} employee(s) worked hours but resolve to £0 pay</strong> — their hourly rate is almost certainly not set. They will be paid <strong>nothing</strong> if you save/export this run. Set their rate on the Personal &amp; HR tab first:
           <ul className="mt-1 list-disc list-inside space-y-0.5">
             {zeroPaid.map(r => <li key={r.employeeId}>{r.name} — {(r.totalHours||0).toFixed(2)}h at £0</li>)}
@@ -36535,7 +36479,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
       )}
 
       {beforeEff.length > 0 && (
-        <div className="text-xs text-amber-200 bg-amber-950/30 border border-amber-700/50 rounded-xl px-4 py-3">
+        <div className="text-xs text-amber-900 bg-amber-50 border border-amber-400 rounded-xl px-4 py-3">
           <strong>⚠ {beforeEff.length} employee(s) have shifts before their first pay rate</strong> — those hours are paid £0 because they fall before the rate's effective-from date. If that's not intended, set an earlier effective date on the Personal &amp; HR tab:
           <ul className="mt-1 list-disc list-inside space-y-0.5">
             {beforeEff.map(r => <li key={r.employeeId}>{r.name} — {(r.beforeEffectiveHours||0).toFixed(2)}h unpaid (before effective date)</li>)}
@@ -36580,8 +36524,14 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser }) {
                 {rows.map(r => (
                   <tr key={r.employeeId} className={`border-b border-slate-800/60 ${r.rowError ? "bg-red-950/20" : ""}`}>
                     <td className="py-2 pr-3 font-medium text-slate-200">
-                      {r.name}
-                      {r.under18 && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-950/60 border border-amber-800 text-amber-300 font-semibold">U18</span>}
+                      {onOpenEmployeeProfile ? (
+                        <button type="button" onClick={() => onOpenEmployeeProfile(r.employeeId)}
+                          className="text-left font-medium underline decoration-dotted underline-offset-2 hover:text-emerald-700"
+                          title={"Open " + r.name + "'s profile"}>
+                          {r.name}
+                        </button>
+                      ) : r.name}
+                      {r.under18 && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-100 border border-amber-400 text-amber-900 font-semibold">U18</span>}
                     </td>
                     {r.rowError ? (
                       <td colSpan={12} className="py-2 pr-3 text-red-300 text-xs">{r.rowError}</td>
@@ -37593,7 +37543,7 @@ function EmployeeNavSetup({ customRoles = [] }) {
 function AdminPanelView({
   brands, users, entries,
   stores = [], flipdishStores = [],
-  opsTeam = [], currentUser,
+  opsTeam = [], currentUser, onOpenEmployeeProfile,
   onAddBrand, onUpdateBrand, onDeleteBrand,
   onAddUser, onUpdateUser, onDeleteUser,
   onAddStore, onUpdateStore, onDeleteStore,
@@ -37733,7 +37683,7 @@ function AdminPanelView({
       )}
 
       {tab==="payroll"&&(
-        <PayrollRunScreen opsTeam={opsTeam} stores={stores} brands={brands} currentUser={currentUser} />
+        <PayrollRunScreen opsTeam={opsTeam} stores={stores} brands={brands} currentUser={currentUser} onOpenEmployeeProfile={onOpenEmployeeProfile} />
       )}
 
       {locModal&&<LocationEditorModal brand={locModal==="new"?null:locModal} onSave={locModal==="new"?onAddBrand:onUpdateBrand} onClose={()=>setLocModal(null)}/>}
@@ -40254,14 +40204,9 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
               <div className="flex flex-wrap gap-2 mt-2.5 text-[11px]">
                 <span className="px-2 py-1 rounded-lg font-bold" style={{ background: "#EFE3CC", color: C.ink }}>{lines.length} lines · £{dispVal.toFixed(2)} dispatched</span>
                 <span className="px-2 py-1 rounded-lg font-bold" style={{ background: totalVal < dispVal - 0.005 ? "#FBEAD5" : "#E7F0E4", color: totalVal < dispVal - 0.005 ? "#9A5B00" : "#3F6B3A" }}>Receiving £{totalVal.toFixed(2)}</span>
-                <span className="px-2 py-1 rounded-lg font-bold whitespace-nowrap" style={{ background: linked === lines.length ? "#E7F0E4" : "#FBEAD5", color: linked === lines.length ? "#3F6B3A" : "#9A5B00" }}>
-                  {linked}/{lines.length} linked to stock
+                <span className="px-2 py-1 rounded-lg font-bold" style={{ background: linked === lines.length ? "#E7F0E4" : "#FBEAD5", color: linked === lines.length ? "#3F6B3A" : "#9A5B00" }}>
+                  {linked}/{lines.length} linked to stock{linked < lines.length ? " — unlinked lines book the purchase but won't move inventory. Match items in the expense/invoice review (matches are remembered)." : ""}
                 </span>
-                {linked < lines.length && (
-                  <span className="basis-full text-[11px] leading-snug font-semibold" style={{ color: "#9A5B00" }}>
-                    Unlinked lines book the purchase but won't move inventory — match them in the expense review.
-                  </span>
-                )}
                 {receipt && receipt.claim && (
                   <button onClick={() => setShowReceipt(true)} className="px-2 py-1 rounded-lg font-bold flex items-center gap-1" style={{ background: "#EAF0F6", color: "#185FA5" }}>
                     <FileText size={12}/> View original receipt
@@ -40278,9 +40223,9 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
             const short = got < disp; const unlinked = !l.store_item_id;
             return (
               <div key={l.id} className="rounded-xl p-3" style={{ background: C.cream, border:`1px solid ${short?C.amber:C.line}` }}>
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex items-center justify-between gap-2">
                   <div className="min-w-0">
-                    <div className="text-sm font-bold break-words" style={{ color: C.ink }}>{l.item_name}</div>
+                    <div className="text-sm font-bold truncate" style={{ color: C.ink }}>{l.item_name}</div>
                     {l.line_note && <div className="text-[11px] italic font-semibold" style={{ color: "#9A5B00" }}>📝 {l.line_note}</div>}
                     <div className="text-[11px]" style={{ color: C.inkFaint }}>
                       Expected: {disp}
@@ -40291,15 +40236,15 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
                       {unlinked && <span style={{ color: C.inkFaint }}> · ⚠ not linked</span>}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 flex-shrink-0">
+                  <div className="flex items-center gap-1.5">
                     <button onClick={() => { const v = Math.max(0, got - 1); setRecv(r => ({ ...r, [l.id]: v })); persistLine(l.id, v); }}
-                      className="w-10 h-10 sm:w-8 sm:h-8 rounded-lg text-xl sm:text-lg font-bold flex-shrink-0" style={{ background:"#F3EADA", color: C.ink }}>−</button>
-                    <input type="number" inputMode="decimal" value={recv[l.id] ?? ""}
+                      className="w-7 h-7 rounded-lg text-lg font-bold" style={{ background:"#F3EADA", color: C.ink }}>−</button>
+                    <input type="number" value={recv[l.id] ?? ""}
                       onChange={e => { setRecv(r => ({ ...r, [l.id]: e.target.value })); setRecorded(r => ({ ...r, [l.id]: false })); }}
                       onBlur={e => persistLine(l.id, e.target.value)}
-                      className="w-16 sm:w-14 text-center rounded-lg py-2 sm:py-1 text-base sm:text-sm font-bold flex-shrink-0" style={{ background:"#fff", border:`1px solid ${C.line}`, color: C.ink }}/>
+                      className="w-14 text-center rounded-lg py-1 text-sm font-bold" style={{ background:"#fff", border:`1px solid ${C.line}`, color: C.ink }}/>
                     <button onClick={() => { const v = got + 1; setRecv(r => ({ ...r, [l.id]: v })); persistLine(l.id, v); }}
-                      className="w-10 h-10 sm:w-8 sm:h-8 rounded-lg text-xl sm:text-lg font-bold flex-shrink-0" style={{ background:"#F3EADA", color: C.ink }}>+</button>
+                      className="w-7 h-7 rounded-lg text-lg font-bold" style={{ background:"#F3EADA", color: C.ink }}>+</button>
                     {(() => {
                       // RECVFIX: green means SAVED, not "the box happens to hold
                       // the dispatched number". Prefilling made every untouched
@@ -40309,7 +40254,7 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
                       return (
                         <button disabled={saving}
                           onClick={() => { const v = isSaved ? 0 : disp; setRecv(r => ({ ...r, [l.id]: v })); persistLine(l.id, isSaved ? null : v); }}
-                          className="ml-auto sm:ml-1 px-4 h-10 sm:h-8 rounded-lg text-sm sm:text-xs font-bold flex items-center justify-center gap-1 whitespace-nowrap disabled:opacity-60 flex-shrink-0"
+                          className="ml-1 px-3 h-7 rounded-lg text-xs font-bold flex items-center gap-1 whitespace-nowrap disabled:opacity-60"
                           style={isSaved ? { background: C.green, color: "#fff" } : { background: "#F3EADA", color: C.accent, border: `1px solid ${C.line}` }}>
                           {saving ? "saving…" : isSaved ? <><CheckCircle size={13}/> Received</> : "Mark received"}
                         </button>
@@ -67376,14 +67321,7 @@ export default function App() {
   // Entity landing: which brand/entity the user has stepped into. null = show
   // the entity picker (tiles). Persisted so a refresh keeps you in the entity.
   const [selectedEntityBrand, setSelectedEntityBrand] = useState(() => {
-    try {
-      // Only restore an entity for a session that is still logged in. Without
-      // this, a phone already stuck inside an entity stays stuck: the entity is
-      // restored before login, so logging out and back in lands in the same
-      // dead workspace. No session means start at the entity picker.
-      if (!localStorage.getItem("cb_session")) { localStorage.removeItem("cb_entity"); return null; }
-      return localStorage.getItem("cb_entity") || null;
-    } catch { return null; }
+    try { return localStorage.getItem("cb_entity") || null; } catch { return null; }
   });
   const chooseEntity = useCallback((brandId) => {
     setSelectedEntityBrand(brandId);
@@ -67753,17 +67691,6 @@ export default function App() {
     setImpersonatedUserId(null);
     localStorage.removeItem("cb_session");
     localStorage.removeItem("cb_impersonate");
-    // Logging out must also clear WHERE the last person was, not just who they
-    // were. cb_entity survived logout, so a phone last used inside the Finance
-    // workspace dropped the next person straight back into it — and a store
-    // manager can see nothing there, so they got the finance tab bar over an
-    // empty page with no way out. Same for the remembered view and the #v/
-    // hash, which would otherwise restore a page the new user cannot open.
-    localStorage.removeItem("cb_entity");
-    localStorage.removeItem("cb.lastView");
-    setSelectedEntityBrand(null);
-    setActiveView("dashboard");
-    try { window.history.replaceState(null, "", window.location.pathname + window.location.search); } catch {}
     setLoginMode("employee");
   }, []);
 
@@ -69399,6 +69326,7 @@ export default function App() {
               brands={brands} users={users} entries={entries}
               stores={stores} flipdishStores={flipdishStores}
               opsTeam={opsTeam} currentUser={currentUser}
+              onOpenEmployeeProfile={openEmployeeProfile}
               onAddBrand={addBrand} onUpdateBrand={updateBrand} onDeleteBrand={deleteBrand}
               onAddUser={addUser} onUpdateUser={updateUser} onDeleteUser={deleteUser}
               onAddStore={addStore} onUpdateStore={updateStoreRow} onDeleteStore={deleteStoreRow}
