@@ -36084,7 +36084,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
           newStarter: !!(emp.hireDate && emp.hireDate >= from && emp.hireDate <= to),
           // Whether the accountant has actually registered them on payroll.
           // Defaults to false so a new starter stands out until confirmed.
-          payrollRegistered: false,
+          payrollStatus: "",
           salaryAmount: Number(emp.hourlyRate) || 0,
           totalHours, totalPay,
           punchCount: empPunches.length, openPunches, otPending, notApproved,
@@ -36245,7 +36245,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
     // ── Block 2: payroll figures for everyone ──────────────────────────────
     sectionTitle("PAYROLL");
     const payCols = [
-      ["First Name", 16], ["Last Name", 16], ["New Starter", 12], ["On Payroll", 11], ["Min Rate", 11],
+      ["First Name", 16], ["Last Name", 16], ["New Starter", 12], ["Status", 16], ["Min Rate", 11],
       ["Wages", 13], ["Salary Term", 14], ["Bank Transfer", 14], ["Normalized Wage", 15],
       ["Normalized Hours", 16], ["Cash Paid", 13],
     ];
@@ -36254,7 +36254,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
       const row = ws.addRow([
         r.firstName || "", r.lastName || "",
         r.newStarter ? "Yes" : "",
-        r.payrollRegistered ? "Yes" : "",
+        ({ new_starter: "New starter", on: "On payroll", not_on: "Not on payroll", left: "Left job (issue P45)" })[r.payrollStatus] || "",
         // Salaried staff have no hourly floor — show the monthly salary the
         // pay is derived from, matching the on-screen column.
         r.salaried
@@ -36516,7 +36516,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                 <tr className="text-left text-[11px] uppercase tracking-wider text-stone-500 bg-stone-100/70 border-b border-stone-300">
                   <th className="py-2 pr-3">Employee</th>
                   <th className="py-2 pr-3">New</th>
-                  <th className="py-2 pr-3">On payroll</th>
+                  <th className="py-2 pr-3">Status</th>
                   <th className="py-2 pr-3">Hours</th>
                   <th className="py-2 pr-3">Gross</th>
                   <th className="py-2 pr-3">Bank transfer</th>
@@ -36555,11 +36555,25 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                             title="New starter — include full details in the export" />
                         </td>
                         <td className="py-2 pr-3">
-                          {/* Registered on payroll — tracks who the accountant has
-                              actually set up, so a new starter is not missed. */}
-                          <input type="checkbox" checked={!!r.payrollRegistered}
-                            onChange={e => updateRow(r.employeeId, { payrollRegistered: e.target.checked })}
-                            title="Registered on payroll with the accountant" />
+                          {/* Where this person stands with the payroll bureau.
+                              Blank until someone sets it, so an unreviewed row
+                              is visibly unreviewed rather than defaulting to a
+                              claim nobody made. */}
+                          <select value={r.payrollStatus || ""}
+                            onChange={e => updateRow(r.employeeId, { payrollStatus: e.target.value })}
+                            title="Payroll status"
+                            className={`text-xs rounded-lg border px-2 py-1 ${
+                              r.payrollStatus === "left"        ? "border-red-400 bg-red-50 text-red-900" :
+                              r.payrollStatus === "on"          ? "border-emerald-400 bg-emerald-50 text-emerald-900" :
+                              r.payrollStatus === "not_on"      ? "border-amber-400 bg-amber-50 text-amber-900" :
+                              r.payrollStatus === "new_starter" ? "border-sky-400 bg-sky-50 text-sky-900" :
+                                                                  "border-stone-300 bg-white text-stone-500"}`}>
+                            <option value="">— set status —</option>
+                            <option value="new_starter">New starter</option>
+                            <option value="on">On payroll</option>
+                            <option value="not_on">Not on payroll</option>
+                            <option value="left">Left job (issue P45)</option>
+                          </select>
                         </td>
                         <td className="py-2 pr-3 text-stone-600 tabular-nums">{r.totalHours.toFixed(2)}</td>
                         <td className="py-2 pr-3 text-stone-900 font-semibold tabular-nums">{fmtGBP(r.totalPay)}</td>
