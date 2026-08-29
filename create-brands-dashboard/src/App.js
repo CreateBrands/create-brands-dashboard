@@ -36082,6 +36082,9 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
           // period is a new starter by default. Overridable per row, because
           // the payroll bureau only needs full personal details once.
           newStarter: !!(emp.hireDate && emp.hireDate >= from && emp.hireDate <= to),
+          // Whether the accountant has actually registered them on payroll.
+          // Defaults to false so a new starter stands out until confirmed.
+          payrollRegistered: false,
           salaryAmount: Number(emp.hourlyRate) || 0,
           totalHours, totalPay,
           punchCount: empPunches.length, openPunches, otPending, notApproved,
@@ -36242,7 +36245,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
     // ── Block 2: payroll figures for everyone ──────────────────────────────
     sectionTitle("PAYROLL");
     const payCols = [
-      ["First Name", 16], ["Last Name", 16], ["New Starter", 12], ["Min Rate", 11],
+      ["First Name", 16], ["Last Name", 16], ["New Starter", 12], ["On Payroll", 11], ["Min Rate", 11],
       ["Wages", 13], ["Salary Term", 14], ["Bank Transfer", 14], ["Normalized Wage", 15],
       ["Normalized Hours", 16], ["Cash Paid", 13],
     ];
@@ -36251,6 +36254,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
       const row = ws.addRow([
         r.firstName || "", r.lastName || "",
         r.newStarter ? "Yes" : "",
+        r.payrollRegistered ? "Yes" : "",
         // Salaried staff have no hourly floor — show the monthly salary the
         // pay is derived from, matching the on-screen column.
         r.salaried
@@ -36498,15 +36502,21 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
 
       {rows && (
         <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <div className="text-sm text-slate-400">{rows.filter(r => !r.rowError).length} employees · total gross <span className="font-bold text-slate-200">{fmtGBP(totalGross)}</span></div>
+          <div className="flex items-baseline justify-between gap-4 flex-wrap">
+            <div className="text-sm text-stone-600">
+              <span className="font-semibold text-stone-800">{rows.filter(r => !r.rowError).length}</span> employees
+            </div>
+            <div className="text-sm text-stone-600">
+              total gross <span className="text-xl font-bold text-stone-900 ml-1">{fmtGBP(totalGross)}</span>
+            </div>
           </div>
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto rounded-xl border border-stone-300 bg-white/60">
             <table className="w-full text-sm border-collapse">
               <thead>
-                <tr className="text-left text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-800">
+                <tr className="text-left text-[11px] uppercase tracking-wider text-stone-500 bg-stone-100/70 border-b border-stone-300">
                   <th className="py-2 pr-3">Employee</th>
                   <th className="py-2 pr-3">New</th>
+                  <th className="py-2 pr-3">On payroll</th>
                   <th className="py-2 pr-3">Hours</th>
                   <th className="py-2 pr-3">Gross</th>
                   <th className="py-2 pr-3">Bank transfer</th>
@@ -36522,8 +36532,8 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
               </thead>
               <tbody>
                 {rows.map(r => (
-                  <tr key={r.employeeId} className={`border-b border-slate-800/60 ${r.rowError ? "bg-red-950/20" : ""}`}>
-                    <td className="py-2 pr-3 font-medium text-slate-200">
+                  <tr key={r.employeeId} className={`border-b border-stone-200 hover:bg-stone-50 ${r.rowError ? "bg-red-50" : ""}`}>
+                    <td className="py-2 pr-3 pl-3 font-medium text-stone-800">
                       {onOpenEmployeeProfile ? (
                         <button type="button" onClick={() => onOpenEmployeeProfile(r.employeeId)}
                           className="text-left font-medium underline decoration-dotted underline-offset-2 hover:text-emerald-700"
@@ -36534,7 +36544,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                       {r.under18 && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-100 border border-amber-400 text-amber-900 font-semibold">U18</span>}
                     </td>
                     {r.rowError ? (
-                      <td colSpan={12} className="py-2 pr-3 text-red-300 text-xs">{r.rowError}</td>
+                      <td colSpan={13} className="py-2 pr-3 text-red-900 text-xs">{r.rowError}</td>
                     ) : (
                       <>
                         <td className="py-2 pr-3">
@@ -36544,8 +36554,15 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                             onChange={e => updateRow(r.employeeId, { newStarter: e.target.checked })}
                             title="New starter — include full details in the export" />
                         </td>
-                        <td className="py-2 pr-3 text-slate-300">{r.totalHours.toFixed(2)}</td>
-                        <td className="py-2 pr-3 text-slate-100 font-semibold">{fmtGBP(r.totalPay)}</td>
+                        <td className="py-2 pr-3">
+                          {/* Registered on payroll — tracks who the accountant has
+                              actually set up, so a new starter is not missed. */}
+                          <input type="checkbox" checked={!!r.payrollRegistered}
+                            onChange={e => updateRow(r.employeeId, { payrollRegistered: e.target.checked })}
+                            title="Registered on payroll with the accountant" />
+                        </td>
+                        <td className="py-2 pr-3 text-stone-600 tabular-nums">{r.totalHours.toFixed(2)}</td>
+                        <td className="py-2 pr-3 text-stone-900 font-semibold tabular-nums">{fmtGBP(r.totalPay)}</td>
                         <td className="py-2 pr-3">
                           <div className="flex items-center gap-1">
                             <span className="text-slate-500 text-xs">£</span>
