@@ -35767,7 +35767,7 @@ function UserEditorModal({ user: editUser, brands, stores = [], onSave, onClose 
 // each row to payroll_periods and exports a clean Excel package for the accountant
 // (loans are NEVER included). Loudly flags any employee whose rate can't be
 // resolved (e.g. minimum-wage with no configured band rate or missing DOB).
-function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployeeProfile }) {
+function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployeeProfile, onUpdateEmployeeStatus }) {
   const ExcelJS = useExcelJS();
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -36084,7 +36084,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
           newStarter: !!(emp.hireDate && emp.hireDate >= from && emp.hireDate <= to),
           // Whether the accountant has actually registered them on payroll.
           // Defaults to false so a new starter stands out until confirmed.
-          payrollStatus: "",
+          payrollStatus: emp.payrollStatus || "",
           salaryAmount: Number(emp.hourlyRate) || 0,
           totalHours, totalPay,
           punchCount: empPunches.length, openPunches, otPending, notApproved,
@@ -36560,7 +36560,13 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                               is visibly unreviewed rather than defaulting to a
                               claim nobody made. */}
                           <select value={r.payrollStatus || ""}
-                            onChange={e => updateRow(r.employeeId, { payrollStatus: e.target.value })}
+                            onChange={e => {
+                              const v = e.target.value;
+                              updateRow(r.employeeId, { payrollStatus: v });
+                              // Persist on the employee record — the status is
+                              // about the person, so it must survive this run.
+                              if (onUpdateEmployeeStatus) onUpdateEmployeeStatus(r.employeeId, v);
+                            }}
                             title="Payroll status"
                             className={`text-xs rounded-lg border px-2 py-1 ${
                               r.payrollStatus === "left"        ? "border-red-400 bg-red-50 text-red-900" :
@@ -37574,7 +37580,7 @@ function EmployeeNavSetup({ customRoles = [] }) {
 function AdminPanelView({
   brands, users, entries,
   stores = [], flipdishStores = [],
-  opsTeam = [], currentUser, onOpenEmployeeProfile,
+  opsTeam = [], currentUser, onOpenEmployeeProfile, onUpdateEmployeeStatus,
   onAddBrand, onUpdateBrand, onDeleteBrand,
   onAddUser, onUpdateUser, onDeleteUser,
   onAddStore, onUpdateStore, onDeleteStore,
@@ -37714,7 +37720,7 @@ function AdminPanelView({
       )}
 
       {tab==="payroll"&&(
-        <PayrollRunScreen opsTeam={opsTeam} stores={stores} brands={brands} currentUser={currentUser} onOpenEmployeeProfile={onOpenEmployeeProfile} />
+        <PayrollRunScreen opsTeam={opsTeam} stores={stores} brands={brands} currentUser={currentUser} onOpenEmployeeProfile={onOpenEmployeeProfile} onUpdateEmployeeStatus={onUpdateEmployeeStatus} />
       )}
 
       {locModal&&<LocationEditorModal brand={locModal==="new"?null:locModal} onSave={locModal==="new"?onAddBrand:onUpdateBrand} onClose={()=>setLocModal(null)}/>}
@@ -69358,6 +69364,12 @@ export default function App() {
               stores={stores} flipdishStores={flipdishStores}
               opsTeam={opsTeam} currentUser={currentUser}
               onOpenEmployeeProfile={openEmployeeProfile}
+              onUpdateEmployeeStatus={async (id, payrollStatus) => {
+                try {
+                  const saved = await updateOpsTeamMember(id, { payrollStatus });
+                  setOpsTeam(ts => ts.map(x => x.id === id ? { ...x, payrollStatus: saved?.payrollStatus ?? payrollStatus } : x));
+                } catch (e) { showToast("Could not save status: " + (e?.message || e)); }
+              }}
               onAddBrand={addBrand} onUpdateBrand={updateBrand} onDeleteBrand={deleteBrand}
               onAddUser={addUser} onUpdateUser={updateUser} onDeleteUser={deleteUser}
               onAddStore={addStore} onUpdateStore={updateStoreRow} onDeleteStore={deleteStoreRow}

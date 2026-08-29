@@ -562,6 +562,9 @@ function appOpsTeamToDb(m) {
   if (m.firstName     !== undefined) row.first_name    = m.firstName;
   if (m.lastName      !== undefined) row.last_name     = m.lastName || "";
   if (m.nickname      !== undefined) row.nickname      = m.nickname || "";
+  // Payroll bureau status — new_starter | on | not_on | left. Empty string
+  // means "not reviewed", stored as NULL.
+  if (m.payrollStatus !== undefined) row.payroll_status = m.payrollStatus || null;
   if (m.department    !== undefined) row.department    = m.department || "";
   if (m.role          !== undefined) row.role          = m.role;
   if (m.isTrainee     !== undefined) row.is_trainee     = !!m.isTrainee;
@@ -641,6 +644,7 @@ function dbOpsTeamToApp(m) {
     id: m.id, brandId: m.brand_id,
     firstName: m.first_name, lastName: m.last_name,
     nickname: m.nickname || "", department: m.department || "",
+    payrollStatus: m.payroll_status || "",
     role: m.role, pin: m.pin, color: m.color,
     isTrainee: m.is_trainee ?? false,
     hourlyRate: m.hourly_rate != null ? parseFloat(m.hourly_rate) : 0,
