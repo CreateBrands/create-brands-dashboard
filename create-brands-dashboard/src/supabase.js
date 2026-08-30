@@ -565,9 +565,9 @@ function appOpsTeamToDb(m) {
   // Payroll bureau status — new_starter | on | not_on | left. Empty string
   // means "not reviewed", stored as NULL.
   if (m.payrollStatus !== undefined) row.payroll_status = m.payrollStatus || null;
-  // Management salary: paid, exported, but kept out of store figures and
-  // visible only to an owner.
-  if (m.offStoreSalary !== undefined) row.off_store_salary = !!m.offStoreSalary;
+  // Owner-only salary. null = normal, hidden_included = counted in store wage
+  // cost, hidden_excluded = not counted. Both are paid and exported.
+  if (m.salaryPrivacy !== undefined) row.salary_privacy = m.salaryPrivacy || null;
   if (m.department    !== undefined) row.department    = m.department || "";
   if (m.role          !== undefined) row.role          = m.role;
   if (m.isTrainee     !== undefined) row.is_trainee     = !!m.isTrainee;
@@ -648,7 +648,7 @@ function dbOpsTeamToApp(m) {
     firstName: m.first_name, lastName: m.last_name,
     nickname: m.nickname || "", department: m.department || "",
     payrollStatus: m.payroll_status || "",
-    offStoreSalary: m.off_store_salary === true,
+    salaryPrivacy: m.salary_privacy || "",
     role: m.role, pin: m.pin, color: m.color,
     isTrainee: m.is_trainee ?? false,
     hourlyRate: m.hourly_rate != null ? parseFloat(m.hourly_rate) : 0,

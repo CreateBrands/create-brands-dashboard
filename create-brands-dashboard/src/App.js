@@ -8017,7 +8017,7 @@ function downloadDistSampleCsv(kind) {
 
 function parseDistItemName(raw) {
   if (!raw) return { name: "", packCount: 1, packSize: null, packUnit: "" };
-  const s = String(raw).replace(/[\u2012\u2013\u2014\u2015]/g, "-").trim();
+  const s = String(raw).replace(/[\u2012\u2013—\u2015]/g, "-").trim();
   const m = s.match(/^(.*?)[\s-]*\(\s*(\d+(?:\.\d+)?)\s*\*\s*(\d+(?:\.\d+)?)\s*([a-zA-Z]+)\s*\)\s*$/);
   if (!m) return { name: s.replace(/[-\s]+$/, "").trim(), packCount: 1, packSize: null, packUnit: "" };
   return { name: m[1].replace(/[-\s]+$/, "").trim(), packCount: Number(m[2]), packSize: Number(m[3]), packUnit: m[4] };
@@ -11000,7 +11000,7 @@ function DistCustomerDetail({ customer, stores = [], onClose, onEdit }) {
   }, [customer.id]);
 
   const storeName = stores.find(s => s.id === customer.storeId)?.name || null;
-  const fmtDate = (d) => d ? new Date(d).toLocaleDateString("en-GB") : "\u2014";
+  const fmtDate = (d) => d ? new Date(d).toLocaleDateString("en-GB") : "—";
   const statusColor = (s) => s === "paid" ? "text-emerald-400" : s === "overdue" ? "text-red-400" : s === "part_paid" ? "text-amber-400" : "text-slate-400";
   const TABS = [["overview", "Overview"], ["transactions", "Transactions"], ["statement", "Statement"]];
   const maxIncome = data ? Math.max(1, ...data.months.map(m => m.amount)) : 1;
@@ -11039,7 +11039,7 @@ function DistCustomerDetail({ customer, stores = [], onClose, onEdit }) {
               )}
               <div className="rounded-xl border border-slate-800 bg-slate-950/40 p-3 grid grid-cols-2 gap-2">
                 <div><div className="text-[10px] uppercase tracking-wide text-slate-500">Currency</div><div className="text-sm text-white">{customer.currencyCode || "GBP"}</div></div>
-                <div><div className="text-[10px] uppercase tracking-wide text-slate-500">Terms</div><div className="text-sm text-white capitalize">{(customer.paymentTerms || "").replace(/_/g, " ") || "\u2014"}</div></div>
+                <div><div className="text-[10px] uppercase tracking-wide text-slate-500">Terms</div><div className="text-sm text-white capitalize">{(customer.paymentTerms || "").replace(/_/g, " ") || "—"}</div></div>
                 {storeName && <div className="col-span-2"><div className="text-[10px] uppercase tracking-wide text-slate-500">Linked store</div><div className="text-sm text-white">{storeName}</div></div>}
               </div>
             </div>
@@ -11091,7 +11091,7 @@ function DistCustomerDetail({ customer, stores = [], onClose, onEdit }) {
                     <tr key={p.id} className="border-t border-slate-800/60">
                       <td className="px-3 py-2 text-slate-400">{fmtDate(p.date)}</td>
                       <td className="px-3 py-2 font-mono text-slate-300">{p.paymentNumber}</td>
-                      <td className="px-3 py-2 text-slate-400">{p.reference || "\u2014"}</td>
+                      <td className="px-3 py-2 text-slate-400">{p.reference || "—"}</td>
                       <td className="px-3 py-2 text-slate-400 capitalize">{(p.method || "").replace(/_/g, " ")}</td>
                       <td className="px-3 py-2 text-right text-emerald-300">{gbp(p.amount)}</td>
                       <td className="px-3 py-2 text-right text-slate-400">{gbp(p.unused)}</td>
@@ -16193,7 +16193,7 @@ function StoreOrderingSetupView({ currentUser, stores, opsTeam }) {
                   <div className="col-span-2 relative">
                     {(() => {
                       const sel = String(t.location || "").split(",").map(x => x.trim()).filter(Boolean);
-                      const label = sel.length === 0 ? "\u2014" : sel.length === 1 ? sel[0] : `${sel.length} locations`;
+                      const label = sel.length === 0 ? "—" : sel.length === 1 ? sel[0] : `${sel.length} locations`;
                       return (
                         <>
                           <button onClick={() => { setSupOpen(null); setLocOpen(locOpen === i.id ? null : i.id); }} className={`${ec} w-full text-left truncate`}>{label} ▾</button>
@@ -18844,7 +18844,7 @@ const PNL_LINES = [
 ];
 
 function DistItemDetail({ item, taxName, categories = [], onClose, onEdit, onDelete, busy, currentUser }) {
-  const acctName = (id) => categories.find(c => c.id === id)?.name || id || "\u2014";
+  const acctName = (id) => categories.find(c => c.id === id)?.name || id || "—";
   const [tab, setTab] = useState("overview");
   const [moves, setMoves] = useState(null);
   const [txns, setTxns] = useState(null);
@@ -18878,11 +18878,11 @@ function DistItemDetail({ item, taxName, categories = [], onClose, onEdit, onDel
     </div>
   );
   const Attr = ({ label, value }) => (
-    <div><div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div><div className="text-sm text-white">{value ?? "\u2014"}</div></div>
+    <div><div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div><div className="text-sm text-white">{value ?? "—"}</div></div>
   );
   const typeColor = (t) => t === "receipt" || t === "opening" ? "text-emerald-300" : t === "dispatch" ? "text-red-300" : "text-amber-300";
-  const fmtDate = (d) => d ? new Date(d).toLocaleDateString("en-GB") : "\u2014";
-  const fmtDateTime = (d) => d ? new Date(d).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "\u2014";
+  const fmtDate = (d) => d ? new Date(d).toLocaleDateString("en-GB") : "—";
+  const fmtDateTime = (d) => d ? new Date(d).toLocaleString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
 
   const TABS = [["overview", "Overview"], ["transactions", "Transactions"], ["history", "History"]];
   const filteredTxns = (txns || []).filter(t => txnFilter === "all" || (txnFilter === "sales" && t.direction === "out") || (txnFilter === "purchases" && t.direction === "in"));
@@ -18914,14 +18914,14 @@ function DistItemDetail({ item, taxName, categories = [], onClose, onEdit, onDel
             <div className="flex gap-3">
               {item.imageUrl && <div className="w-24 h-24 rounded-xl bg-gradient-to-b from-white to-slate-100 flex items-center justify-center overflow-hidden flex-shrink-0 border border-slate-800"><img src={item.imageUrl} alt="" className="w-full h-full object-contain p-1.5"/></div>}
               <div className="grid grid-cols-3 gap-3 bg-slate-950/40 border border-slate-800 rounded-xl p-3 flex-1">
-                <Attr label="SKU" value={<span className="font-mono text-indigo-300">{item.sku || "\u2014"}</span>}/>
+                <Attr label="SKU" value={<span className="font-mono text-indigo-300">{item.sku || "—"}</span>}/>
                 <Attr label="Category" value={item.category}/>
                 <Attr label="Status" value={item.active === false ? "Inactive" : "Active"}/>
                 <Attr label="Pack" value={`${item.packCount} \u00D7 ${item.packSize ?? "?"} ${item.packUnit || ""}`}/>
                 <Attr label="Tax rate" value={taxName(item.taxRateId)}/>
                 <Attr label="Reorder point" value={item.reorderPoint || 0}/>
-                <Attr label="Buy rate" value={item.purchaseRate != null ? `\u00A3${item.purchaseRate}` : "\u2014"}/>
-                <Attr label="Sell rate" value={item.sellRate != null ? `\u00A3${item.sellRate}` : "\u2014"}/>
+                <Attr label="Buy rate" value={item.purchaseRate != null ? `\u00A3${item.purchaseRate}` : "—"}/>
+                <Attr label="Sell rate" value={item.sellRate != null ? `\u00A3${item.sellRate}` : "—"}/>
                 <Attr label="" value=""/>
                 <Attr label="Income acct" value={acctName(item.incomeAccountCode)}/>
                 <Attr label="Expense acct" value={acctName(item.expenseAccountCode)}/>
@@ -18941,7 +18941,7 @@ function DistItemDetail({ item, taxName, categories = [], onClose, onEdit, onDel
                         <td className="px-2 py-1 text-slate-400">{fmtDate(m.movedAt)}</td>
                         <td className={`px-2 py-1 font-medium ${typeColor(m.type)}`}>{m.type}</td>
                         <td className={`px-2 py-1 text-right font-semibold ${m.qty < 0 ? "text-red-300" : "text-emerald-300"}`}>{m.qty > 0 ? "+" : ""}{m.qty}</td>
-                        <td className="px-2 py-1 text-slate-500 font-mono truncate">{m.sourceRef || m.reasonCode || "\u2014"}</td>
+                        <td className="px-2 py-1 text-slate-500 font-mono truncate">{m.sourceRef || m.reasonCode || "—"}</td>
                       </tr>))}</tbody>
                   </table>
                 </div>
@@ -18998,7 +18998,7 @@ function DistItemDetail({ item, taxName, categories = [], onClose, onEdit, onDel
                       <td className="px-3 py-2 text-slate-400 whitespace-nowrap">{fmtDateTime(h.changedAt)}</td>
                       <td className="px-3 py-2 text-slate-300">
                         <span className="capitalize">{h.action}</span>{h.detail ? <span className="text-slate-400">. {h.detail}</span> : null}
-                        {h.changedBy ? <span className="text-slate-500 italic"> \u2014 {h.changedBy}</span> : null}
+                        {h.changedBy ? <span className="text-slate-500 italic"> — {h.changedBy}</span> : null}
                       </td>
                     </tr>))}</tbody>
                 </table>
@@ -36102,7 +36102,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
           bankAmount, cashAmount,
           payrollLocation: emp.payrollLocation || (emp.storeIds?.[0] || ""),
           accountingLocation: emp.accountingLocation || (emp.storeIds?.[0] || ""),
-          offStoreSalary: emp.offStoreSalary === true,
+          salaryPrivacy: emp.salaryPrivacy || "",
           lines, rowError,
           beforeEffectiveHours: Math.round(beforeEffectiveHours * 100) / 100,
           beforeEffectiveDates,
@@ -36181,7 +36181,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
     if (!rows) return;
     // The accountant needs the management salaries in order to pay them, but a
     // manager exporting must not get them. Same rule as the screen.
-    const exportable = rows.filter(r => !r.rowError && (isOwner || !r.offStoreSalary));
+    const exportable = rows.filter(r => !r.rowError && (isOwner || !r.salaryPrivacy));
     const starters = exportable.filter(r => r.newStarter);
 
     const wb = new ExcelJS.Workbook();
@@ -36308,11 +36308,13 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
   // Management salaries are visible to an owner only. For everyone else the
   // rows are removed AND excluded from the total, since a total that does not
   // add up is its own disclosure.
-  const visibleRows = rows ? (isOwner ? rows : rows.filter(r => !r.offStoreSalary)) : null;
-  const offStoreRows = rows ? rows.filter(r => r.offStoreSalary) : [];
+  const visibleRows = rows ? (isOwner ? rows : rows.filter(r => !r.salaryPrivacy)) : null;
+  const hiddenRows = rows ? rows.filter(r => r.salaryPrivacy) : [];
   const totalGross = visibleRows ? visibleRows.filter(r => !r.rowError).reduce((s, r) => s + r.totalPay, 0) : 0;
   // What the stores actually carry — owner view, management salaries removed.
-  const storeGross = rows ? rows.filter(r => !r.rowError && !r.offStoreSalary).reduce((s, r) => s + r.totalPay, 0) : 0;
+  // What the stores actually carry: everything except the ones deliberately
+  // taken out. hidden_included still counts toward its store.
+  const storeGross = rows ? rows.filter(r => !r.rowError && r.salaryPrivacy !== "hidden_excluded").reduce((s, r) => s + r.totalPay, 0) : 0;
 
   return (
     <div className="space-y-5">
@@ -36521,9 +36523,9 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
             </div>
             <div className="text-sm text-stone-600">
               total gross <span className="text-xl font-bold text-stone-900 ml-1">{fmtGBP(totalGross)}</span>
-              {isOwner && offStoreRows.length > 0 && (
+              {isOwner && hiddenRows.length > 0 && (
                 <span className="ml-3 text-xs text-stone-500">
-                  stores {fmtGBP(storeGross)} · management {fmtGBP(totalGross - storeGross)}
+                  in store cost {fmtGBP(storeGross)} · excluded {fmtGBP(totalGross - storeGross)}
                 </span>
               )}
             </div>
@@ -36560,7 +36562,8 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                         </button>
                       ) : r.name}
                       {r.under18 && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-100 border border-amber-400 text-amber-900 font-semibold">U18</span>}
-                      {r.offStoreSalary && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-stone-200 border border-stone-400 text-stone-700 font-semibold" title="Management salary — hidden from managers, excluded from store wage cost">OFF-STORE</span>}
+                      {r.salaryPrivacy === "hidden_included" && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-stone-200 border border-stone-400 text-stone-700 font-semibold" title="Owner-only. Still counted in this store's wage cost.">HIDDEN</span>}
+                      {r.salaryPrivacy === "hidden_excluded" && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-purple-100 border border-purple-400 text-purple-900 font-semibold" title="Owner-only. Not counted in store wage cost.">HIDDEN · OFF-STORE</span>}
                     </td>
                     {r.rowError ? (
                       <td colSpan={13} className="py-2 pr-3 text-red-900 text-xs">{r.rowError}</td>
@@ -43385,13 +43388,14 @@ function PayrollAttributesTab({ employee, stores, brands, currentUser, onUpdateE
   }, [employee?.id]);
   useEffect(() => { loadWorkflow(); }, [loadWorkflow]);
 
-  // Management salary — only an owner can see or change this.
-  const [offStore, setOffStore] = useState(employee?.offStoreSalary === true);
-  const toggleOffStore = async () => {
-    const next = !offStore;
-    setOffStore(next);
-    try { await onUpdateEmployee?.({ id: employee.id, offStoreSalary: next }); }
-    catch (e) { setOffStore(!next); }
+  // Salary visibility — owner only. Both hidden options are invisible to
+  // everyone else; they differ only in whether the store carries the cost.
+  const [salaryPrivacy, setSalaryPrivacyLocal] = useState(employee?.salaryPrivacy || "");
+  const setSalaryPrivacy = async (next) => {
+    const prev = salaryPrivacy;
+    setSalaryPrivacyLocal(next);
+    try { await onUpdateEmployee?.({ id: employee.id, salaryPrivacy: next || null }); }
+    catch (e) { setSalaryPrivacyLocal(prev); }
   };
 
   const toggleEligible = async () => {
@@ -43603,17 +43607,23 @@ function PayrollAttributesTab({ employee, stores, brands, currentUser, onUpdateE
 
       {/* Loan requests workflow */}
       {currentUser?.role === "owner" && (
-        <div className="bg-white border border-stone-300 rounded-2xl p-4 mb-4">
-          <label className="flex items-start gap-3 cursor-pointer">
-            <input type="checkbox" checked={offStore} onChange={toggleOffStore} className="rounded mt-0.5"/>
-            <span>
-              <span className="block text-sm font-semibold text-stone-800">Management salary</span>
-              <span className="block text-xs text-stone-600 mt-0.5 leading-relaxed">
-                Paid and exported as normal, but excluded from store wage cost and KPI figures,
-                and hidden from everyone except an owner.
+        <div className="bg-white border border-stone-300 rounded-2xl p-4 mb-4 space-y-2">
+          <div className="text-sm font-semibold text-stone-800">Salary visibility</div>
+          <div className="text-xs text-stone-600 mb-1">Owner only. Both hidden options are paid and exported as normal.</div>
+          {[
+            ["", "Normal", "Visible to anyone with payroll access."],
+            ["hidden_included", "Hidden — in store cost", "Only owners see it. Still counted in this store's wage cost."],
+            ["hidden_excluded", "Hidden — excluded", "Only owners see it. Not counted in store wage cost or KPI figures."],
+          ].map(([val, label, hint]) => (
+            <label key={val || "normal"} className={`flex items-start gap-3 cursor-pointer rounded-xl border p-2.5 ${salaryPrivacy === val ? "border-stone-500 bg-stone-50" : "border-stone-200"}`}>
+              <input type="radio" name="salaryPrivacy" checked={salaryPrivacy === val}
+                onChange={() => setSalaryPrivacy(val)} className="mt-0.5"/>
+              <span>
+                <span className="block text-sm text-stone-800">{label}</span>
+                <span className="block text-xs text-stone-600 mt-0.5 leading-relaxed">{hint}</span>
               </span>
-            </span>
-          </label>
+            </label>
+          ))}
         </div>
       )}
 
@@ -62949,11 +62959,11 @@ function AmendPunchModal({ record, employee, onSave, onDelete, onClose }) {
     // multi-hour "breaks" (a 15:30→14:00 typo became 22.5h). Breaks must run
     // forwards and fit plausibly inside a shift — block the save, name the fix.
     if (newBreakStart && newBreakEnd && new Date(newBreakEnd) <= new Date(newBreakStart)) {
-      alert("Break end must be AFTER break start. Check the times \u2014 this looks like an end-before-start typo.");
+      alert("Break end must be AFTER break start. Check the times — this looks like an end-before-start typo.");
       return;
     }
     if (newBreakMins > 300) {
-      alert(`That's a ${Math.round(newBreakMins / 60 * 10) / 10}-hour break \u2014 almost certainly a typo. Breaks over 5 hours can't be saved; correct the times or minutes.`);
+      alert(`That's a ${Math.round(newBreakMins / 60 * 10) / 10}-hour break — almost certainly a typo. Breaks over 5 hours can't be saved; correct the times or minutes.`);
       return;
     }
     const hoursWorked = newPunchOut ? computePunchHours({ punchIn: newPunchIn, punchOut: newPunchOut, breakMinutes: newBreakMins, breakStart: newBreakStart, breakEnd: newBreakEnd, breakPaid, storeId: record?.storeId }).hours : null;
