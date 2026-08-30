@@ -568,6 +568,8 @@ function appOpsTeamToDb(m) {
   // Owner-only salary. null = normal, hidden_included = counted in store wage
   // cost, hidden_excluded = not counted. Both are paid and exported.
   if (m.salaryPrivacy !== undefined) row.salary_privacy = m.salaryPrivacy || null;
+  // Saved position in the payroll list.
+  if (m.payrollSort !== undefined) row.payroll_sort = m.payrollSort ?? null;
   if (m.department    !== undefined) row.department    = m.department || "";
   if (m.role          !== undefined) row.role          = m.role;
   if (m.isTrainee     !== undefined) row.is_trainee     = !!m.isTrainee;
@@ -649,6 +651,7 @@ function dbOpsTeamToApp(m) {
     nickname: m.nickname || "", department: m.department || "",
     payrollStatus: m.payroll_status || "",
     salaryPrivacy: m.salary_privacy || "",
+    payrollSort: m.payroll_sort ?? null,
     role: m.role, pin: m.pin, color: m.color,
     isTrainee: m.is_trainee ?? false,
     hourlyRate: m.hourly_rate != null ? parseFloat(m.hourly_rate) : 0,

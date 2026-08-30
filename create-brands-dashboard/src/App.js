@@ -35767,7 +35767,7 @@ function UserEditorModal({ user: editUser, brands, stores = [], onSave, onClose 
 // each row to payroll_periods and exports a clean Excel package for the accountant
 // (loans are NEVER included). Loudly flags any employee whose rate can't be
 // resolved (e.g. minimum-wage with no configured band rate or missing DOB).
-function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployeeProfile, onUpdateEmployeeStatus }) {
+function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployeeProfile, onUpdateEmployeeStatus, onUpdateEmployeeSort }) {
   const ExcelJS = useExcelJS();
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -35776,6 +35776,25 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
   // Declared here, above every use, rather than beside the totals.
   const isOwner = currentUser?.role === "owner";
   const [rows, setRows] = useState(null);   // computed rows, or null before a run
+  const [dragId, setDragId] = useState(null);
+  const [savingOrder, setSavingOrder] = useState(false);
+  const moveRow = async (fromId, toId) => {
+    if (!fromId || !toId || fromId === toId || !visibleRows) return;
+    const ids = visibleRows.map(r => r.employeeId);
+    const f = ids.indexOf(fromId), t = ids.indexOf(toId);
+    if (f < 0 || t < 0) return;
+    ids.splice(t, 0, ids.splice(f, 1)[0]);
+    // Renumber from 10 in steps of 10 so a later single insert has room.
+    setRows(rs => rs.map(r => {
+      const i = ids.indexOf(r.employeeId);
+      return i < 0 ? r : { ...r, payrollSort: (i + 1) * 10 };
+    }));
+    setSavingOrder(true);
+    try {
+      await Promise.all(ids.map((id, i) =>
+        onUpdateEmployeeSort ? onUpdateEmployeeSort(id, (i + 1) * 10) : null));
+    } finally { setSavingOrder(false); }
+  };
   const [err, setErr] = useState("");
   const [savedMsg, setSavedMsg] = useState("");
   const [overlapWarn, setOverlapWarn] = useState("");
@@ -36103,6 +36122,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
           payrollLocation: emp.payrollLocation || (emp.storeIds?.[0] || ""),
           accountingLocation: emp.accountingLocation || (emp.storeIds?.[0] || ""),
           salaryPrivacy: emp.salaryPrivacy || "",
+          payrollSort: emp.payrollSort ?? null,
           lines, rowError,
           beforeEffectiveHours: Math.round(beforeEffectiveHours * 100) / 100,
           beforeEffectiveDates,
@@ -36308,7 +36328,16 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
   // Management salaries are visible to an owner only. For everyone else the
   // rows are removed AND excluded from the total, since a total that does not
   // add up is its own disclosure.
-  const visibleRows = rows ? (isOwner ? rows : rows.filter(r => !r.salaryPrivacy)) : null;
+  // Saved running order. Unplaced staff (null) fall to the end, alphabetically,
+  // so a new starter appears at the bottom rather than jumping into the middle.
+  const orderedRows = rows ? [...rows].sort((a, b) => {
+    const ax = a.payrollSort, bx = b.payrollSort;
+    if (ax == null && bx == null) return (a.name || "").localeCompare(b.name || "");
+    if (ax == null) return 1;
+    if (bx == null) return -1;
+    return ax - bx;
+  }) : null;
+  const visibleRows = orderedRows ? (isOwner ? orderedRows : orderedRows.filter(r => !r.salaryPrivacy)) : null;
   const hiddenRows = rows ? rows.filter(r => r.salaryPrivacy) : [];
   const totalGross = visibleRows ? visibleRows.filter(r => !r.rowError).reduce((s, r) => s + r.totalPay, 0) : 0;
   // What the stores actually carry — owner view, management salaries removed.
@@ -36520,6 +36549,9 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
           <div className="flex items-baseline justify-between gap-4 flex-wrap">
             <div className="text-sm text-stone-600">
               <span className="font-semibold text-stone-800">{visibleRows.filter(r => !r.rowError).length}</span> employees
+              <span className="ml-3 text-xs text-stone-500">
+                {savingOrder ? "saving order…" : "drag a row to reorder — saved for future runs"}
+              </span>
             </div>
             <div className="text-sm text-stone-600">
               total gross <span className="text-xl font-bold text-stone-900 ml-1">{fmtGBP(totalGross)}</span>
@@ -36552,8 +36584,14 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
               </thead>
               <tbody>
                 {visibleRows.map(r => (
-                  <tr key={r.employeeId} className={`border-b border-stone-200 hover:bg-stone-50 ${r.rowError ? "bg-red-50" : ""}`}>
+                  <tr key={r.employeeId}
+                    draggable
+                    onDragStart={() => setDragId(r.employeeId)}
+                    onDragOver={e => e.preventDefault()}
+                    onDrop={e => { e.preventDefault(); moveRow(dragId, r.employeeId); setDragId(null); }}
+                    className={`border-b border-stone-200 hover:bg-stone-50 ${r.rowError ? "bg-red-50" : ""} ${dragId === r.employeeId ? "opacity-40" : ""}`}>
                     <td className="py-2 pr-3 pl-3 font-medium text-stone-800">
+                      <span className="text-stone-400 mr-2 cursor-grab select-none" title="Drag to reorder">⋮⋮</span>
                       {onOpenEmployeeProfile ? (
                         <button type="button" onClick={() => onOpenEmployeeProfile(r.employeeId)}
                           className="text-left font-medium underline decoration-dotted underline-offset-2 hover:text-emerald-700"
@@ -37602,7 +37640,7 @@ function EmployeeNavSetup({ customRoles = [] }) {
 function AdminPanelView({
   brands, users, entries,
   stores = [], flipdishStores = [],
-  opsTeam = [], currentUser, onOpenEmployeeProfile, onUpdateEmployeeStatus,
+  opsTeam = [], currentUser, onOpenEmployeeProfile, onUpdateEmployeeStatus, onUpdateEmployeeSort,
   onAddBrand, onUpdateBrand, onDeleteBrand,
   onAddUser, onUpdateUser, onDeleteUser,
   onAddStore, onUpdateStore, onDeleteStore,
@@ -37742,7 +37780,7 @@ function AdminPanelView({
       )}
 
       {tab==="payroll"&&(
-        <PayrollRunScreen opsTeam={opsTeam} stores={stores} brands={brands} currentUser={currentUser} onOpenEmployeeProfile={onOpenEmployeeProfile} onUpdateEmployeeStatus={onUpdateEmployeeStatus} />
+        <PayrollRunScreen opsTeam={opsTeam} stores={stores} brands={brands} currentUser={currentUser} onOpenEmployeeProfile={onOpenEmployeeProfile} onUpdateEmployeeStatus={onUpdateEmployeeStatus} onUpdateEmployeeSort={onUpdateEmployeeSort} />
       )}
 
       {locModal&&<LocationEditorModal brand={locModal==="new"?null:locModal} onSave={locModal==="new"?onAddBrand:onUpdateBrand} onClose={()=>setLocModal(null)}/>}
@@ -69417,6 +69455,12 @@ export default function App() {
               stores={stores} flipdishStores={flipdishStores}
               opsTeam={opsTeam} currentUser={currentUser}
               onOpenEmployeeProfile={openEmployeeProfile}
+              onUpdateEmployeeSort={async (id, payrollSort) => {
+                try {
+                  await updateOpsTeamMember(id, { payrollSort });
+                  setOpsTeam(ts => ts.map(x => x.id === id ? { ...x, payrollSort } : x));
+                } catch (e) { /* order is cosmetic — never block the run */ }
+              }}
               onUpdateEmployeeStatus={async (id, payrollStatus) => {
                 try {
                   const saved = await updateOpsTeamMember(id, { payrollStatus });
