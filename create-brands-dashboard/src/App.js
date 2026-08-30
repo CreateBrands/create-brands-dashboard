@@ -35772,6 +35772,9 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [running, setRunning] = useState(false);
+  // Only an owner sees management salaries — on screen and in the export.
+  // Declared here, above every use, rather than beside the totals.
+  const isOwner = currentUser?.role === "owner";
   const [rows, setRows] = useState(null);   // computed rows, or null before a run
   const [err, setErr] = useState("");
   const [savedMsg, setSavedMsg] = useState("");
@@ -36099,6 +36102,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
           bankAmount, cashAmount,
           payrollLocation: emp.payrollLocation || (emp.storeIds?.[0] || ""),
           accountingLocation: emp.accountingLocation || (emp.storeIds?.[0] || ""),
+          offStoreSalary: emp.offStoreSalary === true,
           lines, rowError,
           beforeEffectiveHours: Math.round(beforeEffectiveHours * 100) / 100,
           beforeEffectiveDates,
@@ -36175,7 +36179,9 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
   const exportExcel = async () => {
     if (!ExcelJS) { alert("Excel library still loading — try again in a moment."); return; }
     if (!rows) return;
-    const exportable = rows.filter(r => !r.rowError);
+    // The accountant needs the management salaries in order to pay them, but a
+    // manager exporting must not get them. Same rule as the screen.
+    const exportable = rows.filter(r => !r.rowError && (isOwner || !r.offStoreSalary));
     const starters = exportable.filter(r => r.newStarter);
 
     const wb = new ExcelJS.Workbook();
@@ -36299,7 +36305,14 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
     URL.revokeObjectURL(a.href);
   };
 
-  const totalGross = rows ? rows.filter(r => !r.rowError).reduce((s, r) => s + r.totalPay, 0) : 0;
+  // Management salaries are visible to an owner only. For everyone else the
+  // rows are removed AND excluded from the total, since a total that does not
+  // add up is its own disclosure.
+  const visibleRows = rows ? (isOwner ? rows : rows.filter(r => !r.offStoreSalary)) : null;
+  const offStoreRows = rows ? rows.filter(r => r.offStoreSalary) : [];
+  const totalGross = visibleRows ? visibleRows.filter(r => !r.rowError).reduce((s, r) => s + r.totalPay, 0) : 0;
+  // What the stores actually carry — owner view, management salaries removed.
+  const storeGross = rows ? rows.filter(r => !r.rowError && !r.offStoreSalary).reduce((s, r) => s + r.totalPay, 0) : 0;
 
   return (
     <div className="space-y-5">
@@ -36504,10 +36517,15 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
         <div className="space-y-2">
           <div className="flex items-baseline justify-between gap-4 flex-wrap">
             <div className="text-sm text-stone-600">
-              <span className="font-semibold text-stone-800">{rows.filter(r => !r.rowError).length}</span> employees
+              <span className="font-semibold text-stone-800">{visibleRows.filter(r => !r.rowError).length}</span> employees
             </div>
             <div className="text-sm text-stone-600">
               total gross <span className="text-xl font-bold text-stone-900 ml-1">{fmtGBP(totalGross)}</span>
+              {isOwner && offStoreRows.length > 0 && (
+                <span className="ml-3 text-xs text-stone-500">
+                  stores {fmtGBP(storeGross)} · management {fmtGBP(totalGross - storeGross)}
+                </span>
+              )}
             </div>
           </div>
           <div className="overflow-x-auto rounded-xl border border-stone-300 bg-white/60">
@@ -36531,7 +36549,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                 </tr>
               </thead>
               <tbody>
-                {rows.map(r => (
+                {visibleRows.map(r => (
                   <tr key={r.employeeId} className={`border-b border-stone-200 hover:bg-stone-50 ${r.rowError ? "bg-red-50" : ""}`}>
                     <td className="py-2 pr-3 pl-3 font-medium text-stone-800">
                       {onOpenEmployeeProfile ? (
@@ -36542,6 +36560,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                         </button>
                       ) : r.name}
                       {r.under18 && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-100 border border-amber-400 text-amber-900 font-semibold">U18</span>}
+                      {r.offStoreSalary && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-stone-200 border border-stone-400 text-stone-700 font-semibold" title="Management salary — hidden from managers, excluded from store wage cost">OFF-STORE</span>}
                     </td>
                     {r.rowError ? (
                       <td colSpan={13} className="py-2 pr-3 text-red-900 text-xs">{r.rowError}</td>
@@ -43366,6 +43385,15 @@ function PayrollAttributesTab({ employee, stores, brands, currentUser, onUpdateE
   }, [employee?.id]);
   useEffect(() => { loadWorkflow(); }, [loadWorkflow]);
 
+  // Management salary — only an owner can see or change this.
+  const [offStore, setOffStore] = useState(employee?.offStoreSalary === true);
+  const toggleOffStore = async () => {
+    const next = !offStore;
+    setOffStore(next);
+    try { await onUpdateEmployee?.({ id: employee.id, offStoreSalary: next }); }
+    catch (e) { setOffStore(!next); }
+  };
+
   const toggleEligible = async () => {
     const next = !loanEligible;
     setLoanEligible(next);
@@ -43574,6 +43602,21 @@ function PayrollAttributesTab({ employee, stores, brands, currentUser, onUpdateE
       </div>
 
       {/* Loan requests workflow */}
+      {currentUser?.role === "owner" && (
+        <div className="bg-white border border-stone-300 rounded-2xl p-4 mb-4">
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input type="checkbox" checked={offStore} onChange={toggleOffStore} className="rounded mt-0.5"/>
+            <span>
+              <span className="block text-sm font-semibold text-stone-800">Management salary</span>
+              <span className="block text-xs text-stone-600 mt-0.5 leading-relaxed">
+                Paid and exported as normal, but excluded from store wage cost and KPI figures,
+                and hidden from everyone except an owner.
+              </span>
+            </span>
+          </label>
+        </div>
+      )}
+
       <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 space-y-4">
         <div className="flex items-center justify-between gap-2">
           <h3 className="text-sm font-bold text-slate-200">Loans</h3>
