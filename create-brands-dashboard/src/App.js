@@ -18080,7 +18080,7 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
             <button disabled={!pickSel.length} onClick={() => setSupplier(pickSel)}
               className="w-full py-3 rounded-2xl text-sm font-bold"
               style={{ backgroundColor: pickSel.length ? "#844429" : "#E8DCC6", color: pickSel.length ? "#FDF2E0" : "#B0A18C" }}>
-              {pickSel.length ? `Start ordering \u00b7 ${pickSel.length} supplier${pickSel.length > 1 ? "s" : ""}` : "Select at least one supplier"}
+              {pickSel.length ? `Start ordering · ${pickSel.length} supplier${pickSel.length > 1 ? "s" : ""}` : "Select at least one supplier"}
             </button>
             </div>
             {pendingApprovals.length > 0 && canApprove && (
@@ -35798,7 +35798,15 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
   const [err, setErr] = useState("");
   const [savedMsg, setSavedMsg] = useState("");
   const [overlapWarn, setOverlapWarn] = useState("");
-  const [locFilter, setLocFilter] = useState("all");   // PAYROLLLOC
+  const [locFilter, setLocFilter] = useState("all");   // PAYROLLLOC — "all" or a Set of ids
+  const locIsAll = locFilter === "all" || (locFilter instanceof Set && locFilter.size === 0);
+  const locHas = (id) => locIsAll || (locFilter instanceof Set && locFilter.has(id));
+  const toggleLoc = (id) => {
+    const next = new Set(locFilter instanceof Set ? locFilter : []);
+    next.has(id) ? next.delete(id) : next.add(id);
+    setLocFilter(next.size === 0 ? "all" : next);
+    setRows(null); setSavedMsg("");
+  };
   // LOCMODE 2026-07-28s — a run is grouped by ONE basis at a time. Payroll
   // location is the PAYE entity that pays the person; accounting location is
   // where the cost is booked. They are different questions and mixing them on
@@ -35979,8 +35987,8 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
     [activeEmployees, empPayrollLoc]
   );
   const scopedEmployees = useMemo(
-    () => locFilter === "all" ? activeEmployees : activeEmployees.filter(e => empPayrollLoc(e) === locFilter),
-    [activeEmployees, locFilter, empPayrollLoc]
+    () => locIsAll ? activeEmployees : activeEmployees.filter(e => locHas(empPayrollLoc(e))),
+    [activeEmployees, locFilter, locIsAll, empPayrollLoc]
   );
   const switchMode = (m) => { setLocMode(m); setLocFilter("all"); setRows(null); setSavedMsg(""); };
 
@@ -36239,7 +36247,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
     // ── Title ──────────────────────────────────────────────────────────────
     const t = ws.addRow([`Payroll — ${from} to ${to}`]);
     t.getCell(1).font = { bold: true, size: 14 };
-    const sub = ws.addRow([`${locModeLabel}: ${locFilter === "all" ? "All locations" : storeName(locFilter)} · ${exportable.length} employees · ${starters.length} new starter${starters.length === 1 ? "" : "s"}`]);
+    const sub = ws.addRow([`${locModeLabel}: ${locIsAll ? "All locations" : [...locFilter].map(id => storeName(id) || id).join(", ")} · ${exportable.length} employees · ${starters.length} new starter${starters.length === 1 ? "" : "s"}`]);
     sub.getCell(1).font = { size: 10, color: { argb: "FF64748B" } };
     ws.addRow([]);
 
@@ -36290,7 +36298,8 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
         r.salaried ? "Monthly Salary" : "Hourly",
         Number(r.bankAmount.toFixed(2)),
         // NORMCHECK — blank for salaried; no hourly floor to normalise against.
-        r.salaried ? "" : (normalizeBank(r.bankAmount, r.nmwRate)?.wage ?? ""),
+        // Salaried: the bank amount is the wage, there are no hours to normalise.
+        r.salaried ? (Number(r.bankAmount) || 0) : (normalizeBank(r.bankAmount, r.nmwRate)?.wage ?? ""),
         r.salaried ? "" : (normalizeBank(r.bankAmount, r.nmwRate)?.hours ?? ""),
         Number(r.cashAmount.toFixed(2)),
       ]);
@@ -36300,7 +36309,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
     const totals = ws.addRow(["", "", "TOTAL", "",
       Number(exportable.reduce((a, r) => a + r.totalPay, 0).toFixed(2)), "",
       Number(exportable.reduce((a, r) => a + r.bankAmount, 0).toFixed(2)),
-      Number(exportable.reduce((a, r) => a + (r.salaried ? 0 : (normalizeBank(r.bankAmount, r.nmwRate)?.wage || 0)), 0).toFixed(2)),
+      Number(exportable.reduce((a, r) => a + (r.salaried ? (Number(r.bankAmount) || 0) : (normalizeBank(r.bankAmount, r.nmwRate)?.wage || 0)), 0).toFixed(2)),
       Number(exportable.reduce((a, r) => a + (r.salaried ? 0 : (normalizeBank(r.bankAmount, r.nmwRate)?.hours || 0)), 0).toFixed(2)),
       Number(exportable.reduce((a, r) => a + r.cashAmount, 0).toFixed(2)),
     ]);
@@ -36338,6 +36347,22 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
     return ax - bx;
   }) : null;
   const visibleRows = orderedRows ? (isOwner ? orderedRows : orderedRows.filter(r => !r.salaryPrivacy)) : null;
+  // One block per location, so a site reads as its own list rather than 133
+  // names running together, with a per-site total.
+  const rowGroups = visibleRows ? (() => {
+    const m = new Map();
+    for (const r of visibleRows) {
+      const k = r.payrollLocation || "";
+      if (!m.has(k)) m.set(k, []);
+      m.get(k).push(r);
+    }
+    return [...m.entries()]
+      .map(([id, rs]) => ({
+        id, name: storeName(id) || "Unassigned", rows: rs,
+        gross: rs.filter(r => !r.rowError).reduce((a2, r) => a2 + r.totalPay, 0),
+      }))
+      .sort((x, y) => x.name.localeCompare(y.name));
+  })() : [];
   const hiddenRows = rows ? rows.filter(r => r.salaryPrivacy) : [];
   const totalGross = visibleRows ? visibleRows.filter(r => !r.rowError).reduce((s, r) => s + r.totalPay, 0) : 0;
   // What the stores actually carry — owner view, management salaries removed.
@@ -36353,12 +36378,12 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
         from their profile and can be overridden per row here. Loans are never included.
       </div>
 
-      {locFilter !== "all" && (
+      {!locIsAll && (
         <div className="rounded-xl border border-indigo-500/30 bg-indigo-950/20 px-3 py-2 text-xs text-slate-300">
-          Running by <span className="font-semibold text-white">{locModeLabel.toLowerCase()}</span> for <span className="font-semibold text-white">{storeName(locFilter) || locFilter}</span> — {scopedEmployees.length} employee{scopedEmployees.length === 1 ? "" : "s"}. Hours worked at any site count here; everyone else is excluded from this run and its export.
+          Running by <span className="font-semibold text-white">{locModeLabel.toLowerCase()}</span> for <span className="font-semibold text-white">{[...locFilter].map(id => storeName(id) || id).join(", ")}</span> — {scopedEmployees.length} employee{scopedEmployees.length === 1 ? "" : "s"}. Hours worked at any site count here; everyone else is excluded from this run and its export.
         </div>
       )}
-      {locFilter === "all" && unassignedCount > 0 && (
+      {locIsAll && unassignedCount > 0 && (
         <div className="rounded-xl border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-xs text-amber-300">
           {unassignedCount} employee{unassignedCount === 1 ? " has" : "s have"} no {locModeLabel.toLowerCase()} set — they appear under All locations but will be missed by every per-location run. Set it in the table below, or on their Job &amp; Pay tab.
         </div>
@@ -36396,10 +36421,19 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
         </div>
         <div>
           <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">{locModeLabel}</label>
-          <select value={locFilter} onChange={e => { setLocFilter(e.target.value); setRows(null); setSavedMsg(""); }} className={inputCls}>
-            <option value="all">All locations ({activeEmployees.length})</option>
-            {payrollLocations.map(l => <option key={l.id} value={l.id}>{l.name} ({l.count})</option>)}
-          </select>
+          <div className="border border-stone-300 rounded-xl bg-white max-h-44 overflow-y-auto p-1 min-w-[200px]">
+            <label className="flex items-center gap-2 px-2 py-1.5 text-sm cursor-pointer hover:bg-stone-50 rounded-lg">
+              <input type="checkbox" checked={locIsAll}
+                onChange={() => { setLocFilter("all"); setRows(null); setSavedMsg(""); }} />
+              <span className="font-semibold">All locations ({activeEmployees.length})</span>
+            </label>
+            {payrollLocations.map(l => (
+              <label key={l.id} className="flex items-center gap-2 px-2 py-1.5 text-sm cursor-pointer hover:bg-stone-50 rounded-lg">
+                <input type="checkbox" checked={!locIsAll && locHas(l.id)} onChange={() => toggleLoc(l.id)} />
+                <span>{l.name} <span className="text-stone-500">({l.count})</span></span>
+              </label>
+            ))}
+          </div>
         </div>
         <button onClick={run} disabled={running}
           className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl px-4 py-2 text-sm font-semibold transition-colors">
@@ -36583,7 +36617,17 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                 </tr>
               </thead>
               <tbody>
-                {visibleRows.map(r => (
+                {rowGroups.map(g => (
+                  <Fragment key={g.id || "unassigned"}>
+                    <tr className="bg-stone-100 border-b border-stone-300">
+                      <td colSpan={14} className="py-2 px-3">
+                        <span className="text-[11px] font-bold uppercase tracking-wider text-stone-700">{g.name}</span>
+                        <span className="ml-2 text-[11px] text-stone-500">
+                          {g.rows.filter(r => !r.rowError).length} staff · {fmtGBP(g.gross)}
+                        </span>
+                      </td>
+                    </tr>
+                    {g.rows.map(r => (
                   <tr key={r.employeeId}
                     draggable
                     onDragStart={() => setDragId(r.employeeId)}
@@ -36661,7 +36705,11 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                         </td>
                         <td className="py-2 pr-3 whitespace-nowrap">
                           {(() => {
-                            if (r.salaried) return <span className="text-[11px] text-slate-500">—</span>;
+                            if (r.salaried) return (
+                              <span className="text-[11px] text-stone-600" title="Fixed salary — same as the bank transfer">
+                                {fmtGBP(r.bankAmount)}
+                              </span>
+                            );
                             if (!(r.nmwRate > 0)) return <span className="text-[11px] text-amber-400">no min rate</span>;
                             // NORMCHECK 2026-07-29d — check first, normalise only if
                             // the bank amount isn't already on a quarter-hour
@@ -36749,6 +36797,8 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                       </>
                     )}
                   </tr>
+                    ))}
+                  </Fragment>
                 ))}
               </tbody>
             </table>
