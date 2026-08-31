@@ -35799,6 +35799,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
   const [savedMsg, setSavedMsg] = useState("");
   const [overlapWarn, setOverlapWarn] = useState("");
   const [locFilter, setLocFilter] = useState("all");   // PAYROLLLOC — "all" or a Set of ids
+  const [locOpen, setLocOpen] = useState(false);
   const locIsAll = locFilter === "all" || (locFilter instanceof Set && locFilter.size === 0);
   const locHas = (id) => locIsAll || (locFilter instanceof Set && locFilter.has(id));
   const toggleLoc = (id) => {
@@ -36421,18 +36422,37 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
         </div>
         <div>
           <label className="block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1">{locModeLabel}</label>
-          <div className="border border-stone-300 rounded-xl bg-white max-h-44 overflow-y-auto p-1 min-w-[200px]">
-            <label className="flex items-center gap-2 px-2 py-1.5 text-sm cursor-pointer hover:bg-stone-50 rounded-lg">
-              <input type="checkbox" checked={locIsAll}
-                onChange={() => { setLocFilter("all"); setRows(null); setSavedMsg(""); }} />
-              <span className="font-semibold">All locations ({activeEmployees.length})</span>
-            </label>
-            {payrollLocations.map(l => (
-              <label key={l.id} className="flex items-center gap-2 px-2 py-1.5 text-sm cursor-pointer hover:bg-stone-50 rounded-lg">
-                <input type="checkbox" checked={!locIsAll && locHas(l.id)} onChange={() => toggleLoc(l.id)} />
-                <span>{l.name} <span className="text-stone-500">({l.count})</span></span>
-              </label>
-            ))}
+          <div className="relative min-w-[200px]">
+            <button type="button" onClick={() => setLocOpen(o => !o)}
+              className="w-full flex items-center justify-between gap-2 border border-stone-300 rounded-xl bg-white px-3 py-2 text-sm text-left">
+              <span className="truncate">
+                {locIsAll
+                  ? `All locations (${activeEmployees.length})`
+                  : locFilter.size === 1
+                    ? (storeName([...locFilter][0]) || [...locFilter][0])
+                    : `${locFilter.size} locations`}
+              </span>
+              <span className="text-stone-400 text-xs">{locOpen ? "▲" : "▼"}</span>
+            </button>
+            {locOpen && (
+              <>
+                {/* Click anywhere else to close. */}
+                <div className="fixed inset-0 z-10" onClick={() => setLocOpen(false)} />
+                <div className="absolute z-20 mt-1 w-full border border-stone-300 rounded-xl bg-white shadow-lg max-h-64 overflow-y-auto p-1">
+                  <label className="flex items-center gap-2 px-2 py-1.5 text-sm cursor-pointer hover:bg-stone-50 rounded-lg">
+                    <input type="checkbox" checked={locIsAll}
+                      onChange={() => { setLocFilter("all"); setRows(null); setSavedMsg(""); }} />
+                    <span className="font-semibold">All locations ({activeEmployees.length})</span>
+                  </label>
+                  {payrollLocations.map(l => (
+                    <label key={l.id} className="flex items-center gap-2 px-2 py-1.5 text-sm cursor-pointer hover:bg-stone-50 rounded-lg">
+                      <input type="checkbox" checked={!locIsAll && locHas(l.id)} onChange={() => toggleLoc(l.id)} />
+                      <span>{l.name} <span className="text-stone-500">({l.count})</span></span>
+                    </label>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         </div>
         <button onClick={run} disabled={running}
