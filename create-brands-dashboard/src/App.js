@@ -205,6 +205,8 @@ import {
   archiveStoreDocument, deleteStoreDocument, docExpiryStatus,
   fetchPaySchedule, savePaySchedule, generatePayPeriods, payPeriodStatus, fetchPayPeriodLocations,
   closePayPeriodStore, reopenPayPeriodStore, overridePayPeriodDates, setPunchApproved, approvePunchesInPeriod,
+  fetchPayrollSeparators, addPayrollSeparator, updatePayrollSeparator,
+  deletePayrollSeparator, reorderPayrollList,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -35767,7 +35769,7 @@ function UserEditorModal({ user: editUser, brands, stores = [], onSave, onClose 
 // each row to payroll_periods and exports a clean Excel package for the accountant
 // (loans are NEVER included). Loudly flags any employee whose rate can't be
 // resolved (e.g. minimum-wage with no configured band rate or missing DOB).
-function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployeeProfile, onUpdateEmployeeStatus, onUpdateEmployeeSort }) {
+function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployeeProfile, onUpdateEmployeeStatus, onUpdateEmployeeSort, onPayrollOrderSaved }) {
   const ExcelJS = useExcelJS();
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -35778,22 +35780,97 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
   const [rows, setRows] = useState(null);   // computed rows, or null before a run
   const [dragId, setDragId] = useState(null);
   const [savingOrder, setSavingOrder] = useState(false);
-  const moveRow = async (fromId, toId) => {
-    if (!fromId || !toId || fromId === toId || !visibleRows) return;
-    const ids = visibleRows.map(r => r.employeeId);
-    const f = ids.indexOf(fromId), t = ids.indexOf(toId);
-    if (f < 0 || t < 0) return;
-    ids.splice(t, 0, ids.splice(f, 1)[0]);
-    // Renumber from 10 in steps of 10 so a later single insert has room.
-    setRows(rs => rs.map(r => {
-      const i = ids.indexOf(r.employeeId);
-      return i < 0 ? r : { ...r, payrollSort: (i + 1) * 10 };
+  // SEPARATORS 2026-08-31 — labelled dividers the user drops between rows.
+  // Held here rather than threaded from the root because this screen already
+  // fetches its own data, and nothing outside payroll reads them.
+  const [separators, setSeparators] = useState([]);
+  const [sepDraft, setSepDraft] = useState({});      // separatorId -> in-progress label
+  useEffect(() => {
+    let live = true;
+    fetchPayrollSeparators()
+      .then(s => { if (live) setSeparators(s); })
+      .catch(() => { /* dividers are presentation — never block a run */ });
+    return () => { live = false; };
+  }, []);
+
+  // Persist one location block in its new order. Employees and separators are
+  // renumbered together in a single transaction; the local state is moved first
+  // so the row doesn't visibly snap back while the write is in flight.
+  const persistOrder = async (keys, sepsOverride) => {
+    const items = keys.map((k, i) => ({
+      kind: k.startsWith("sep:") ? "separator" : "employee",
+      id: k.slice(4),
+      pos: (i + 1) * 10,
+    }));
+    const posOf = {};
+    items.forEach(it => { posOf[it.kind + ":" + it.id] = it.pos; });
+    setRows(rs => rs ? rs.map(r => {
+      const p = posOf["employee:" + r.employeeId];
+      return p == null ? r : { ...r, payrollSort: p };
+    }) : rs);
+    setSeparators(ss => (sepsOverride || ss).map(s => {
+      const p = posOf["separator:" + s.id];
+      return p == null ? s : { ...s, sortOrder: p };
     }));
     setSavingOrder(true);
     try {
-      await Promise.all(ids.map((id, i) =>
-        onUpdateEmployeeSort ? onUpdateEmployeeSort(id, (i + 1) * 10) : null));
+      await reorderPayrollList(items);
+      // Keep the root's opsTeam in step — the next run rebuilds rows from it,
+      // so a stale payrollSort there would undo the arrangement on re-run.
+      if (onPayrollOrderSaved) {
+        onPayrollOrderSaved(items.filter(i => i.kind === "employee").map(i => ({ id: i.id, payrollSort: i.pos })));
+      }
+    } catch (e) {
+      setErr("Could not save the running order: " + (e?.message || e));
     } finally { setSavingOrder(false); }
+  };
+
+  // A drag reorders within its own location block only. Dropping across blocks
+  // would have to rewrite someone's payroll location — a PAYE fact, not a
+  // display one — so it is ignored rather than guessed at.
+  const moveItem = async (fromKey, toKey) => {
+    if (!fromKey || !toKey || fromKey === toKey) return;
+    const g = rowGroups.find(gr => gr.items.some(i => i.key === fromKey));
+    if (!g || !g.items.some(i => i.key === toKey)) return;
+    const keys = g.items.map(i => i.key);
+    const f = keys.indexOf(fromKey), t = keys.indexOf(toKey);
+    if (f < 0 || t < 0) return;
+    keys.splice(t, 0, keys.splice(f, 1)[0]);
+    await persistOrder(keys);
+  };
+
+  const addSeparatorAt = async (locId, afterKey) => {
+    const g = rowGroups.find(gr => gr.id === locId);
+    const items = g ? g.items : [];
+    const idx = afterKey ? items.findIndex(i => i.key === afterKey) : -1;
+    const base = idx >= 0 ? ((items[idx].sort ?? (idx + 1) * 10)) : 0;
+    try {
+      const created = await addPayrollSeparator({
+        label: "New section", payrollLocation: locId, sortOrder: base + 5,
+      });
+      const next = [...separators, created];
+      setSeparators(next);
+      const keys = [
+        ...items.slice(0, idx + 1).map(i => i.key),
+        `sep:${created.id}`,
+        ...items.slice(idx + 1).map(i => i.key),
+      ];
+      await persistOrder(keys, next);
+    } catch (e) { setErr("Could not add separator: " + (e?.message || e)); }
+  };
+
+  const renameSeparator = async (id, label) => {
+    const before = separators;
+    setSeparators(ss => ss.map(s => s.id === id ? { ...s, label } : s));
+    try { await updatePayrollSeparator(id, { label }); }
+    catch (e) { setSeparators(before); setErr("Could not rename separator: " + (e?.message || e)); }
+  };
+
+  const removeSeparator = async (id) => {
+    const before = separators;
+    setSeparators(ss => ss.filter(s => s.id !== id));
+    try { await deletePayrollSeparator(id); }
+    catch (e) { setSeparators(before); setErr("Could not delete separator: " + (e?.message || e)); }
   };
   const [err, setErr] = useState("");
   const [savedMsg, setSavedMsg] = useState("");
@@ -36210,7 +36287,21 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
     if (!rows) return;
     // The accountant needs the management salaries in order to pay them, but a
     // manager exporting must not get them. Same rule as the screen.
-    const exportable = rows.filter(r => !r.rowError && (isOwner || !r.salaryPrivacy));
+    // EXPORTORDER 2026-08-31 — the sheet now follows the on-screen order and
+    // grouping. It previously used the order the run happened to compute rows
+    // in, which meant a separator had no position it could be faithful to.
+    const exportable = rows
+      .filter(r => !r.rowError && (isOwner || !r.salaryPrivacy))
+      .sort((a, b) => {
+        const an = storeName(a.payrollLocation || "") || "Unassigned";
+        const bn = storeName(b.payrollLocation || "") || "Unassigned";
+        if (an !== bn) return an.localeCompare(bn);
+        const ax = a.payrollSort, bx = b.payrollSort;
+        if (ax == null && bx == null) return (a.name || "").localeCompare(b.name || "");
+        if (ax == null) return 1;
+        if (bx == null) return -1;
+        return ax - bx;
+      });
     const starters = exportable.filter(r => r.newStarter);
 
     const wb = new ExcelJS.Workbook();
@@ -36285,7 +36376,29 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
       ["Normalized Hours", 16], ["Cash Paid", 13],
     ];
     styleHeader(ws.addRow(payCols.map(c => c[0])));
-    exportable.forEach((r, i) => {
+    // Same grouped structure the table renders, so a divider lands between the
+    // same two people in the sheet as it does on screen.
+    const exportGroups = [];
+    for (const r of exportable) {
+      const k = r.payrollLocation || "";
+      let g = exportGroups.find(x => x.id === k);
+      if (!g) { g = { id: k, name: storeName(k) || "Unassigned", rows: [] }; exportGroups.push(g); }
+      g.rows.push(r);
+    }
+    let bodyIdx = 0;
+    exportGroups.forEach(g => {
+      const locRow = ws.addRow([g.name]);
+      locRow.getCell(1).font = { bold: true, size: 11, color: { argb: "FF1F2937" } };
+      locRow.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } };
+      groupItems(g.rows, g.id).forEach(it => {
+      if (it.kind === "separator") {
+        const sepRow = ws.addRow([it.data.label || ""]);
+        sepRow.getCell(1).font = { bold: true, italic: true, size: 10, color: { argb: "FF3730A3" } };
+        sepRow.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEEF2FF" } };
+        return;
+      }
+      const r = it.data;
+      const i = bodyIdx++;
       const row = ws.addRow([
         r.firstName || "", r.lastName || "",
         r.newStarter ? "Yes" : "",
@@ -36305,6 +36418,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
         Number(r.cashAmount.toFixed(2)),
       ]);
       styleBody(row, i, [4, 5, 7, 8, 10]);
+      });
     });
 
     const totals = ws.addRow(["", "", "TOTAL", "",
@@ -36350,6 +36464,23 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
   const visibleRows = orderedRows ? (isOwner ? orderedRows : orderedRows.filter(r => !r.salaryPrivacy)) : null;
   // One block per location, so a site reads as its own list rather than 133
   // names running together, with a per-site total.
+  // SEPARATORS — a divider shares one number space with payrollSort, so a merge
+  // sort drops it back exactly where it was left. On a tie the separator wins,
+  // putting a heading above its section rather than underneath it. Used by both
+  // the table and the export, so the two can never disagree about position.
+  const groupItems = (rs, locId) => ([
+    ...rs.map(r => ({ kind: "employee", key: `emp:${r.employeeId}`, sort: r.payrollSort, data: r })),
+    ...(separators || [])
+      .filter(s => (s.payrollLocation || "") === (locId || ""))
+      .map(s => ({ kind: "separator", key: `sep:${s.id}`, sort: s.sortOrder, data: s })),
+  ].sort((a, b) => {
+    const ax = a.sort, bx = b.sort;
+    if (ax == null && bx == null) return 0;
+    if (ax == null) return 1;
+    if (bx == null) return -1;
+    return (ax - bx) || (a.kind === "separator" ? -1 : 1);
+  }));
+
   const rowGroups = visibleRows ? (() => {
     const m = new Map();
     for (const r of visibleRows) {
@@ -36359,7 +36490,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
     }
     return [...m.entries()]
       .map(([id, rs]) => ({
-        id, name: storeName(id) || "Unassigned", rows: rs,
+        id, name: storeName(id) || "Unassigned", rows: rs, items: groupItems(rs, id),
         gross: rs.filter(r => !r.rowError).reduce((a2, r) => a2 + r.totalPay, 0),
       }))
       .sort((x, y) => x.name.localeCompare(y.name));
@@ -36645,15 +36776,56 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                         <span className="ml-2 text-[11px] text-stone-500">
                           {g.rows.filter(r => !r.rowError).length} staff · {fmtGBP(g.gross)}
                         </span>
+                        <button type="button" onClick={() => addSeparatorAt(g.id, null)}
+                          title="Add a labelled separator at the top of this block"
+                          className="ml-3 text-[11px] px-2 py-0.5 rounded border border-stone-400 bg-white hover:bg-stone-50 text-stone-700 font-semibold">
+                          + Separator
+                        </button>
                       </td>
                     </tr>
-                    {g.rows.map(r => (
+                    {g.items.map(it => {
+                  if (it.kind === "separator") {
+                    const s = it.data;
+                    return (
+                      <tr key={it.key}
+                        draggable
+                        onDragStart={() => setDragId(it.key)}
+                        onDragOver={e => e.preventDefault()}
+                        onDrop={e => { e.preventDefault(); moveItem(dragId, it.key); setDragId(null); }}
+                        className={`border-b border-indigo-200 bg-indigo-50/60 ${dragId === it.key ? "opacity-40" : ""}`}>
+                        <td colSpan={14} className="py-1.5 px-3">
+                          <span className="text-stone-400 mr-2 cursor-grab select-none" title="Drag to reorder">⋮⋮</span>
+                          <input
+                            value={sepDraft[s.id] ?? s.label ?? ""}
+                            onChange={e => setSepDraft(d => ({ ...d, [s.id]: e.target.value }))}
+                            onBlur={e => {
+                              const v = e.target.value.trim();
+                              setSepDraft(d => { const n = { ...d }; delete n[s.id]; return n; });
+                              if (v && v !== s.label) renameSeparator(s.id, v);
+                            }}
+                            onKeyDown={e => { if (e.key === "Enter") e.target.blur(); }}
+                            placeholder="Section label"
+                            title="Rename this separator"
+                            className="bg-transparent border-0 border-b border-dashed border-indigo-300 focus:border-indigo-600 focus:outline-none text-[11px] font-bold uppercase tracking-wider text-indigo-900 px-0.5 py-0.5 w-64"
+                          />
+                          <button type="button" onClick={() => addSeparatorAt(g.id, it.key)}
+                            title="Add another separator below this one"
+                            className="ml-3 text-[11px] text-indigo-700 hover:underline">+ below</button>
+                          <button type="button" onClick={() => removeSeparator(s.id)}
+                            title="Delete this separator"
+                            className="ml-3 text-[11px] text-red-700 hover:underline">Delete</button>
+                        </td>
+                      </tr>
+                    );
+                  }
+                  const r = it.data;
+                  return (
                   <tr key={r.employeeId}
                     draggable
-                    onDragStart={() => setDragId(r.employeeId)}
+                    onDragStart={() => setDragId(it.key)}
                     onDragOver={e => e.preventDefault()}
-                    onDrop={e => { e.preventDefault(); moveRow(dragId, r.employeeId); setDragId(null); }}
-                    className={`border-b border-stone-200 hover:bg-stone-50 ${r.rowError ? "bg-red-50" : ""} ${dragId === r.employeeId ? "opacity-40" : ""}`}>
+                    onDrop={e => { e.preventDefault(); moveItem(dragId, it.key); setDragId(null); }}
+                    className={`border-b border-stone-200 hover:bg-stone-50 ${r.rowError ? "bg-red-50" : ""} ${dragId === it.key ? "opacity-40" : ""}`}>
                     <td className="py-2 pr-3 pl-3 font-medium text-stone-800">
                       <span className="text-stone-400 mr-2 cursor-grab select-none" title="Drag to reorder">⋮⋮</span>
                       {onOpenEmployeeProfile ? (
@@ -36817,7 +36989,8 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                       </>
                     )}
                   </tr>
-                    ))}
+                    );
+                    })}
                   </Fragment>
                 ))}
               </tbody>
@@ -37710,7 +37883,7 @@ function EmployeeNavSetup({ customRoles = [] }) {
 function AdminPanelView({
   brands, users, entries,
   stores = [], flipdishStores = [],
-  opsTeam = [], currentUser, onOpenEmployeeProfile, onUpdateEmployeeStatus, onUpdateEmployeeSort,
+  opsTeam = [], currentUser, onOpenEmployeeProfile, onUpdateEmployeeStatus, onUpdateEmployeeSort, onPayrollOrderSaved,
   onAddBrand, onUpdateBrand, onDeleteBrand,
   onAddUser, onUpdateUser, onDeleteUser,
   onAddStore, onUpdateStore, onDeleteStore,
@@ -37850,7 +38023,7 @@ function AdminPanelView({
       )}
 
       {tab==="payroll"&&(
-        <PayrollRunScreen opsTeam={opsTeam} stores={stores} brands={brands} currentUser={currentUser} onOpenEmployeeProfile={onOpenEmployeeProfile} onUpdateEmployeeStatus={onUpdateEmployeeStatus} onUpdateEmployeeSort={onUpdateEmployeeSort} />
+        <PayrollRunScreen opsTeam={opsTeam} stores={stores} brands={brands} currentUser={currentUser} onOpenEmployeeProfile={onOpenEmployeeProfile} onUpdateEmployeeStatus={onUpdateEmployeeStatus} onUpdateEmployeeSort={onUpdateEmployeeSort} onPayrollOrderSaved={onPayrollOrderSaved} />
       )}
 
       {locModal&&<LocationEditorModal brand={locModal==="new"?null:locModal} onSave={locModal==="new"?onAddBrand:onUpdateBrand} onClose={()=>setLocModal(null)}/>}
@@ -69525,6 +69698,13 @@ export default function App() {
               stores={stores} flipdishStores={flipdishStores}
               opsTeam={opsTeam} currentUser={currentUser}
               onOpenEmployeeProfile={openEmployeeProfile}
+              onPayrollOrderSaved={(sorts) => {
+                // The RPC already wrote these; this only keeps the in-memory
+                // opsTeam in step so a second run in the same session rebuilds
+                // rows in the order the user just arranged.
+                const by = new Map(sorts.map(s => [s.id, s.payrollSort]));
+                setOpsTeam(ts => ts.map(x => by.has(x.id) ? { ...x, payrollSort: by.get(x.id) } : x));
+              }}
               onUpdateEmployeeSort={async (id, payrollSort) => {
                 try {
                   await updateOpsTeamMember(id, { payrollSort });

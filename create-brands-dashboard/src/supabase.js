@@ -18684,3 +18684,71 @@ export async function deleteRoleAppNav(roleId) {
   const { error } = await supabase.from("role_app_nav").delete().eq("role_id", roleId);
   if (error) throw error;
 }
+
+
+// ── PAYROLL SEPARATORS ───────────────────────────────────────────────────────
+// Labelled dividers the payroll list carries between employee rows. They live
+// in their own table but share ONE number space with ops_team.payroll_sort, so
+// the two interleave: the screen and the Excel export both merge-sort on it and
+// therefore cannot drift apart.
+function dbPayrollSeparatorToApp(r) {
+  return {
+    id: r.id,
+    label: r.label ?? "",
+    payrollLocation: r.payroll_location ?? "",
+    sortOrder: r.sort_order ?? null,
+  };
+}
+
+export async function fetchPayrollSeparators() {
+  const { data, error } = await supabase
+    .from("payroll_separators").select("*").order("sort_order");
+  if (error) throw error;
+  return (data || []).map(dbPayrollSeparatorToApp);
+}
+
+export async function addPayrollSeparator({ label, payrollLocation, sortOrder }) {
+  const { data, error } = await supabase
+    .from("payroll_separators")
+    .insert({
+      label: label || "New section",
+      payroll_location: payrollLocation || "",
+      sort_order: sortOrder ?? 0,
+    })
+    .select();
+  if (error) throw error;
+  if (!data || !data.length) throw new Error("Separator created but could not be retrieved.");
+  return dbPayrollSeparatorToApp(data[0]);
+}
+
+// Same RLS-tolerant pattern as updateOpsTeamMember: drop .single(), refetch if
+// SELECT-after-UPDATE comes back empty.
+export async function updatePayrollSeparator(id, patch) {
+  if (!id) throw new Error("id required");
+  const row = { updated_at: new Date().toISOString() };
+  if (patch.label !== undefined)           row.label = patch.label;
+  if (patch.sortOrder !== undefined)       row.sort_order = patch.sortOrder;
+  if (patch.payrollLocation !== undefined) row.payroll_location = patch.payrollLocation;
+  const { data, error } = await supabase
+    .from("payroll_separators").update(row).eq("id", id).select();
+  if (error) throw error;
+  if (data && data.length) return dbPayrollSeparatorToApp(data[0]);
+  const { data: fresh, error: fetchErr } = await supabase
+    .from("payroll_separators").select("*").eq("id", id).maybeSingle();
+  if (fetchErr) throw fetchErr;
+  if (!fresh) throw new Error(`Separator ${id} updated but could not be retrieved.`);
+  return dbPayrollSeparatorToApp(fresh);
+}
+
+export async function deletePayrollSeparator(id) {
+  const { error } = await supabase.from("payroll_separators").delete().eq("id", id);
+  if (error) throw error;
+}
+
+// One transaction renumbers BOTH tables. As two round trips a failure between
+// them leaves employees moved and dividers not, which reads on screen as the
+// divider having jumped somewhere nobody put it.
+export async function reorderPayrollList(items) {
+  const { error } = await supabase.rpc("reorder_payroll_list", { p_items: items });
+  if (error) throw error;
+}
