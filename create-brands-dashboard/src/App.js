@@ -17786,6 +17786,35 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
     return "Each";
   };
   const setLineNote = (itemId, t) => setLineNotes(n => { const x = { ...n }; if (!t) delete x[itemId]; else x[itemId] = t; return x; });
+  // BASKETPERSIST 2026-08-31 — a refresh used to empty the basket and the store
+  // had to pick everything again. Saved per customer, so switching account keeps
+  // each basket separate rather than merging them.
+  const basketKey = (cid) => `distOrderBasket:${cid}`;
+  const restoredFor = useRef(null);
+  useEffect(() => {
+    if (!customerId) return;
+    try {
+      const raw = localStorage.getItem(basketKey(customerId));
+      const saved = raw ? JSON.parse(raw) : null;
+      if (saved) {
+        setCart(saved.cart || {});
+        setLineNotes(saved.lineNotes || {});
+        setLineUoms(saved.lineUoms || {});
+      }
+    } catch { /* corrupt or unavailable storage — start empty */ }
+    // Marks this customer as restored. The save effect below stays inert until
+    // this is set, otherwise the empty cart from a customer switch would
+    // overwrite that customer's saved basket before it is read back.
+    restoredFor.current = customerId;
+  }, [customerId]);
+
+  useEffect(() => {
+    if (!customerId || restoredFor.current !== customerId) return;
+    try {
+      localStorage.setItem(basketKey(customerId), JSON.stringify({ cart, lineNotes, lineUoms }));
+    } catch { /* quota or private mode — basket just won't survive the refresh */ }
+  }, [customerId, cart, lineNotes, lineUoms]);
+
   const setQty = (itemId, qty) => { const q = Math.max(0, Number(qty) || 0); setCart(c => { const n = { ...c }; if (q <= 0) delete n[itemId]; else n[itemId] = q; return n; }); };
   const bump = (itemId, d) => setQty(itemId, (cart[itemId] || 0) + d);
 
@@ -17922,6 +17951,8 @@ function DistOrderPortalView({ currentUser, onNavigate, storeIdsHint }) {
       if (roundLoaded && round) { try { await closeOrderRound(round.id, { status: "placed", soId: id }); } catch {} setRoundLoaded(false); reloadRound(activeStoreId); }
       try { await setSoTeamNotes(id, { noteKitchen, noteDist, noteDriver }); } catch (_) { /* notes are additive; never fail the order over one */ }
       setPlaced({ id, count: cartCount, total: cartTotal, direct: directPlaced }); setCart({}); setLineNotes({}); setLineUoms({}); setConfirmOpen(false); setCartOpen(false); setDeliveryDate(""); setOrderNote("");
+      // Order is away — drop the saved basket so the next visit starts clean.
+      try { localStorage.removeItem(basketKey(customerId)); } catch { /* nothing to clear */ }
       setNoteKitchen(""); setNoteDist(""); setNoteDriver("");
     } catch (e) { setErr(e.message); setSubmitFailed(e.message || "Your order did not save. Please try again."); }
     setPlacing(false);
