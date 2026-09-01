@@ -69512,12 +69512,13 @@ export default function App() {
   // Per the owner's spec: inside the warehouse show the full Operations section
   // (temps, deliveries, assets etc. apply to a warehouse too), the Warehouse
   // group, plus People (Team + Communication), Reports and Setup. The store
-  // Dashboard, Invoices, Google Command, store Order portal, Agent Inbox and
-  // EOD stay outside — the warehouse has its own dashboard in the group.
+  // Dashboard, Invoices, Google Command, Agent Inbox and EOD stay outside — the
+  // warehouse has its own dashboard in the group. The store Order portal was
+  // excluded too, but is now kept: warehouse staff place store orders from here.
   const DIST_KEEP = new Set(["operations", "team", "comms", "reports", "setup", "fresh-produce", "expenses"]);
   const DIST_NAV = NAV_GROUPS
     .map(g => ({ ...g, items: g.items
-      .filter(i => DIST_KEEP.has(i.key) || (i.key.startsWith("dist-") && i.key !== "dist-order"))
+      .filter(i => DIST_KEEP.has(i.key) || i.key.startsWith("dist-"))
     }))
     .filter(g => g.items.length > 0);
   const effectiveNavGroups = isFinanceEntity ? FINANCE_NAV : isDistEntity ? DIST_NAV : NAV_GROUPS;
