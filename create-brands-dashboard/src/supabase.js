@@ -14346,7 +14346,12 @@ export async function advanceDistOrderToDispatch(soId, createdBy, freshCosts = {
   // PHASE 3b: mirror the dispatch into a store_delivery (incoming) so the store
   // can receive against it. Best-effort — never blocks the dispatch.
   try {
-    const dispatchId = dispatchResult && (dispatchResult.id || dispatchResult.dispatchId) ? (dispatchResult.id || dispatchResult.dispatchId) : null;
+    // postDistDispatch returns the id as a plain string. Reading .id off it gave
+    // undefined every time, so every store delivery was written with a null
+    // dispatch_id and could not be traced back to the dispatch that made it.
+    const dispatchId = typeof dispatchResult === "string"
+      ? dispatchResult
+      : ((dispatchResult && (dispatchResult.id || dispatchResult.dispatchId)) || null);
     await createStoreDeliveryFromDispatch(soId, dispatchId, lines);
     // CK customer: mirror into a CK delivery instead (each mirror checks its
     // own applicability — store fn no-ops without a store_id, CK fn no-ops
