@@ -36187,9 +36187,14 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
           salaried,
           payType: emp.payType || "hourly",
           // NEWSTARTER 2026-07-28ae — someone whose hire date lands in this
-          // period is a new starter by default. Overridable per row, because
-          // the payroll bureau only needs full personal details once.
-          newStarter: !!(emp.hireDate && emp.hireDate >= from && emp.hireDate <= to),
+          // period is a new starter by default. The per-row checkbox is gone;
+          // the status dropdown now carries this. Hire-date detection survives
+          // as the fallback so a genuine starter is still flagged to the bureau
+          // on a row nobody has set a status on yet.
+          autoNewStarter: !!(emp.hireDate && emp.hireDate >= from && emp.hireDate <= to),
+          newStarter: emp.payrollStatus
+            ? emp.payrollStatus === "new_starter"
+            : !!(emp.hireDate && emp.hireDate >= from && emp.hireDate <= to),
           // Whether the accountant has actually registered them on payroll.
           // Defaults to false so a new starter stands out until confirmed.
           payrollStatus: emp.payrollStatus || "",
@@ -36402,7 +36407,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
       const row = ws.addRow([
         r.firstName || "", r.lastName || "",
         r.newStarter ? "Yes" : "",
-        ({ new_starter: "New starter", on: "On payroll", not_on: "Not on payroll", left: "Left job (issue P45)" })[r.payrollStatus] || "",
+        ({ new_starter: "New starter", on: "On payroll", not_on: "Not on payroll", left: "Left job (issue P45)", pending: "Pending" })[r.payrollStatus] || "",
         // Salaried staff have no hourly floor — show the monthly salary the
         // pay is derived from, matching the on-screen column.
         r.salaried
@@ -36752,7 +36757,6 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
               <thead>
                 <tr className="text-left text-[11px] uppercase tracking-wider text-stone-500 bg-stone-100/70 border-b border-stone-300">
                   <th className="py-2 pr-3">Employee</th>
-                  <th className="py-2 pr-3">New</th>
                   <th className="py-2 pr-3">Status</th>
                   <th className="py-2 pr-3">Hours</th>
                   <th className="py-2 pr-3">Gross</th>
@@ -36793,7 +36797,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                         onDragOver={e => e.preventDefault()}
                         onDrop={e => { e.preventDefault(); moveItem(dragId, it.key); setDragId(null); }}
                         className={`border-b border-indigo-200 bg-indigo-50/60 ${dragId === it.key ? "opacity-40" : ""}`}>
-                        <td colSpan={14} className="py-1.5 px-3">
+                        <td colSpan={13} className="py-1.5 px-3">
                           <span className="text-stone-400 mr-2 cursor-grab select-none" title="Drag to reorder">⋮⋮</span>
                           <input
                             value={sepDraft[s.id] ?? s.label ?? ""}
@@ -36840,16 +36844,9 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                       {r.salaryPrivacy === "hidden_excluded" && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-purple-100 border border-purple-400 text-purple-900 font-semibold" title="Owner-only. Not counted in store wage cost.">HIDDEN · OFF-STORE</span>}
                     </td>
                     {r.rowError ? (
-                      <td colSpan={13} className="py-2 pr-3 text-red-900 text-xs">{r.rowError}</td>
+                      <td colSpan={12} className="py-2 pr-3 text-red-900 text-xs">{r.rowError}</td>
                     ) : (
                       <>
-                        <td className="py-2 pr-3">
-                          {/* NEWSTARTER — ticked rows get a full personal-details
-                              block at the top of the export. */}
-                          <input type="checkbox" checked={!!r.newStarter}
-                            onChange={e => updateRow(r.employeeId, { newStarter: e.target.checked })}
-                            title="New starter — include full details in the export" />
-                        </td>
                         <td className="py-2 pr-3">
                           {/* Where this person stands with the payroll bureau.
                               Blank until someone sets it, so an unreviewed row
@@ -36858,7 +36855,14 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                           <select value={r.payrollStatus || ""}
                             onChange={e => {
                               const v = e.target.value;
-                              updateRow(r.employeeId, { payrollStatus: v });
+                              // NEWSTARTER — this dropdown replaces the old New
+                              // checkbox. Clearing the status falls back to the
+                              // hire-date detection rather than to false, so an
+                              // unreviewed starter still reaches the bureau.
+                              updateRow(r.employeeId, {
+                                payrollStatus: v,
+                                newStarter: v ? v === "new_starter" : !!r.autoNewStarter,
+                              });
                               // Persist on the employee record — the status is
                               // about the person, so it must survive this run.
                               if (onUpdateEmployeeStatus) onUpdateEmployeeStatus(r.employeeId, v);
@@ -36869,12 +36873,14 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                               r.payrollStatus === "on"          ? "border-emerald-400 bg-emerald-50 text-emerald-900" :
                               r.payrollStatus === "not_on"      ? "border-amber-400 bg-amber-50 text-amber-900" :
                               r.payrollStatus === "new_starter" ? "border-sky-400 bg-sky-50 text-sky-900" :
+                              r.payrollStatus === "pending"     ? "border-slate-400 bg-slate-100 text-slate-900" :
                                                                   "border-stone-300 bg-white text-stone-500"}`}>
                             <option value="">— set status —</option>
                             <option value="new_starter">New starter</option>
                             <option value="on">On payroll</option>
                             <option value="not_on">Not on payroll</option>
                             <option value="left">Left job (issue P45)</option>
+                            <option value="pending">Pending</option>
                           </select>
                         </td>
                         <td className="py-2 pr-3 text-stone-600 tabular-nums">{r.totalHours.toFixed(2)}</td>
