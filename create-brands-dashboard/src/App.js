@@ -35785,6 +35785,40 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
   // fetches its own data, and nothing outside payroll reads them.
   const [separators, setSeparators] = useState([]);
   const [sepDraft, setSepDraft] = useState({});      // separatorId -> in-progress label
+
+  // COLUMNS 2026-08-31 — 40 rows across 13 columns is more than anyone reads at
+  // once. Columns are hidden by nth-child rather than by unmounting cells: it
+  // keeps this to one style block instead of a conditional wrapped round every
+  // <td> in a very long row, and nothing about the data changes — a hidden
+  // column is still exported and still totalled.
+  const PAY_COLUMNS = [
+    { key: "status",     idx: 2,  label: "Status" },
+    { key: "hours",      idx: 3,  label: "Hours" },
+    { key: "gross",      idx: 4,  label: "Gross" },
+    { key: "bank",       idx: 5,  label: "Bank transfer" },
+    { key: "normalized", idx: 6,  label: "Normalized wage" },
+    { key: "cash",       idx: 7,  label: "Cash paid" },
+    { key: "loan",       idx: 8,  label: "Loan" },
+    { key: "note",       idx: 9,  label: "Note" },
+    { key: "location",   idx: 10, label: "Location" },
+    { key: "working",    idx: 11, label: "Working" },
+    { key: "age",        idx: 12, label: "Age" },
+    { key: "minrate",    idx: 13, label: "Min rate" },
+  ];
+  const [hiddenCols, setHiddenCols] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("payrollHiddenCols") || "[]")); }
+    catch { return new Set(); }
+  });
+  const [colMenu, setColMenu] = useState(false);
+  const saveHidden = (next) => {
+    try { localStorage.setItem("payrollHiddenCols", JSON.stringify([...next])); } catch { /* private mode */ }
+    return next;
+  };
+  const toggleCol = (key) => setHiddenCols(prev => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return saveHidden(next);
+  });
   useEffect(() => {
     let live = true;
     fetchPayrollSeparators()
@@ -36484,7 +36518,13 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
     if (ax == null) return 1;
     if (bx == null) return -1;
     return (ax - bx) || (a.kind === "separator" ? -1 : 1);
-  }));
+  }).reduce((acc, it) => {
+    // Band by employee position, not array position — otherwise a separator
+    // counts as a row and flips the stripes below it.
+    if (it.kind === "employee") acc.push({ ...it, stripe: acc.filter(x => x.kind === "employee").length % 2 });
+    else acc.push(it);
+    return acc;
+  }, []));
 
   const rowGroups = visibleRows ? (() => {
     const m = new Map();
@@ -36742,6 +36782,33 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
               <span className="ml-3 text-xs text-stone-500">
                 {savingOrder ? "saving order…" : "drag a row to reorder — saved for future runs"}
               </span>
+              <span className="relative inline-block ml-3 align-middle">
+                <button type="button" onClick={() => setColMenu(v => !v)}
+                  className="text-xs px-2.5 py-1 rounded-lg border border-stone-400 bg-white hover:bg-stone-50 text-stone-700 font-semibold">
+                  Columns{hiddenCols.size ? ` · ${PAY_COLUMNS.length - hiddenCols.size}/${PAY_COLUMNS.length}` : ""}
+                </button>
+                {colMenu && (
+                  <>
+                    <span className="fixed inset-0 z-20" onClick={() => setColMenu(false)} />
+                    <span className="absolute left-0 mt-1 z-30 block w-56 rounded-xl border border-stone-300 bg-white shadow-lg p-2">
+                      <span className="block px-1 pb-1 text-[10px] uppercase tracking-wider text-stone-500">
+                        Show columns
+                      </span>
+                      {PAY_COLUMNS.map(c => (
+                        <label key={c.key}
+                          className="flex items-center gap-2 px-1 py-1 rounded hover:bg-stone-50 cursor-pointer text-xs text-stone-700">
+                          <input type="checkbox" checked={!hiddenCols.has(c.key)} onChange={() => toggleCol(c.key)} />
+                          {c.label}
+                        </label>
+                      ))}
+                      <button type="button" onClick={() => setHiddenCols(saveHidden(new Set()))}
+                        className="mt-1 w-full text-xs px-2 py-1 rounded-lg border border-stone-300 bg-stone-50 hover:bg-stone-100 text-stone-700">
+                        Show all
+                      </button>
+                    </span>
+                  </>
+                )}
+              </span>
             </div>
             <div className="text-sm text-stone-600">
               total gross <span className="text-xl font-bold text-stone-900 ml-1">{fmtGBP(totalGross)}</span>
@@ -36753,22 +36820,26 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
             </div>
           </div>
           <div className="overflow-x-auto rounded-xl border border-stone-300 bg-white/60">
-            <table className="w-full text-sm border-collapse">
+            <style>{PAY_COLUMNS.map(c =>
+              `.pc-hide-${c.key} th:nth-child(${c.idx}):not(.pc-keep),` +
+              `.pc-hide-${c.key} td:nth-child(${c.idx}):not(.pc-keep){display:none}`
+            ).join("")}</style>
+            <table className={`w-full text-sm border-collapse ${[...hiddenCols].map(k => `pc-hide-${k}`).join(" ")}`}>
               <thead>
                 <tr className="text-left text-[11px] uppercase tracking-wider text-stone-500 bg-stone-100/70 border-b border-stone-300">
-                  <th className="py-2 pr-3">Employee</th>
-                  <th className="py-2 pr-3">Status</th>
-                  <th className="py-2 pr-3">Hours</th>
-                  <th className="py-2 pr-3">Gross</th>
-                  <th className="py-2 pr-3">Bank transfer</th>
-                  <th className="py-2 pr-3">Normalized wage</th>
-                  <th className="py-2 pr-3">Cash paid</th>
-                  <th className="py-2 pr-3">Loan</th>
-                  <th className="py-2 pr-3">Note</th>
-                  <th className="py-2 pr-3">{locModeLabel}</th>
-                  <th className="py-2 pr-3">Working</th>
-                  <th className="py-2 pr-3">Age</th>
-                  <th className="py-2 pr-3">Min rate</th>
+                  <th className="py-2 pr-3 pl-3 sticky top-0 left-0 z-30 bg-stone-100 border-r border-stone-200">Employee</th>
+                  <th className="py-2 pr-3 sticky top-0 z-10 bg-stone-100">Status</th>
+                  <th className="py-2 pr-3 sticky top-0 z-10 bg-stone-100 text-right">Hours</th>
+                  <th className="py-2 pr-3 sticky top-0 z-10 bg-stone-100 text-right">Gross</th>
+                  <th className="py-2 pr-3 sticky top-0 z-10 bg-stone-100">Bank transfer</th>
+                  <th className="py-2 pr-3 sticky top-0 z-10 bg-stone-100 text-right">Normalized wage</th>
+                  <th className="py-2 pr-3 sticky top-0 z-10 bg-stone-100 text-right">Cash paid</th>
+                  <th className="py-2 pr-3 sticky top-0 z-10 bg-stone-100">Loan</th>
+                  <th className="py-2 pr-3 sticky top-0 z-10 bg-stone-100">Note</th>
+                  <th className="py-2 pr-3 sticky top-0 z-10 bg-stone-100">{locModeLabel}</th>
+                  <th className="py-2 pr-3 sticky top-0 z-10 bg-stone-100">Working</th>
+                  <th className="py-2 pr-3 sticky top-0 z-10 bg-stone-100 text-right">Age</th>
+                  <th className="py-2 pr-3 sticky top-0 z-10 bg-stone-100 text-right">Min rate</th>
                 </tr>
               </thead>
               <tbody>
@@ -36797,7 +36868,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                         onDragOver={e => e.preventDefault()}
                         onDrop={e => { e.preventDefault(); moveItem(dragId, it.key); setDragId(null); }}
                         className={`border-b border-indigo-200 bg-indigo-50/60 ${dragId === it.key ? "opacity-40" : ""}`}>
-                        <td colSpan={13} className="py-1.5 px-3">
+                        <td colSpan={13} className="pc-keep py-1.5 px-3 sticky left-0">
                           <span className="text-stone-400 mr-2 cursor-grab select-none" title="Drag to reorder">⋮⋮</span>
                           <input
                             value={sepDraft[s.id] ?? s.label ?? ""}
@@ -36829,8 +36900,8 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                     onDragStart={() => setDragId(it.key)}
                     onDragOver={e => e.preventDefault()}
                     onDrop={e => { e.preventDefault(); moveItem(dragId, it.key); setDragId(null); }}
-                    className={`border-b border-stone-200 hover:bg-stone-50 ${r.rowError ? "bg-red-50" : ""} ${dragId === it.key ? "opacity-40" : ""}`}>
-                    <td className="py-2 pr-3 pl-3 font-medium text-stone-800">
+                    className={`border-b border-stone-200 group/row hover:bg-amber-50/60 ${r.rowError ? "bg-red-50" : (it.stripe ? "bg-stone-50/70" : "bg-white")} ${dragId === it.key ? "opacity-40" : ""}`}>
+                    <td className={`py-1.5 pr-3 pl-3 font-medium text-stone-800 sticky left-0 z-10 border-r border-stone-200 group-hover/row:bg-amber-50 ${r.rowError ? "bg-red-50" : (it.stripe ? "bg-stone-50" : "bg-white")}`}>
                       <span className="text-stone-400 mr-2 cursor-grab select-none" title="Drag to reorder">⋮⋮</span>
                       {onOpenEmployeeProfile ? (
                         <button type="button" onClick={() => onOpenEmployeeProfile(r.employeeId)}
@@ -36844,10 +36915,10 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                       {r.salaryPrivacy === "hidden_excluded" && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-purple-100 border border-purple-400 text-purple-900 font-semibold" title="Owner-only. Not counted in store wage cost.">HIDDEN · OFF-STORE</span>}
                     </td>
                     {r.rowError ? (
-                      <td colSpan={12} className="py-2 pr-3 text-red-900 text-xs">{r.rowError}</td>
+                      <td colSpan={12} className="pc-keep py-2 pr-3 text-red-900 text-xs">{r.rowError}</td>
                     ) : (
                       <>
-                        <td className="py-2 pr-3">
+                        <td className="py-1.5 pr-3">
                           {/* Where this person stands with the payroll bureau.
                               Blank until someone sets it, so an unreviewed row
                               is visibly unreviewed rather than defaulting to a
@@ -36883,9 +36954,9 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                             <option value="pending">Pending</option>
                           </select>
                         </td>
-                        <td className="py-2 pr-3 text-stone-600 tabular-nums">{r.totalHours.toFixed(2)}</td>
-                        <td className="py-2 pr-3 text-stone-900 font-semibold tabular-nums">{fmtGBP(r.totalPay)}</td>
-                        <td className="py-2 pr-3">
+                        <td className="py-1.5 pr-3 text-stone-600 tabular-nums">{r.totalHours.toFixed(2)}</td>
+                        <td className="py-1.5 pr-3 text-stone-900 font-semibold tabular-nums">{fmtGBP(r.totalPay)}</td>
+                        <td className="py-1.5 pr-3">
                           <div className="flex items-center gap-1">
                             <span className="text-slate-500 text-xs">£</span>
                             <input type="number" step="0.01" min="0"
@@ -36901,7 +36972,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                             {savedFlag[r.employeeId + ":bank"] && <span className="text-[10px] text-emerald-400">saved</span>}
                           </div>
                         </td>
-                        <td className="py-2 pr-3 whitespace-nowrap">
+                        <td className="py-1.5 pr-3 whitespace-nowrap">
                           {(() => {
                             if (r.salaried) return (
                               <span className="text-[11px] text-stone-600" title="Fixed salary — same as the bank transfer">
@@ -36921,22 +36992,22 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                             );
                           })()}
                         </td>
-                        <td className="py-2 pr-3 text-slate-300 font-medium">
+                        <td className="py-1.5 pr-3 text-slate-300 font-medium">
                           {fmtGBP(r.cashAmount)}
                         </td>
-                        <td className="py-2 pr-3 whitespace-nowrap">
+                        <td className="py-1.5 pr-3 whitespace-nowrap">
                           {r.loanBalance > 0
                             ? <span className="text-[11px] text-amber-300" title="Outstanding loan balance — shown for information, not deducted from this run">{fmtGBP(r.loanBalance)}</span>
                             : <span className="text-[11px] text-slate-600">—</span>}
                         </td>
-                        <td className="py-2 pr-3">
+                        <td className="py-1.5 pr-3">
                           {/* PAYNOTES2 — opens the employee's full note history. */}
                           <button onClick={() => openNotes(r)}
                             className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-200 whitespace-nowrap">
                             {notesCount[r.employeeId] > 0 ? `${notesCount[r.employeeId]} note${notesCount[r.employeeId] === 1 ? "" : "s"}` : "Notes"}
                           </button>
                         </td>
-                        <td className="py-2 pr-3">
+                        <td className="py-1.5 pr-3">
                           {/* LOCMODE — only the basis being run is editable, so a
                               correction can't silently move someone off the run. */}
                           <select
@@ -36951,7 +37022,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                             {stores.filter(s => !s.archivedAt && s.id !== "store-system-non-trading").map(s => <option key={s.id} value={s.id}>{storeName(s.id)}</option>)}
                           </select>
                         </td>
-                        <td className="py-2 pr-3 text-[10px] text-slate-500">
+                        <td className="py-1.5 pr-3 text-[10px] text-slate-500">
                           {/* SALWORK 2026-07-28ac — a salaried row has no hours x rate
                               to show; the generic formatter rendered its salary line
                               as "0.00h @ £0.00 [fixed]". Describe the basis instead,
@@ -36972,12 +37043,12 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                             {r.lines.length === 0 && <span className="text-slate-600">no approved hours</span>}
                           </>)}
                         </td>
-                        <td className="py-2 pr-3 whitespace-nowrap">
+                        <td className="py-1.5 pr-3 whitespace-nowrap">
                           {r.ageAtEnd == null
                             ? <span className="text-[11px] text-amber-400" title="No date of birth on file">no DOB</span>
                             : <span className="text-[11px] text-slate-200">{r.ageAtEnd}</span>}
                         </td>
-                        <td className="py-2 pr-3 whitespace-nowrap">
+                        <td className="py-1.5 pr-3 whitespace-nowrap">
                           {/* SALMIN 2026-07-28ad — a salaried row has no hourly floor,
                               so show the monthly salary the pay is derived from
                               rather than the bare word "salaried". */}
