@@ -3899,6 +3899,28 @@ export async function fetchEmployeeNotes(employeeId) {
   return (data || []).map(dbEmployeeNoteToApp);
 }
 
+// One query for a whole payroll run. Fetching per employee would be 40 round
+// trips just to render the list, so the preview would always lag the table.
+export async function fetchEmployeeNotesBulk(employeeIds) {
+  const ids = [...new Set((employeeIds || []).filter(Boolean))];
+  if (!ids.length) return {};
+  const { data, error } = await supabase
+    .from("employee_notes")
+    .select("*")
+    .in("employee_id", ids)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  const out = {};
+  for (const row of data || []) {
+    const key = row.employee_id;
+    if (!out[key]) out[key] = { count: 0, latest: null };
+    out[key].count += 1;
+    // Ordered newest first, so the first one seen is the latest.
+    if (!out[key].latest) out[key].latest = dbEmployeeNoteToApp(row);
+  }
+  return out;
+}
+
 export async function addEmployeeNote({ employeeId, content, authorId, authorName }) {
   if (!employeeId) throw new Error("employeeId required");
   if (!content?.trim()) throw new Error("Note content cannot be empty");

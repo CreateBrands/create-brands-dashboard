@@ -205,6 +205,7 @@ import {
   archiveStoreDocument, deleteStoreDocument, docExpiryStatus,
   fetchPaySchedule, savePaySchedule, generatePayPeriods, payPeriodStatus, fetchPayPeriodLocations,
   closePayPeriodStore, reopenPayPeriodStore, overridePayPeriodDates, setPunchApproved, approvePunchesInPeriod,
+  fetchEmployeeNotesBulk,
   fetchPayrollSeparators, addPayrollSeparator, updatePayrollSeparator,
   deletePayrollSeparator, reorderPayrollList,
 } from "./supabase";
@@ -35811,6 +35812,26 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
   });
   const [colMenu, setColMenu] = useState(false);
 
+  // NOTEPREVIEW 2026-08-31 — the note used to sit behind a button, so anything
+  // written on a row was invisible unless you already knew to look. The latest
+  // one now shows in the row itself.
+  const [notePreview, setNotePreview] = useState({});
+  // Keyed on the employee ids, not on rows: rows is a new array on every cell
+  // edit, which would refetch the notes on each keystroke.
+  const noteIdsKey = rows ? rows.map(r => r.employeeId).join(",") : "";
+  useEffect(() => {
+    if (!noteIdsKey) { setNotePreview({}); return; }
+    let live = true;
+    fetchEmployeeNotesBulk(noteIdsKey.split(","))
+      .then(m => {
+        if (!live) return;
+        setNotePreview(m);
+        setNotesCount(Object.fromEntries(Object.entries(m).map(([k, v]) => [k, v.count])));
+      })
+      .catch(() => { /* notes are context, never block the run */ });
+    return () => { live = false; };
+  }, [noteIdsKey]);
+
   // PALETTES 2026-08-31 — Tailwind compiles class names statically, so these
   // are written out in full rather than built by interpolation. argb/fontArgb
   // mirror each swatch into the Excel export.
@@ -36073,6 +36094,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
       const list = await fetchEmployeeNotes(employeeId);
       setNotesList(list);
       setNotesCount(c => ({ ...c, [employeeId]: list.length }));
+      setNotePreview(p => ({ ...p, [employeeId]: { count: list.length, latest: list[0] || null } }));
     } catch (e) { setErr(e.message); }
     setNotesBusy(false);
   };
@@ -36933,7 +36955,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                   <th className="py-2 pr-3 sticky top-0 z-10 bg-stone-100 text-right">Normalized wage</th>
                   <th className="py-2 pr-3 sticky top-0 z-10 bg-stone-100 text-right">Cash paid</th>
                   <th className="py-2 pr-3 sticky top-0 z-10 bg-stone-100">Loan</th>
-                  <th className="py-2 pr-3 sticky top-0 z-10 bg-stone-100">Note</th>
+                  <th className="py-2 pr-3 sticky top-0 z-10 bg-stone-100 min-w-[15rem]">Note</th>
                   <th className="py-2 pr-3 sticky top-0 z-10 bg-stone-100">{locModeLabel}</th>
                   <th className="py-2 pr-3 sticky top-0 z-10 bg-stone-100">Working</th>
                   <th className="py-2 pr-3 sticky top-0 z-10 bg-stone-100 text-right">Age</th>
@@ -37108,10 +37130,31 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                         </td>
                         <td className="py-1.5 pr-3">
                           {/* PAYNOTES2 — opens the employee's full note history. */}
-                          <button onClick={() => openNotes(r)}
-                            className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-[11px] text-slate-200 whitespace-nowrap">
-                            {notesCount[r.employeeId] > 0 ? `${notesCount[r.employeeId]} note${notesCount[r.employeeId] === 1 ? "" : "s"}` : "Notes"}
-                          </button>
+                          {(() => {
+                            const np = notePreview[r.employeeId];
+                            const has = np && np.count > 0 && np.latest;
+                            return (
+                              <button onClick={() => openNotes(r)}
+                                title={has ? np.latest.content : "Add a note"}
+                                className={`text-left w-56 px-2 py-1.5 rounded-lg border text-[11px] leading-snug transition-colors ${
+                                  has
+                                    ? "bg-amber-50 border-amber-300 text-stone-800 hover:bg-amber-100"
+                                    : "bg-white border-dashed border-stone-300 text-stone-400 hover:bg-stone-50"}`}>
+                                {has ? (
+                                  <>
+                                    <span className="block whitespace-normal"
+                                      style={{ display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
+                                      {np.latest.content}
+                                    </span>
+                                    <span className="block mt-1 text-[10px] text-amber-800/80">
+                                      {np.count > 1 ? `+${np.count - 1} more · ` : ""}
+                                      {np.latest.authorName || "note"}
+                                    </span>
+                                  </>
+                                ) : "+ Add note"}
+                              </button>
+                            );
+                          })()}
                         </td>
                         <td className="py-1.5 pr-3">
                           {/* LOCMODE — only the basis being run is editable, so a
