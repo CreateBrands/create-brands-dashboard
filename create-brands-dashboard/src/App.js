@@ -35810,6 +35810,43 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
     catch { return new Set(); }
   });
   const [colMenu, setColMenu] = useState(false);
+
+  // PALETTES 2026-08-31 — Tailwind compiles class names statically, so these
+  // are written out in full rather than built by interpolation. argb/fontArgb
+  // mirror each swatch into the Excel export.
+  const SEP_COLORS = [
+    { key: "indigo",  dot: "bg-indigo-500",  row: "bg-indigo-50",  border: "border-indigo-200",  text: "text-indigo-900",  argb: "FFEEF2FF", font: "FF3730A3" },
+    { key: "emerald", dot: "bg-emerald-500", row: "bg-emerald-50", border: "border-emerald-200", text: "text-emerald-900", argb: "FFECFDF5", font: "FF065F46" },
+    { key: "amber",   dot: "bg-amber-500",   row: "bg-amber-50",   border: "border-amber-200",   text: "text-amber-900",   argb: "FFFFFBEB", font: "FF92400E" },
+    { key: "rose",    dot: "bg-rose-500",    row: "bg-rose-50",    border: "border-rose-200",    text: "text-rose-900",    argb: "FFFFF1F2", font: "FF9F1239" },
+    { key: "sky",     dot: "bg-sky-500",     row: "bg-sky-50",     border: "border-sky-200",     text: "text-sky-900",     argb: "FFF0F9FF", font: "FF075985" },
+    { key: "stone",   dot: "bg-stone-500",   row: "bg-stone-100",  border: "border-stone-300",   text: "text-stone-800",   argb: "FFF5F5F4", font: "FF44403C" },
+  ];
+  const sepColor = (k) => SEP_COLORS.find(c => c.key === k) || SEP_COLORS[0];
+
+  // Location bands are derived from the id, not the row position, so a site
+  // keeps the same colour between runs even when others come and go.
+  const LOC_COLORS = [
+    { row: "bg-violet-100",  border: "border-violet-300",  text: "text-violet-900",  bar: "bg-violet-500",  argb: "FFEDE9FE" },
+    { row: "bg-teal-100",    border: "border-teal-300",    text: "text-teal-900",    bar: "bg-teal-500",    argb: "FFCCFBF1" },
+    { row: "bg-orange-100",  border: "border-orange-300",  text: "text-orange-900",  bar: "bg-orange-500",  argb: "FFFFEDD5" },
+    { row: "bg-cyan-100",    border: "border-cyan-300",    text: "text-cyan-900",    bar: "bg-cyan-500",    argb: "FFCFFAFE" },
+    { row: "bg-lime-100",    border: "border-lime-300",    text: "text-lime-900",    bar: "bg-lime-500",    argb: "FFECFCCB" },
+    { row: "bg-fuchsia-100", border: "border-fuchsia-300", text: "text-fuchsia-900", bar: "bg-fuchsia-500", argb: "FFFAE8FF" },
+  ];
+  const locColor = (id) => {
+    const s = String(id || "unassigned");
+    let h = 0;
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return LOC_COLORS[h % LOC_COLORS.length];
+  };
+
+  const setSeparatorColor = async (id, color) => {
+    const before = separators;
+    setSeparators(ss => ss.map(s => s.id === id ? { ...s, color } : s));
+    try { await updatePayrollSeparator(id, { color }); }
+    catch (e) { setSeparators(before); setErr("Could not change separator colour: " + (e?.message || e)); }
+  };
   const saveHidden = (next) => {
     try { localStorage.setItem("payrollHiddenCols", JSON.stringify([...next])); } catch { /* private mode */ }
     return next;
@@ -36428,12 +36465,13 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
     exportGroups.forEach(g => {
       const locRow = ws.addRow([g.name]);
       locRow.getCell(1).font = { bold: true, size: 11, color: { argb: "FF1F2937" } };
-      locRow.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFE5E7EB" } };
+      locRow.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: locColor(g.id).argb } };
       groupItems(g.rows, g.id).forEach(it => {
       if (it.kind === "separator") {
         const sepRow = ws.addRow([it.data.label || ""]);
-        sepRow.getCell(1).font = { bold: true, italic: true, size: 10, color: { argb: "FF3730A3" } };
-        sepRow.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEEF2FF" } };
+        const sc = sepColor(it.data.color);
+        sepRow.getCell(1).font = { bold: true, italic: true, size: 10, color: { argb: sc.font } };
+        sepRow.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: sc.argb } };
         return;
       }
       const r = it.data;
@@ -36845,10 +36883,11 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
               <tbody>
                 {rowGroups.map(g => (
                   <Fragment key={g.id || "unassigned"}>
-                    <tr className="bg-stone-100 border-b border-stone-300">
-                      <td colSpan={14} className="py-2 px-3">
-                        <span className="text-[11px] font-bold uppercase tracking-wider text-stone-700">{g.name}</span>
-                        <span className="ml-2 text-[11px] text-stone-500">
+                    <tr className={`${locColor(g.id).row} border-b-2 ${locColor(g.id).border}`}>
+                      <td colSpan={14} className={`py-2 px-3 sticky left-0 ${locColor(g.id).row}`}>
+                        <span className={`inline-block w-1.5 h-4 rounded-sm mr-2 align-middle ${locColor(g.id).bar}`} />
+                        <span className={`text-[11px] font-bold uppercase tracking-wider ${locColor(g.id).text}`}>{g.name}</span>
+                        <span className="ml-2 text-[11px] text-stone-600">
                           {g.rows.filter(r => !r.rowError).length} staff · {fmtGBP(g.gross)}
                         </span>
                         <button type="button" onClick={() => addSeparatorAt(g.id, null)}
@@ -36867,8 +36906,8 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                         onDragStart={() => setDragId(it.key)}
                         onDragOver={e => e.preventDefault()}
                         onDrop={e => { e.preventDefault(); moveItem(dragId, it.key); setDragId(null); }}
-                        className={`border-b border-indigo-200 bg-indigo-50/60 ${dragId === it.key ? "opacity-40" : ""}`}>
-                        <td colSpan={13} className="pc-keep py-1.5 px-3 sticky left-0">
+                        className={`border-b ${sepColor(s.color).border} ${sepColor(s.color).row} ${dragId === it.key ? "opacity-40" : ""}`}>
+                        <td colSpan={13} className={`pc-keep py-1.5 px-3 sticky left-0 ${sepColor(s.color).row}`}>
                           <span className="text-stone-400 mr-2 cursor-grab select-none" title="Drag to reorder">⋮⋮</span>
                           <input
                             value={sepDraft[s.id] ?? s.label ?? ""}
@@ -36881,8 +36920,15 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                             onKeyDown={e => { if (e.key === "Enter") e.target.blur(); }}
                             placeholder="Section label"
                             title="Rename this separator"
-                            className="bg-transparent border-0 border-b border-dashed border-indigo-300 focus:border-indigo-600 focus:outline-none text-[11px] font-bold uppercase tracking-wider text-indigo-900 px-0.5 py-0.5 w-64"
+                            className={`bg-transparent border-0 border-b border-dashed ${sepColor(s.color).border} focus:outline-none text-[11px] font-bold uppercase tracking-wider ${sepColor(s.color).text} px-0.5 py-0.5 w-64`}
                           />
+                          <span className="inline-flex items-center gap-1 ml-3 align-middle">
+                            {SEP_COLORS.map(c => (
+                              <button key={c.key} type="button" onClick={() => setSeparatorColor(s.id, c.key)}
+                                title={c.key}
+                                className={`w-3.5 h-3.5 rounded-full ${c.dot} ${ (s.color || "indigo") === c.key ? "ring-2 ring-offset-1 ring-stone-600" : "opacity-50 hover:opacity-100"}`} />
+                            ))}
+                          </span>
                           <button type="button" onClick={() => addSeparatorAt(g.id, it.key)}
                             title="Add another separator below this one"
                             className="ml-3 text-[11px] text-indigo-700 hover:underline">+ below</button>

@@ -18695,6 +18695,7 @@ function dbPayrollSeparatorToApp(r) {
   return {
     id: r.id,
     label: r.label ?? "",
+    color: r.color ?? "indigo",
     payrollLocation: r.payroll_location ?? "",
     sortOrder: r.sort_order ?? null,
   };
@@ -18707,13 +18708,14 @@ export async function fetchPayrollSeparators() {
   return (data || []).map(dbPayrollSeparatorToApp);
 }
 
-export async function addPayrollSeparator({ label, payrollLocation, sortOrder }) {
+export async function addPayrollSeparator({ label, payrollLocation, sortOrder, color }) {
   const { data, error } = await supabase
     .from("payroll_separators")
     .insert({
       label: label || "New section",
       payroll_location: payrollLocation || "",
       sort_order: sortOrder ?? 0,
+      color: color || "indigo",
     })
     .select();
   if (error) throw error;
@@ -18727,6 +18729,7 @@ export async function updatePayrollSeparator(id, patch) {
   if (!id) throw new Error("id required");
   const row = { updated_at: new Date().toISOString() };
   if (patch.label !== undefined)           row.label = patch.label;
+  if (patch.color !== undefined)           row.color = patch.color;
   if (patch.sortOrder !== undefined)       row.sort_order = patch.sortOrder;
   if (patch.payrollLocation !== undefined) row.payroll_location = patch.payrollLocation;
   const { data, error } = await supabase
