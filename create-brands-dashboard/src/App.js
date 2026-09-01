@@ -35841,6 +35841,68 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
     return LOC_COLORS[h % LOC_COLORS.length];
   };
 
+  // EXPORTCOLS 2026-08-31 — header, body and totals all derive from this one
+  // list. They used to be three positional arrays kept in sync by hand, which
+  // is how the totals row drifted a column left of its own data.
+  const EXPORT_COLS = [
+    { key: "firstName",  label: "First Name",       width: 16, locked: true,
+      value: r => r.firstName || "" },
+    { key: "lastName",   label: "Last Name",        width: 16, locked: true,
+      value: r => r.lastName || "" },
+    { key: "newStarter", label: "New Starter",      width: 12,
+      value: r => (r.newStarter ? "Yes" : "") },
+    { key: "status",     label: "Status",           width: 16,
+      value: r => ({ new_starter: "New starter", on: "On payroll", not_on: "Not on payroll", left: "Left job (issue P45)", pending: "Pending" })[r.payrollStatus] || "" },
+    // Salaried staff have no hourly floor — show the monthly salary the pay is
+    // derived from, matching the on-screen column.
+    { key: "minRate",    label: "Min Rate",         width: 11, numeric: true,
+      value: r => r.salaried
+        ? Number(((r.payType === "annual" ? r.salaryAmount / 12 : r.salaryAmount) || 0).toFixed(2))
+        : (r.nmwRate == null ? "" : Number(r.nmwRate)) },
+    { key: "wages",      label: "Wages",            width: 13, numeric: true,
+      value: r => Number(r.totalPay.toFixed(2)),
+      total: rs => Number(rs.reduce((a, r) => a + r.totalPay, 0).toFixed(2)) },
+    { key: "salaryTerm", label: "Salary Term",      width: 14,
+      value: r => (r.salaried ? "Monthly Salary" : "Hourly") },
+    { key: "bank",       label: "Bank Transfer",    width: 14, numeric: true,
+      value: r => Number(r.bankAmount.toFixed(2)),
+      total: rs => Number(rs.reduce((a, r) => a + r.bankAmount, 0).toFixed(2)) },
+    // NORMCHECK — blank for salaried; no hourly floor to normalise against.
+    { key: "normWage",   label: "Normalized Wage",  width: 15, numeric: true,
+      value: r => (r.salaried ? (Number(r.bankAmount) || 0) : (normalizeBank(r.bankAmount, r.nmwRate)?.wage ?? "")),
+      total: rs => Number(rs.reduce((a, r) => a + (r.salaried ? (Number(r.bankAmount) || 0) : (normalizeBank(r.bankAmount, r.nmwRate)?.wage || 0)), 0).toFixed(2)) },
+    { key: "normHours",  label: "Normalized Hours", width: 16,
+      value: r => (r.salaried ? "" : (normalizeBank(r.bankAmount, r.nmwRate)?.hours ?? "")),
+      total: rs => Number(rs.reduce((a, r) => a + (r.salaried ? 0 : (normalizeBank(r.bankAmount, r.nmwRate)?.hours || 0)), 0).toFixed(2)) },
+    { key: "cash",       label: "Cash Paid",        width: 13, numeric: true,
+      value: r => Number(r.cashAmount.toFixed(2)),
+      total: rs => Number(rs.reduce((a, r) => a + r.cashAmount, 0).toFixed(2)) },
+  ];
+  const [hiddenExportCols, setHiddenExportCols] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("payrollHiddenExportCols") || "[]")); }
+    catch { return new Set(); }
+  });
+  const saveHiddenExport = (next) => {
+    try { localStorage.setItem("payrollHiddenExportCols", JSON.stringify([...next])); } catch { /* private mode */ }
+    return next;
+  };
+  const toggleExportCol = (key) => setHiddenExportCols(prev => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return saveHiddenExport(next);
+  });
+  // "Match screen" maps the on-screen picker onto the sheet where the two share
+  // a column. The export-only fields (name split, salary term, normalised
+  // hours) have no on-screen counterpart and are left as they are.
+  const SCREEN_TO_EXPORT = { status: "status", gross: "wages", bank: "bank", normalized: "normWage", cash: "cash", minrate: "minRate" };
+  const matchScreenCols = () => setHiddenExportCols(prev => {
+    const next = new Set(prev);
+    Object.entries(SCREEN_TO_EXPORT).forEach(([screenKey, exportKey]) => {
+      if (hiddenCols.has(screenKey)) next.add(exportKey); else next.delete(exportKey);
+    });
+    return saveHiddenExport(next);
+  });
+
   const setSeparatorColor = async (id, color) => {
     const before = separators;
     setSeparators(ss => ss.map(s => s.id === id ? { ...s, color } : s));
@@ -36446,11 +36508,9 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
 
     // ── Block 2: payroll figures for everyone ──────────────────────────────
     sectionTitle("PAYROLL");
-    const payCols = [
-      ["First Name", 16], ["Last Name", 16], ["New Starter", 12], ["Status", 16], ["Min Rate", 11],
-      ["Wages", 13], ["Salary Term", 14], ["Bank Transfer", 14], ["Normalized Wage", 15],
-      ["Normalized Hours", 16], ["Cash Paid", 13],
-    ];
+    const cols = EXPORT_COLS.filter(c => c.locked || !hiddenExportCols.has(c.key));
+    const payCols = cols.map(c => [c.label, c.width]);
+    const numericIdx = cols.map((c, i) => (c.numeric ? i : -1)).filter(i => i >= 0);
     styleHeader(ws.addRow(payCols.map(c => c[0])));
     // Same grouped structure the table renders, so a divider lands between the
     // same two people in the sheet as it does on screen.
@@ -36476,39 +36536,21 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
       }
       const r = it.data;
       const i = bodyIdx++;
-      const row = ws.addRow([
-        r.firstName || "", r.lastName || "",
-        r.newStarter ? "Yes" : "",
-        ({ new_starter: "New starter", on: "On payroll", not_on: "Not on payroll", left: "Left job (issue P45)", pending: "Pending" })[r.payrollStatus] || "",
-        // Salaried staff have no hourly floor — show the monthly salary the
-        // pay is derived from, matching the on-screen column.
-        r.salaried
-          ? Number(((r.payType === "annual" ? r.salaryAmount / 12 : r.salaryAmount) || 0).toFixed(2))
-          : (r.nmwRate == null ? "" : Number(r.nmwRate)),
-        Number(r.totalPay.toFixed(2)),
-        r.salaried ? "Monthly Salary" : "Hourly",
-        Number(r.bankAmount.toFixed(2)),
-        // NORMCHECK — blank for salaried; no hourly floor to normalise against.
-        // Salaried: the bank amount is the wage, there are no hours to normalise.
-        r.salaried ? (Number(r.bankAmount) || 0) : (normalizeBank(r.bankAmount, r.nmwRate)?.wage ?? ""),
-        r.salaried ? "" : (normalizeBank(r.bankAmount, r.nmwRate)?.hours ?? ""),
-        Number(r.cashAmount.toFixed(2)),
-      ]);
-      styleBody(row, i, [4, 5, 7, 8, 10]);
+      const row = ws.addRow(cols.map(c => c.value(r)));
+      styleBody(row, i, numericIdx);
       });
     });
 
-    const totals = ws.addRow(["", "", "TOTAL", "",
-      Number(exportable.reduce((a, r) => a + r.totalPay, 0).toFixed(2)), "",
-      Number(exportable.reduce((a, r) => a + r.bankAmount, 0).toFixed(2)),
-      Number(exportable.reduce((a, r) => a + (r.salaried ? (Number(r.bankAmount) || 0) : (normalizeBank(r.bankAmount, r.nmwRate)?.wage || 0)), 0).toFixed(2)),
-      Number(exportable.reduce((a, r) => a + (r.salaried ? 0 : (normalizeBank(r.bankAmount, r.nmwRate)?.hours || 0)), 0).toFixed(2)),
-      Number(exportable.reduce((a, r) => a + r.cashAmount, 0).toFixed(2)),
-    ]);
+    const totals = ws.addRow(cols.map(c =>
+      c.total ? c.total(exportable) : (c.key === "firstName" ? "TOTAL" : "")));
     totals.font = { bold: true };
+    // 1-based for ExcelJS, and money only — Normalized Hours totals as a count.
+    const totalMoneyCols = cols
+      .map((c, i) => (c.total && c.numeric ? i + 1 : -1))
+      .filter(i => i > 0);
     totals.eachCell((cell, col) => {
       cell.border = { top: { style: "thin" } };
-      if ([5, 7, 8, 10].includes(col)) { cell.numFmt = "£#,##0.00"; cell.alignment = { horizontal: "right" }; }
+      if (totalMoneyCols.includes(col)) { cell.numFmt = "£#,##0.00"; cell.alignment = { horizontal: "right" }; }
     });
 
     // Widths: the wider of the two blocks wins per column.
@@ -36843,6 +36885,24 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                         className="mt-1 w-full text-xs px-2 py-1 rounded-lg border border-stone-300 bg-stone-50 hover:bg-stone-100 text-stone-700">
                         Show all
                       </button>
+                      <span className="block border-t border-stone-200 mt-2 pt-2">
+                        <span className="block px-1 pb-1 text-[10px] uppercase tracking-wider text-stone-500">
+                          Excel export columns
+                        </span>
+                        {EXPORT_COLS.map(c => (
+                          <label key={c.key}
+                            className={`flex items-center gap-2 px-1 py-1 rounded text-xs ${c.locked ? "text-stone-400" : "text-stone-700 hover:bg-stone-50 cursor-pointer"}`}>
+                            <input type="checkbox" disabled={c.locked}
+                              checked={c.locked || !hiddenExportCols.has(c.key)}
+                              onChange={() => toggleExportCol(c.key)} />
+                            {c.label}{c.locked ? " (always)" : ""}
+                          </label>
+                        ))}
+                        <button type="button" onClick={matchScreenCols}
+                          className="mt-1 w-full text-xs px-2 py-1 rounded-lg border border-stone-300 bg-stone-50 hover:bg-stone-100 text-stone-700">
+                          Match screen columns
+                        </button>
+                      </span>
                     </span>
                   </>
                 )}
