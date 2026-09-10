@@ -37801,13 +37801,14 @@ function RoleEditModal({ role, onClose, onSave }) {
   const [name, setName] = useState(role?.label || role?.name || "");
   const [baseRole, setBaseRole] = useState(role?.baseRole || "manager");
   const [financeOnly, setFinanceOnly] = useState(role?.scope === "finance_only");
+  const [regional, setRegional] = useState(role?.scope === "regional"); // REGIONAL 2026-09-10b
   const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
   const ec = "w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white";
   const save = async () => {
     if (!name.trim()) { setErr("Name the role."); return; }
     setBusy(true); setErr("");
     try {
-      await onSave?.({ id: role?.key || role?.id || undefined, name: name.trim(), baseRole: financeOnly ? "hq_staff" : baseRole, scope: financeOnly ? "finance_only" : null });
+      await onSave?.({ id: role?.key || role?.id || undefined, name: name.trim(), baseRole: financeOnly ? "hq_staff" : baseRole, scope: financeOnly ? "finance_only" : (regional ? "regional" : null) });
     } catch (e) { setErr(e?.message || "Could not save."); setBusy(false); }
   };
   return (
@@ -37823,6 +37824,7 @@ function RoleEditModal({ role, onClose, onSave }) {
           <select value={baseRole} onChange={e=>setBaseRole(e.target.value)} disabled={financeOnly} className={`${ec} ${financeOnly?"opacity-50":""}`}>
             <option value="manager">Manager</option>
             <option value="hq_staff">HQ Staff</option>
+            <option value="owner">Owner</option>
             <option value="staff">Staff</option>
           </select>
           <div className="text-[10px] text-slate-600 mt-1">Inherits this built-in role's behaviour; tweak its access on the role page.</div>
@@ -37830,6 +37832,10 @@ function RoleEditModal({ role, onClose, onSave }) {
         <label className="flex items-center gap-2 text-sm text-slate-300">
           <input type="checkbox" checked={financeOnly} onChange={e=>setFinanceOnly(e.target.checked)} className="rounded"/>
           Finance-only (back-office, no store — lands straight in Finance)
+        </label>
+        <label className="flex items-center gap-2 text-sm text-slate-300">
+          <input type="checkbox" checked={regional} disabled={financeOnly} onChange={e=>setRegional(e.target.checked)} className="rounded"/>
+          Regional — full access, but only to the brands and stores on their login
         </label>
         {err && <div className="text-xs text-red-400">{err}</div>}
       </div>
@@ -67664,8 +67670,8 @@ export default function App() {
     return () => { a = false; clearInterval(iv); };
   }, []);
 
-  const [brands,         setBrands]         = useState([]);
-  const [users,          setUsers]          = useState([]);
+  const [brandsAll,      setBrands]         = useState([]);
+  const [usersAll,       setUsers]          = useState([]);
   const [entries,        setEntries]        = useState([]);
   const [issues,         setIssues]         = useState([]);
   const [dbReady,        setDbReady]        = useState(false);
@@ -67674,7 +67680,7 @@ export default function App() {
   const [tempUnits,       setTempUnits]      = useState([]);
   const [cleaningTasks,   setCleaningTasks]  = useState([]);
   const [assignments,     setAssignments]    = useState([]);
-  const [opsTeam,         setOpsTeam]        = useState([]);
+  const [opsTeamAll,      setOpsTeam]        = useState([]);
   const [tempLogs,        setTempLogs]       = useState([]);
   const [deliveries,      setDeliveries]     = useState([]);
   const [checklistStates, setChecklistStates]= useState({});
@@ -67689,7 +67695,7 @@ export default function App() {
   // Hiring / Onboarding (slice 1)
   const [applications,    setApplications]   = useState([]);
   const [advertisedRoles, setAdvertisedRoles] = useState([]);
-  const [stores,            setStores]            = useState([]);
+  const [storesAll,         setStores]            = useState([]);
   const [storeDepartments,  setStoreDepartments]  = useState([]);
   const [storeRoles,        setStoreRoles]        = useState([]);
   const [flipdishStores,    setFlipdishStores]    = useState([]);
@@ -67766,7 +67772,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: ENTITYSCOPE 2026-09-10a");
+      console.log("CB build: REGIONAL 2026-09-10b");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -67837,7 +67843,7 @@ export default function App() {
     await deleteBankTransaction(id);
     setBankTransactions(list => list.filter(t => t.id !== id));
   }, []);
-  const [bankAccounts, setBankAccounts] = useState([]);
+  const [bankAccountsAll, setBankAccounts] = useState([]);
   const saveBankAccount = useCallback(async (acc) => {
     const saved = await upsertBankAccount(acc);
     setBankAccounts(list => {
@@ -67852,8 +67858,8 @@ export default function App() {
   }, []);
 
   // ── Cash accounts (double-entry cash ledger, Finance) ──────────────────────
-  const [cashAccounts, setCashAccounts] = useState([]);
-  const [entities, setEntities] = useState([]);
+  const [cashAccountsAll, setCashAccounts] = useState([]);
+  const [entitiesAll, setEntities] = useState([]);
   const [cashSources, setCashSources] = useState([]);
   const [cashExpenseTypes, setCashExpenseTypes] = useState([]);
   const [cashLedger, setCashLedger] = useState([]);
@@ -68184,13 +68190,13 @@ export default function App() {
   // (For true 24/7 coverage when nobody has the app open, a scheduled Supabase
   // Edge Function runs the same sweep server-side — see auto-clockout cron.)
   useEffect(() => {
-    if (!stores || !stores.length) return;
-    const tick = () => sweepAutoClockouts(stores).then(n => {
+    if (!storesAll || !storesAll.length) return;
+    const tick = () => sweepAutoClockouts(storesAll).then(n => {
       if (n > 0) fetchPunchRecords().then(fresh => setPunchRecords(fresh)).catch(()=>{});
     }).catch(()=>{});
     const interval = setInterval(tick, 15 * 60 * 1000);
     return () => clearInterval(interval);
-  }, [stores]);
+  }, [storesAll]);
 
   useEffect(() => {
     if (!dbReady) return;
@@ -68308,14 +68314,14 @@ export default function App() {
     let u = user;
     if (user && !user.opsTeamMemberId && user.email) {
       const e = user.email.trim().toLowerCase();
-      const m = (opsTeam || []).find(mm => (mm.email || "").trim().toLowerCase() === e && !mm.archivedAt);
+      const m = (opsTeamAll || []).find(mm => (mm.email || "").trim().toLowerCase() === e && !mm.archivedAt);
       if (m) u = { ...user, opsTeamMemberId: m.id, storeIds: (m.storeIds && m.storeIds.length) ? m.storeIds : (user.storeIds || []) };
     }
     setActualUser(u);
     setImpersonatedUserId(null);
     localStorage.setItem("cb_session", JSON.stringify(u));
     localStorage.removeItem("cb_impersonate");
-  }, [opsTeam]);
+  }, [opsTeamAll]);
   const handleLogout = useCallback(() => {
     setActualUser(null);
     setImpersonatedUserId(null);
@@ -68331,7 +68337,7 @@ export default function App() {
     // Only an owner can impersonate. Anyone else: ignore impersonation state.
     if (actualUser.role !== "owner") return actualUser;
     if (!impersonatedUserId) return actualUser;
-    const target = users.find(u => u.id === impersonatedUserId);
+    const target = usersAll.find(u => u.id === impersonatedUserId);
     if (!target) return actualUser;   // fall back if the impersonated user vanishes
     // The impersonated user's `users` record can have empty storeIds (they live
     // on the ops_team profile and are normally healed onto the session only at a
@@ -68343,7 +68349,7 @@ export default function App() {
       // linked member id first (opsTeamMemberId || id), then fall back to email.
       const linkId = target.opsTeamMemberId || target.id;
       const e = (target.email || "").trim().toLowerCase();
-      const m = (opsTeam || []).find(mm => !mm.archivedAt && (
+      const m = (opsTeamAll || []).find(mm => !mm.archivedAt && (
         mm.id === linkId || (e && (mm.email || "").trim().toLowerCase() === e)
       ));
       if (m && m.storeIds && m.storeIds.length) {
@@ -68351,7 +68357,7 @@ export default function App() {
       }
     }
     return target;
-  }, [actualUser, impersonatedUserId, users, opsTeam]);
+  }, [actualUser, impersonatedUserId, usersAll, opsTeamAll]);
 
   // PWSESSION 2026-08-11 — end a session when its password changes.
   // The session is the whole user row kept in localStorage and restored without
@@ -68359,12 +68365,12 @@ export default function App() {
   // session signed in forever — including the one you changed it to lock out.
   // The same check covers a deleted login, which also stayed signed in.
   useEffect(() => {
-    if (!actualUser || (users || []).length === 0) return;
+    if (!actualUser || (usersAll || []).length === 0) return;
     // Employee sessions are built from ops_team and have no row in `users` at
     // all, so a missing row means nothing for them. Only sessions that came
     // from the manager login screen carry a password.
     if (actualUser.role === "employee" || !actualUser.password) return;
-    const row = (users || []).find(u => u.id === actualUser.id);
+    const row = (usersAll || []).find(u => u.id === actualUser.id);
     // Deliberately NOT logging out when the row is absent: a partial or scoped
     // load would sign everyone out at once. Only a positive mismatch — the row
     // exists and its password differs — is treated as a real change.
@@ -68375,7 +68381,7 @@ export default function App() {
       showToast("The password for this account was changed. Please sign in again.", "error");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [users, actualUser?.id]);
+  }, [usersAll, actualUser?.id]);
 
   // Re-link a manager/staff member's store assignment from their ops_team
   // profile on EVERY load — not just at fresh login. A restored session (from
@@ -68383,10 +68389,10 @@ export default function App() {
   // had stores, or before ops_team had loaded), which left managers seeing
   // "stores (0)". This heals the session once ops_team data is available.
   useEffect(() => {
-    if (!actualUser || !actualUser.email || (opsTeam || []).length === 0) return;
+    if (!actualUser || !actualUser.email || (opsTeamAll || []).length === 0) return;
     if (actualUser.role === "owner" || actualUser.role === "hq_staff") return; // global users: storeIds empty by design
     const e = actualUser.email.trim().toLowerCase();
-    const m = (opsTeam || []).find(mm => (mm.email || "").trim().toLowerCase() === e && !mm.archivedAt);
+    const m = (opsTeamAll || []).find(mm => (mm.email || "").trim().toLowerCase() === e && !mm.archivedAt);
     if (!m) return;
     const linkedIds = (m.storeIds && m.storeIds.length) ? m.storeIds : (actualUser.storeIds || []);
     const cur = actualUser.storeIds || [];
@@ -68397,7 +68403,7 @@ export default function App() {
       try { localStorage.setItem("cb_session", JSON.stringify(healed)); } catch {}
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [opsTeam, actualUser?.email, actualUser?.role]);
+  }, [opsTeamAll, actualUser?.email, actualUser?.role]);
 
   const isImpersonating = !!impersonatedUserId && actualUser?.role === "owner" && currentUser?.id !== actualUser?.id;
 
@@ -68413,10 +68419,10 @@ export default function App() {
     // Match by id first; if that fails (e.g. a manager whose users-id differs
     // from their ops_team id and the login link hadn't resolved), fall back to
     // matching their ops_team profile by email so the custom role still applies.
-    let member = (opsTeam || []).find(mm => mm.id === memberId);
+    let member = (opsTeamAll || []).find(mm => mm.id === memberId);
     if (!member && currentUser.email) {
       const e = currentUser.email.trim().toLowerCase();
-      member = (opsTeam || []).find(mm => (mm.email || "").trim().toLowerCase() === e && !mm.archivedAt);
+      member = (opsTeamAll || []).find(mm => (mm.email || "").trim().toLowerCase() === e && !mm.archivedAt);
     }
     const roleId = member?.accessRoleId || null;
     const crole = roleId ? customRoleById[roleId] : null;
@@ -68427,7 +68433,39 @@ export default function App() {
       baseRole: crole ? crole.baseRole : builtIn,
       scope: crole ? (crole.scope || null) : null,
     };
-  }, [currentUser, opsTeam, customRoleById]);
+  }, [currentUser, opsTeamAll, customRoleById]);
+
+  // REGIONAL 2026-09-10b: a custom role with scope "regional" behaves like its
+  // base role (owner/hq_staff — every gate passes) but the whole app is fenced
+  // to the brands + stores on the person's login. Done ONCE here, at the root,
+  // by narrowing the lists every view receives, so the ~50 isHqOrAbove()
+  // bypasses below can only ever reach that region. Non-regional sessions get
+  // the full lists unchanged. Session/login healing above uses the *All lists.
+  const regionalScope = useMemo(() => {
+    if (!currentUser || currentUserRole.scope !== "regional") return null;
+    const storeIds = new Set(currentUser.storeIds || []);
+    const brandIds = new Set(currentUser.brandIds || []);
+    // a store on the login also brings its brand into scope
+    (storesAll || []).forEach(s => { if (storeIds.has(s.id) && s.brandId) brandIds.add(s.brandId); });
+    return { storeIds, brandIds };
+  }, [currentUser, currentUserRole.scope, storesAll]);
+  const stores = useMemo(() => !regionalScope ? storesAll
+    : storesAll.filter(s => regionalScope.storeIds.has(s.id) || regionalScope.brandIds.has(s.brandId)),
+    [storesAll, regionalScope]);
+  const brands = useMemo(() => !regionalScope ? brandsAll
+    : brandsAll.filter(b => regionalScope.brandIds.has(b.id)), [brandsAll, regionalScope]);
+  const opsTeam = useMemo(() => !regionalScope ? opsTeamAll
+    : opsTeamAll.filter(m => regionalScope.brandIds.has(m.brandId) || (m.storeIds || []).some(id => regionalScope.storeIds.has(id))),
+    [opsTeamAll, regionalScope]);
+  const users = useMemo(() => !regionalScope ? usersAll
+    : usersAll.filter(u => u.id === currentUser?.id || (u.brandIds || []).some(b => regionalScope.brandIds.has(b)) || (u.storeIds || []).some(id => regionalScope.storeIds.has(id))),
+    [usersAll, regionalScope, currentUser?.id]);
+  const entities = useMemo(() => !regionalScope ? entitiesAll
+    : entitiesAll.filter(e => regionalScope.brandIds.has(e.id)), [entitiesAll, regionalScope]);
+  const bankAccounts = useMemo(() => !regionalScope ? bankAccountsAll
+    : bankAccountsAll.filter(a => regionalScope.brandIds.has(a.entityId) || regionalScope.storeIds.has(a.storeId)), [bankAccountsAll, regionalScope]);
+  const cashAccounts = useMemo(() => !regionalScope ? cashAccountsAll
+    : cashAccountsAll.filter(a => regionalScope.brandIds.has(a.entityId) || regionalScope.storeIds.has(a.storeId)), [cashAccountsAll, regionalScope]);
 
   // Resolve the configured default scope for the current user into store ids.
   // The config can include store ids, facility stores, brand entities
@@ -68745,8 +68783,17 @@ export default function App() {
     const base = isHQ
       ? nonArchived.filter(s => canAccessStore(s))
       : nonArchived.filter(s => (currentUser.storeIds || []).includes(s.id));
-    return base.filter(s => canAccessEntity(`entity.${s.brandId}`));
-  }, [currentUser, stores, isHQ, canAccessStore, canAccessEntity]);
+    const scoped = base.filter(s => canAccessEntity(`entity.${s.brandId}`));
+    // ENTITYSCOPE 2026-09-10b: a chosen SHOP entity narrows this too (it feeds
+    // Onboarding, Issues, Schedule, EOD, Reports). Distribution and CK are
+    // cross-entity by nature — they serve the shops — so they keep everything.
+    const crossEntity = selectedEntityBrand === "brand-distribution" || selectedEntityBrand === "central-kitchen";
+    if (selectedEntityBrand && selectedEntityBrand !== "finance" && !crossEntity) {
+      const narrowed = scoped.filter(s => s.brandId === selectedEntityBrand);
+      if (narrowed.length) return narrowed;
+    }
+    return scoped;
+  }, [currentUser, stores, isHQ, canAccessStore, canAccessEntity, selectedEntityBrand]);
   const crossEntityStoreIds = useMemo(() => crossEntityStores.map(s => s.id), [crossEntityStores]);
 
   // Brands the user can step into (those they have at least one store in).
