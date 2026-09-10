@@ -33108,6 +33108,7 @@ function MultiStorePicker({ stores = [], brands = [], value, onChange, allowAll 
   };
 
   const groupOf = (st) => {
+    if (/united arab emirates|\buae\b/i.test(st.country || "")) return "uae"; // ENTITYSCOPE 2026-09-10a
     if (st.siteType === "central_kitchen") return "ck";
     if (st.siteType === "distribution") return "dist";
     const om = (st.ownershipModel || "").toLowerCase();
@@ -33122,6 +33123,7 @@ function MultiStorePicker({ stores = [], brands = [], value, onChange, allowAll 
     { key: "franchise", name: "Franchise",       c: "#8B5E8B" },
     { key: "ck",        name: "Central Kitchen", c: "#C4713A" },
     { key: "dist",      name: "Distribution",    c: "#3F7A6B" },
+    { key: "uae",       name: "Dubai",           c: "#B08D2E" },
   ];
 
   const byName = (a, b) => (a.shortName || a.name || "").localeCompare(b.shortName || b.name || "");
@@ -66208,7 +66210,7 @@ function ApplyField({ label, hint, children }) {
 }
 
 // ── Sidebar Component ─────────────────────────────────────────────────────────
-function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, collapsed, setCollapsed,
+function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, collapsed, setCollapsed, entityName,
                     actualUser = null, users = [], onImpersonate = null, isImpersonating = false, onSwitchEntity = null,
                     onSelectSub = null, subActiveTab = {} }) {
   // Only an actual owner gets the view-as picker. Impersonated views never show it
@@ -66300,7 +66302,7 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
             <div>
               <div className="text-sm font-black text-white">Create Brands</div>
               {onSwitchEntity
-                ? <span onClick={(e) => { e.stopPropagation(); onSwitchEntity(); }} className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1 cursor-pointer">Switch entity <ChevronDown size={11}/></span>
+                ? <span onClick={(e) => { e.stopPropagation(); onSwitchEntity(); }} className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1 cursor-pointer" title="Switch entity">{entityName || "Switch entity"} <ChevronDown size={11}/></span>
                 : <div className="text-xs text-slate-500">Hospitality Group</div>}
             </div>
           )}
@@ -67764,7 +67766,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: BANKRULES 2026-08-19h");
+      console.log("CB build: ENTITYSCOPE 2026-09-10a");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -69324,7 +69326,14 @@ export default function App() {
   }
 
   // Manager / Owner
-  const visibleBrands = brands.filter(b => isHqOrAbove(currentUser.role) || currentUser.brandIds.includes(b.id));
+  const allVisibleBrands = brands.filter(b => isHqOrAbove(currentUser.role) || currentUser.brandIds.includes(b.id));
+  // ENTITYSCOPE 2026-09-10a: once an entity is chosen on the landing page, the
+  // dashboard/reports see ONLY that entity's brand and stores (visibleStores
+  // already narrows the stores). Falls back to everything if the stored entity
+  // doesn't match a brand this user can see.
+  const visibleBrands = (selectedEntityBrand && selectedEntityBrand !== "finance" && allVisibleBrands.some(b => b.id === selectedEntityBrand))
+    ? allVisibleBrands.filter(b => b.id === selectedEntityBrand)
+    : allVisibleBrands;
   const openIssueCount = issues.filter(i => visibleBrands.some(b=>b.id===i.brandId) && ["Open","In Progress","Awaiting Parts"].includes(i.status)).length;
   const commsUnread = (() => {
     const myId = currentUser.id; const myOpsId = currentUser.opsTeamMemberId || currentUser.id;
@@ -69627,6 +69636,7 @@ export default function App() {
           }}
           subActiveTab={{ operations: opsTab, team: teamTab, dashboard: dashTab, comms: commsTab }}
           onSwitchEntity={(!effectiveFinanceOnly && destinationCount > 1) ? (() => chooseEntity(null)) : null}
+          entityName={selectedEntityBrand === "finance" ? "Finance" : (brands.find(b => b.id === selectedEntityBrand)?.name || null)}
           currentUser={currentUser} onLogout={handleLogout}
           collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed}
           actualUser={actualUser} users={users} onImpersonate={handleImpersonate} isImpersonating={isImpersonating}
@@ -69698,9 +69708,9 @@ export default function App() {
               return (
                 <div>
                   {effDashTab === "overview" && ckOnly && <CentralKitchenDashboard brands={visibleBrands} stores={stores} opsTeam={opsTeam} issues={issues} punchRecords={punchRecords} currentUser={currentUser}/>}
-                  {effDashTab === "overview" && !ckOnly && <DashboardView brands={visibleBrands} stores={stores} entries={entries} issues={issues} opsTeam={opsTeam} currentUser={currentUser} defaultStoreId={resolveDefaultStoreId()}/>}
-                  {effDashTab === "chain" && <ChainPerformanceView brands={visibleBrands} stores={stores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
-                  {effDashTab === "store-analytics" && <ManagerStoreDashboard stores={stores} brands={visibleBrands} currentUser={currentUser}/>}
+                  {effDashTab === "overview" && !ckOnly && <DashboardView key={"dash-" + (selectedEntityBrand || "all")} brands={visibleBrands} stores={visibleStores} entries={entries} issues={issues} opsTeam={opsTeam} currentUser={currentUser} defaultStoreId={resolveDefaultStoreId()}/>}
+                  {effDashTab === "chain" && <ChainPerformanceView key={"chain-" + (selectedEntityBrand || "all")} brands={visibleBrands} stores={visibleStores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
+                  {effDashTab === "store-analytics" && <ManagerStoreDashboard key={"sa-" + (selectedEntityBrand || "all")} stores={visibleStores} brands={visibleBrands} currentUser={currentUser}/>}
                 </div>
               );
             })()}
@@ -70020,7 +70030,7 @@ export default function App() {
             {effectiveActiveView === "expenses" && <ExpensesView claims={expenseClaims} cashAccounts={cashAccounts} bankAccounts={bankAccounts} expenseTypes={cashExpenseTypes} categories={categories} payees={expensePayees} bankTransactions={bankTransactions} stores={stores} opsTeam={opsTeam} currentUser={currentUser} effectiveRole={effectiveRole} canReconcile={["owner","hq_staff","manager"].includes(effectiveRole)} typeAccounts={expTypeAccounts} memberAccounts={memberExpAccounts} excludedStores={expExcludedStores} memberTypes={memberExpTypes} memberCategories={memberExpCategories} memberStores={memberExpStores} handlers={expenseHandlers}/>}
             {effectiveActiveView === "fresh-produce" && <DistTypedItemsView itemType="fresh" currentUser={currentUser}/>}
             {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && financeAvailable)) && financeAvailable && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} entities={entities} opsTeam={opsTeam} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} onAssignMemberRole={handleAssignMemberRole} accessPerms={accessPerms} onSetPerm={async (role, featKey, allowed) => { await setAccessPermission(role, featKey, allowed); reloadAccessPerms(); }} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
-            {effectiveActiveView === "reports" && canSeeView("reports") && <ReportsView stores={stores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser} visibleStoreIds={scopedVisibleStoreIds} assignments={assignments} auditTrail={auditTrail} onClearAudit={handleClearAudit} checklistStates={checklistStates}/>}
+            {effectiveActiveView === "reports" && canSeeView("reports") && <ReportsView stores={visibleStores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser} visibleStoreIds={scopedVisibleStoreIds} assignments={assignments} auditTrail={auditTrail} onClearAudit={handleClearAudit} checklistStates={checklistStates}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
               messages={messages} onSend={sendMessage} onMarkRead={handleMarkRead}
