@@ -208,6 +208,7 @@ import {
   fetchEmployeeNotesBulk,
   fetchPayrollSeparators, addPayrollSeparator, updatePayrollSeparator,
   deletePayrollSeparator, reorderPayrollList,
+  setActiveRegion,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -67772,7 +67773,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: REGIONAL 2026-09-10b");
+      console.log("CB build: REGION 2026-09-10d");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -68454,6 +68455,17 @@ export default function App() {
     [storesAll, regionalScope]);
   const brands = useMemo(() => !regionalScope ? brandsAll
     : brandsAll.filter(b => regionalScope.brandIds.has(b.id)), [brandsAll, regionalScope]);
+  // REGION 2026-09-10d: which COGS catalogue this session works in. A regional
+  // login takes its region from its brands; an owner takes it from the chosen
+  // entity; nothing chosen = UK (today's behaviour). Set synchronously in the
+  // render body so it is in place before any child view's fetch effect runs.
+  const activeRegion = (() => {
+    const of = (id) => (brandsAll.find(b => b.id === id) || {}).region || null;
+    if (regionalScope) { for (const id of regionalScope.brandIds) { const r = of(id); if (r) return r; } }
+    if (selectedEntityBrand && selectedEntityBrand !== "finance") return of(selectedEntityBrand) || "UK";
+    return "UK";
+  })();
+  setActiveRegion(activeRegion);
   const opsTeam = useMemo(() => !regionalScope ? opsTeamAll
     : opsTeamAll.filter(m => regionalScope.brandIds.has(m.brandId) || (m.storeIds || []).some(id => regionalScope.storeIds.has(id))),
     [opsTeamAll, regionalScope]);
@@ -70050,7 +70062,7 @@ export default function App() {
             {effectiveActiveView === "setup" && setupPanel === "dist-order-builder" && currentUser.role === "owner" && <DistOrderBuilderView stores={stores}/>}
             {effectiveActiveView === "setup" && setupPanel === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms} brands={brands} stores={stores} opsTeam={opsTeam} entityOverrides={entityOverrides} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} defaultStoreScope={defaultStoreScope} onSaveDefaultScope={async (role, scope) => { try { const next = await setDefaultStoreScopeForRole(role, scope); setDefaultStoreScope(next); } catch (e) { console.error(e); } }}/>}
             {effectiveActiveView === "invoices" && canSeeView("invoices") && <InvoicesView currentUser={currentUser}/>}
-            {effectiveActiveView === "setup" && setupPanel === "cogs" && canSeeView("cogs") && <CogsView stores={stores} canFeature={canFeature} initialTab={setupSubtab} initialSub={setupSubsub} hideTabs={true} currentUser={currentUser}/>}
+            {effectiveActiveView === "setup" && setupPanel === "cogs" && canSeeView("cogs") && <CogsView key={"cogs-" + (selectedEntityBrand || "all")} stores={visibleStores} canFeature={canFeature} initialTab={setupSubtab} initialSub={setupSubsub} hideTabs={true} currentUser={currentUser}/>}
             {effectiveActiveView === "central-kitchen" && (["owner","hq_staff"].includes(currentUser.role) || canAccessEntity("entity.central-kitchen")) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "dist-dashboard" && <DistDashboard currentUser={currentUser}/>}
             {effectiveActiveView === "dist-items" && <DistItemsView currentUser={currentUser}/>}
