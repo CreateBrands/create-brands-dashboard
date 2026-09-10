@@ -9,6 +9,33 @@ export const supabase = createClient(
   process.env.REACT_APP_SUPABASE_ANON_KEY
 );
 
+// ===== REGION_V1 2026-09-10d — per-region COGS master data =================
+// UAE runs its own inventory, preps, products, recipes, modifiers, POS mapping
+// and suppliers. Every table below carries a `region` column (default 'UK').
+// The app sets the active region once per session/entity (setActiveRegion),
+// and rfrom() makes every read/write on these tables region-aware: selects,
+// updates and deletes are filtered by region; inserts/upserts are stamped.
+// Nothing else changes, so the UK catalogue behaves exactly as before.
+let _activeRegion = "UK";
+export function setActiveRegion(r) { _activeRegion = r || "UK"; }
+export function getActiveRegion() { return _activeRegion; }
+export const REGION_TABLES = new Set(["cogs_categories", "cogs_ck_items", "cogs_count_assignments", "cogs_ignored_till_names", "cogs_ingredients", "cogs_modifier_mappings", "cogs_modifiers", "cogs_pos_map", "cogs_pos_mappings", "cogs_prep_components", "cogs_preps", "cogs_price_changes", "cogs_product_components", "cogs_product_modifiers", "cogs_product_variants", "cogs_products", "cogs_purchases", "cogs_stock_count_lines", "cogs_stock_counts", "cogs_store_item_settings", "cogs_store_items", "recipe_cards", "store_item_suppliers"]);
+function rfrom(table) {
+  const b = supabase.from(table);
+  if (!REGION_TABLES.has(table)) return b;
+  const region = _activeRegion;
+  const stamp = (rows) => Array.isArray(rows) ? rows.map(r => ({ region, ...r })) : ({ region, ...rows });
+  const oSelect = b.select.bind(b), oInsert = b.insert.bind(b), oUpsert = b.upsert.bind(b),
+        oUpdate = b.update.bind(b), oDelete = b.delete.bind(b);
+  b.select = (...a) => oSelect(...a).eq("region", region);
+  b.insert = (rows, ...rest) => oInsert(stamp(rows), ...rest);
+  b.upsert = (rows, ...rest) => oUpsert(stamp(rows), ...rest);
+  b.update = (...a) => oUpdate(...a).eq("region", region);
+  b.delete = (...a) => oDelete(...a).eq("region", region);
+  return b;
+}
+// ===== end REGION_V1 =====
+
 // ── EMPLOYEE PASSWORD AUTH (Supabase Auth) ───────────────────────────────────
 // Website employee login by email + password, backed by Supabase Auth so we
 // never store passwords ourselves. On success we look up the matching ops_team
@@ -476,7 +503,7 @@ export async function clearAuditTrail() {
 // in case a deploy lands before the SQL drop — `?? null` keeps the field
 // present so older readers don't crash on undefined.
 function appBrandToDb(b) { return { id: b.id, name: b.name, icon_key: b.iconKey, color: b.color, address: b.address }; }
-function dbBrandToApp(b) { return { id: b.id, name: b.name, iconKey: b.icon_key, color: b.color, address: b.address, kpiTargets: b.kpi_targets ?? null }; }
+function dbBrandToApp(b) { return { id: b.id, name: b.name, iconKey: b.icon_key, color: b.color, address: b.address, kpiTargets: b.kpi_targets ?? null, region: b.region || "UK", currency: b.currency || "GBP" }; }
 
 function appUserToDb(u) { return { id: u.id, name: u.name, email: u.email, password: u.password, role: u.role, brand_ids: u.brandIds, store_ids: u.storeIds, avatar: u.avatar }; }
 function dbUserToApp(u) { return { id: u.id, name: u.name, email: u.email, password: u.password, role: u.role, brandIds: u.brand_ids, storeIds: u.store_ids || [], avatar: u.avatar }; }
@@ -6039,7 +6066,7 @@ export async function fetchAliasRow(name, vendor) {
 }
 export async function fetchStoreItemName(id) {
   if (id == null) return null;
-  const { data } = await supabase.from("cogs_store_items").select("name").eq("id", id).maybeSingle();
+  const { data } = await rfrom("cogs_store_items").select("name").eq("id", id).maybeSingle();
   return data?.name || null;
 }
 
@@ -6098,7 +6125,7 @@ export async function setInvoiceLineStatus(lineId, status) {
 }
 
 export async function searchCogsIngredients(domain, q) {
-  let query = supabase.from("cogs_ingredients").select("id, name").eq("domain", domain).eq("active", true).limit(12);
+  let query = rfrom("cogs_ingredients").select("id, name").eq("domain", domain).eq("active", true).limit(12);
   if (q && q.trim()) query = query.ilike("name", `%${q.trim()}%`);
   const { data, error } = await query;
   if (error) throw error;
@@ -7675,12 +7702,12 @@ export async function fetchSeoHealthScores() {
 
 export async function fetchCogsAll() {
   const [ings, preps, prepComps, prods, prodComps, posMap] = await Promise.all([
-    supabase.from("cogs_ingredients").select("*").order("name"),
-    supabase.from("cogs_preps").select("*").order("name"),
-    supabase.from("cogs_prep_components").select("*"),
-    supabase.from("cogs_products").select("*").order("name"),
-    supabase.from("cogs_product_components").select("*"),
-    supabase.from("cogs_pos_map").select("*"),
+    rfrom("cogs_ingredients").select("*").order("name"),
+    rfrom("cogs_preps").select("*").order("name"),
+    rfrom("cogs_prep_components").select("*"),
+    rfrom("cogs_products").select("*").order("name"),
+    rfrom("cogs_product_components").select("*"),
+    rfrom("cogs_pos_map").select("*"),
   ]);
   const err = ings.error || preps.error || prepComps.error || prods.error || prodComps.error || posMap.error;
   if (err) throw err;
@@ -7728,7 +7755,7 @@ export async function updateCogsIngredient(id, patch) {
   if ("baseUnit"  in patch) body.base_unit  = patch.baseUnit;
   if ("notes"     in patch) body.notes      = patch.notes;
   body.updated_at = new Date().toISOString();
-  const { error } = await supabase.from("cogs_ingredients").update(body).eq("id", id);
+  const { error } = await rfrom("cogs_ingredients").update(body).eq("id", id);
   if (error) throw error;
 }
 
@@ -7740,7 +7767,7 @@ export async function updateCogsPrep(id, patch) {
   if ("transferPrice" in patch) body.transfer_price = patch.transferPrice;
   if ("notes"         in patch) body.notes          = patch.notes;
   body.updated_at = new Date().toISOString();
-  const { error } = await supabase.from("cogs_preps").update(body).eq("id", id);
+  const { error } = await rfrom("cogs_preps").update(body).eq("id", id);
   if (error) throw error;
 }
 // ===== end COGS_V1 =====
@@ -7798,9 +7825,9 @@ function _invBody(p, scope) {
 
 export async function fetchInventory() {
   const [store, ck, cats] = await Promise.all([
-    supabase.from("cogs_store_items").select("*").order("name"),
-    supabase.from("cogs_ck_items").select("*").order("name"),
-    supabase.from("cogs_categories").select("*"),
+    rfrom("cogs_store_items").select("*").order("name"),
+    rfrom("cogs_ck_items").select("*").order("name"),
+    rfrom("cogs_categories").select("*"),
   ]);
   const err = store.error || ck.error || cats.error;
   if (err) throw err;
@@ -7818,7 +7845,7 @@ export async function fetchInventory() {
 export async function fetchInventoryForStore(storeId) {
   const [base, settings] = await Promise.all([
     fetchInventory(),
-    storeId ? supabase.from("cogs_store_item_settings").select("*").eq("store_id", storeId)
+    storeId ? rfrom("cogs_store_item_settings").select("*").eq("store_id", storeId)
             : Promise.resolve({ data: [] }),
   ]);
   if (settings.error) throw settings.error;
@@ -7862,20 +7889,20 @@ export async function setStoreItemOverride(storeId, itemId, patch) {
     body[_OVCOL[k]] = (v === "" || v == null) ? null : (num ? Number(v) : v);
   });
   body.updated_at = new Date().toISOString();
-  const { data: existing } = await supabase.from("cogs_store_item_settings")
+  const { data: existing } = await rfrom("cogs_store_item_settings")
     .select("id").eq("store_id", storeId).eq("item_id", itemId).maybeSingle();
   if (existing) {
-    const { error } = await supabase.from("cogs_store_item_settings").update(body).eq("id", existing.id);
+    const { error } = await rfrom("cogs_store_item_settings").update(body).eq("id", existing.id);
     if (error) throw error;
   } else {
-    const { error } = await supabase.from("cogs_store_item_settings")
+    const { error } = await rfrom("cogs_store_item_settings")
       .insert({ store_id: storeId, item_id: itemId, ...body });
     if (error) throw error;
   }
 }
 
 export async function clearStoreItemOverride(storeId, itemId) {
-  const { error } = await supabase.from("cogs_store_item_settings")
+  const { error } = await rfrom("cogs_store_item_settings")
     .delete().eq("store_id", storeId).eq("item_id", itemId);
   if (error) throw error;
 }
@@ -7925,22 +7952,22 @@ export async function bulkAddInventory(scope, rows, wipe = false) {
   // ensure any new categories exist in the category list
   const cats = [...new Set(rows.map(r => r.category).filter(Boolean))];
   for (const name of cats) {
-    await supabase.from("cogs_categories").insert({ scope, name }).then(() => {}, () => {});
+    await rfrom("cogs_categories").insert({ scope, name }).then(() => {}, () => {});
   }
   // ensure any new suppliers exist in the supplier list (scope supplier_store / supplier_ck)
   const supScope = scope === "ck" ? "supplier_ck" : "supplier_store";
   const suppliers = [...new Set(rows.map(r => r.supplier).filter(Boolean))];
   for (const name of suppliers) {
-    await supabase.from("cogs_categories").insert({ scope: supScope, name }).then(() => {}, () => {});
+    await rfrom("cogs_categories").insert({ scope: supScope, name }).then(() => {}, () => {});
   }
   return inserted;
 }
 export async function addCategory(scope, name) {
-  const { error } = await supabase.from("cogs_categories").insert({ scope, name });
+  const { error } = await rfrom("cogs_categories").insert({ scope, name });
   if (error && error.code !== "23505") throw error; // ignore duplicates
 }
 export async function deleteCategory(id) {
-  const { error } = await supabase.from("cogs_categories").delete().eq("id", id);
+  const { error } = await rfrom("cogs_categories").delete().eq("id", id);
   if (error) throw error;
 }
 // ===== end INVENTORY_BUILDER_V1 =====
@@ -7948,13 +7975,13 @@ export async function deleteCategory(id) {
 // ===== RECIPE_BUILDER_V1 — preps, modifiers, products =======================
 export async function fetchRecipes() {
   const [preps, prepComps, mods, prods, prodComps, prodMods, variants] = await Promise.all([
-    supabase.from("cogs_preps").select("*").order("name"),
-    supabase.from("cogs_prep_components").select("*"),
-    supabase.from("cogs_modifiers").select("*").order("group_label").order("name"),
-    supabase.from("cogs_products").select("*").order("name"),
-    supabase.from("cogs_product_components").select("*"),
-    supabase.from("cogs_product_modifiers").select("*"),
-    supabase.from("cogs_product_variants").select("*").order("sort_order"),
+    rfrom("cogs_preps").select("*").order("name"),
+    rfrom("cogs_prep_components").select("*"),
+    rfrom("cogs_modifiers").select("*").order("group_label").order("name"),
+    rfrom("cogs_products").select("*").order("name"),
+    rfrom("cogs_product_components").select("*"),
+    rfrom("cogs_product_modifiers").select("*"),
+    rfrom("cogs_product_variants").select("*").order("sort_order"),
   ]);
   const err = preps.error || prepComps.error || mods.error || prods.error || prodComps.error || prodMods.error || variants.error;
   if (err) throw err;
@@ -7971,7 +7998,7 @@ export async function fetchRecipes() {
 
 // --- product variants ---
 export async function addProductVariant(productId, patch = {}) {
-  const { data, error } = await supabase.from("cogs_product_variants")
+  const { data, error } = await rfrom("cogs_product_variants")
     .insert({ product_id: productId, name: patch.name || "New variation", sort_order: patch.sortOrder ?? 0 })
     .select().single();
   if (error) throw error;
@@ -7980,7 +8007,7 @@ export async function addProductVariant(productId, patch = {}) {
   // rather than rebuilds). copyFromVariantId may be a variant id, or null to
   // copy the base recipe (components with variant_id null).
   if ("copyFromVariantId" in patch) {
-    let q = supabase.from("cogs_product_components").select("*").eq("product_id", productId);
+    let q = rfrom("cogs_product_components").select("*").eq("product_id", productId);
     q = patch.copyFromVariantId == null ? q.is("variant_id", null) : q.eq("variant_id", patch.copyFromVariantId);
     const { data: src, error: sErr } = await q;
     if (sErr) throw sErr;
@@ -7990,7 +8017,7 @@ export async function addProductVariant(productId, patch = {}) {
         item_scope: c.item_scope, item_id: c.item_id, prep_id: c.prep_id,
         label: c.label, portion_qty: c.portion_qty, unit: c.unit,
       }));
-      const { error: iErr } = await supabase.from("cogs_product_components").insert(rows);
+      const { error: iErr } = await rfrom("cogs_product_components").insert(rows);
       if (iErr) throw iErr;
     }
   }
@@ -7998,29 +8025,29 @@ export async function addProductVariant(productId, patch = {}) {
 }
 export async function updateProductVariant(id, patch) {
   const b = {}; if ("name" in patch) b.name = patch.name; if ("sortOrder" in patch) b.sort_order = Number(patch.sortOrder)||0;
-  const { error } = await supabase.from("cogs_product_variants").update(b).eq("id", id); if (error) throw error;
+  const { error } = await rfrom("cogs_product_variants").update(b).eq("id", id); if (error) throw error;
 }
 export async function deleteProductVariant(id) {
-  const { error } = await supabase.from("cogs_product_variants").delete().eq("id", id); if (error) throw error;
+  const { error } = await rfrom("cogs_product_variants").delete().eq("id", id); if (error) throw error;
 }
 // Delete a variation but KEEP its recipe by moving its components back to the
 // base (variant_id null). Used when removing the last variation so the product
 // cleanly returns to a simple single-recipe product instead of losing the work.
 export async function deleteVariantKeepRecipe(productId, variantId) {
-  const { error: upErr } = await supabase.from("cogs_product_components")
+  const { error: upErr } = await rfrom("cogs_product_components")
     .update({ variant_id: null }).eq("product_id", productId).eq("variant_id", variantId);
   if (upErr) throw upErr;
-  const { error } = await supabase.from("cogs_product_variants").delete().eq("id", variantId);
+  const { error } = await rfrom("cogs_product_variants").delete().eq("id", variantId);
   if (error) throw error;
 }
 // Enable variations on a simple product: turn the current base recipe (components
 // with variant_id null) into the first named variant, then return its id so the
 // caller can add a second empty variant.
 export async function enableProductVariations(productId, firstName = "Variation 1") {
-  const { data: v, error: vErr } = await supabase.from("cogs_product_variants")
+  const { data: v, error: vErr } = await rfrom("cogs_product_variants")
     .insert({ product_id: productId, name: firstName, sort_order: 0 }).select().single();
   if (vErr) throw vErr;
-  const { error: upErr } = await supabase.from("cogs_product_components")
+  const { error: upErr } = await rfrom("cogs_product_components")
     .update({ variant_id: v.id }).eq("product_id", productId).is("variant_id", null);
   if (upErr) throw upErr;
   return v.id;
@@ -8028,15 +8055,15 @@ export async function enableProductVariations(productId, firstName = "Variation 
 
 // --- preps ---
 export async function addPrep(patch) {
-  const { data, error } = await supabase.from("cogs_preps").insert({ name: patch.name || "New prep", yield_qty: patch.yieldQty ?? null, yield_unit: patch.yieldUnit ?? null }).select().single();
+  const { data, error } = await rfrom("cogs_preps").insert({ name: patch.name || "New prep", yield_qty: patch.yieldQty ?? null, yield_unit: patch.yieldUnit ?? null }).select().single();
   if (error) throw error; return data.id;
 }
 export async function updatePrep(id, patch) {
   const b = {}; if ("name" in patch) b.name = patch.name; if ("yieldQty" in patch) b.yield_qty = patch.yieldQty===""?null:Number(patch.yieldQty);
   if ("yieldUnit" in patch) b.yield_unit = patch.yieldUnit; if ("notes" in patch) b.notes = patch.notes; b.updated_at = new Date().toISOString();
-  const { error } = await supabase.from("cogs_preps").update(b).eq("id", id); if (error) throw error;
+  const { error } = await rfrom("cogs_preps").update(b).eq("id", id); if (error) throw error;
 }
-export async function deletePrep(id) { const { error } = await supabase.from("cogs_preps").delete().eq("id", id); if (error) throw error; }
+export async function deletePrep(id) { const { error } = await rfrom("cogs_preps").delete().eq("id", id); if (error) throw error; }
 export async function addPrepComponent(prepId, c) {
   // kind defaults to "ingredient". For a nested prep, pass kind:"prep" + subPrepId.
   const row = { prep_id: prepId, component_kind: c.kind || "ingredient",
@@ -8044,7 +8071,7 @@ export async function addPrepComponent(prepId, c) {
     ingredient_id: c.ingredientId ?? null, sub_prep_id: c.subPrepId ?? null,
     portion_qty: c.portionQty ?? null, unit: c.unit ?? null,
     component_name: c.componentName ?? c.itemName ?? null };
-  const { error } = await supabase.from("cogs_prep_components").insert(row);
+  const { error } = await rfrom("cogs_prep_components").insert(row);
   if (error) throw error;
 }
 export async function updatePrepComponent(id, c) {
@@ -8052,13 +8079,13 @@ export async function updatePrepComponent(id, c) {
   if ("itemScope" in c) b.item_scope = c.itemScope; if ("itemId" in c) b.item_id = c.itemId; if ("itemName" in c) b.item_name = c.itemName;
   if ("kind" in c) b.component_kind = c.kind; if ("subPrepId" in c) b.sub_prep_id = c.subPrepId; if ("ingredientId" in c) b.ingredient_id = c.ingredientId;
   if ("componentName" in c) b.component_name = c.componentName;
-  const { error } = await supabase.from("cogs_prep_components").update(b).eq("id", id); if (error) throw error;
+  const { error } = await rfrom("cogs_prep_components").update(b).eq("id", id); if (error) throw error;
 }
-export async function deletePrepComponent(id) { const { error } = await supabase.from("cogs_prep_components").delete().eq("id", id); if (error) throw error; }
+export async function deletePrepComponent(id) { const { error } = await rfrom("cogs_prep_components").delete().eq("id", id); if (error) throw error; }
 
 // --- modifiers ---
 export async function addModifier(patch) {
-  const { error } = await supabase.from("cogs_modifiers").insert({ name: patch.name || "New modifier", group_label: patch.groupLabel, item_scope: patch.itemScope, item_id: patch.itemId, item_name: patch.itemName, portion_qty: patch.portionQty ?? null, unit: patch.unit });
+  const { error } = await rfrom("cogs_modifiers").insert({ name: patch.name || "New modifier", group_label: patch.groupLabel, item_scope: patch.itemScope, item_id: patch.itemId, item_name: patch.itemName, portion_qty: patch.portionQty ?? null, unit: patch.unit });
   if (error) throw error;
 }
 export async function updateModifier(id, patch) {
@@ -8069,28 +8096,28 @@ export async function updateModifier(id, patch) {
   if ("isGlobal" in patch) b.is_global = !!patch.isGlobal;
   if ("collapseToMax" in patch) b.collapse_to_max = !!patch.collapseToMax;
   if ("tillCaption" in patch) b.till_caption = patch.tillCaption || null;
-  const { error } = await supabase.from("cogs_modifiers").update(b).eq("id", id); if (error) throw error;
+  const { error } = await rfrom("cogs_modifiers").update(b).eq("id", id); if (error) throw error;
 }
-export async function deleteModifier(id) { const { error } = await supabase.from("cogs_modifiers").delete().eq("id", id); if (error) throw error; }
+export async function deleteModifier(id) { const { error } = await rfrom("cogs_modifiers").delete().eq("id", id); if (error) throw error; }
 
 // --- products ---
 export async function addProduct(patch) {
-  const { data, error } = await supabase.from("cogs_products").insert({ name: patch.name || "New product", category: patch.category, pos_name: patch.posName }).select().single();
+  const { data, error } = await rfrom("cogs_products").insert({ name: patch.name || "New product", category: patch.category, pos_name: patch.posName }).select().single();
   if (error) throw error;
   return data.id;
 }
 export async function updateProduct(id, patch) {
   const b = {}; if ("name" in patch) b.name = patch.name; if ("category" in patch) b.category = patch.category; if ("posName" in patch) b.pos_name = patch.posName; if ("notes" in patch) b.notes = patch.notes; b.updated_at = new Date().toISOString();
-  const { error } = await supabase.from("cogs_products").update(b).eq("id", id); if (error) throw error;
+  const { error } = await rfrom("cogs_products").update(b).eq("id", id); if (error) throw error;
 }
-export async function deleteProduct(id) { const { error } = await supabase.from("cogs_products").delete().eq("id", id); if (error) throw error; }
+export async function deleteProduct(id) { const { error } = await rfrom("cogs_products").delete().eq("id", id); if (error) throw error; }
 export async function addProductComponent(productId, c) {
-  const { error } = await supabase.from("cogs_product_components").insert({ product_id: productId, variant_id: c.variantId ?? null, kind: c.kind, item_scope: c.itemScope, item_id: c.itemId, prep_id: c.prepId, label: c.label, portion_qty: c.portionQty ?? null, unit: c.unit });
+  const { error } = await rfrom("cogs_product_components").insert({ product_id: productId, variant_id: c.variantId ?? null, kind: c.kind, item_scope: c.itemScope, item_id: c.itemId, prep_id: c.prepId, label: c.label, portion_qty: c.portionQty ?? null, unit: c.unit });
   if (error) throw error;
 }
 export async function updateProductComponent(id, c) {
   const b = {}; if ("portionQty" in c) b.portion_qty = c.portionQty===""?null:Number(c.portionQty); if ("unit" in c) b.unit = c.unit;
-  const { error } = await supabase.from("cogs_product_components").update(b).eq("id", id); if (error) throw error;
+  const { error } = await rfrom("cogs_product_components").update(b).eq("id", id); if (error) throw error;
 }
 export async function updateProductComponentRef(id, c) {
   const b = {};
@@ -8099,13 +8126,13 @@ export async function updateProductComponentRef(id, c) {
   if ("itemId" in c) b.item_id = c.itemId;
   if ("prepId" in c) b.prep_id = c.prepId;
   if ("label" in c) b.label = c.label;
-  const { error } = await supabase.from("cogs_product_components").update(b).eq("id", id); if (error) throw error;
+  const { error } = await rfrom("cogs_product_components").update(b).eq("id", id); if (error) throw error;
 }
-export async function deleteProductComponent(id) { const { error } = await supabase.from("cogs_product_components").delete().eq("id", id); if (error) throw error; }
+export async function deleteProductComponent(id) { const { error } = await rfrom("cogs_product_components").delete().eq("id", id); if (error) throw error; }
 export async function attachProductModifier(productId, modifierId) {
-  const { error } = await supabase.from("cogs_product_modifiers").insert({ product_id: productId, modifier_id: modifierId }); if (error) throw error;
+  const { error } = await rfrom("cogs_product_modifiers").insert({ product_id: productId, modifier_id: modifierId }); if (error) throw error;
 }
-export async function detachProductModifier(id) { const { error } = await supabase.from("cogs_product_modifiers").delete().eq("id", id); if (error) throw error; }
+export async function detachProductModifier(id) { const { error } = await rfrom("cogs_product_modifiers").delete().eq("id", id); if (error) throw error; }
 // ===== end RECIPE_BUILDER_V1 =====
 
 // ===== POS_MAPPER_V1 — per-store till name -> master product ===============
@@ -8125,7 +8152,7 @@ export async function fetchStoreTillNames(storeId) {
 }
 
 export async function fetchPosMappings(storeId = null) {
-  let q = supabase.from("cogs_pos_mappings").select("*");
+  let q = rfrom("cogs_pos_mappings").select("*");
   if (storeId) q = q.eq("store_id", storeId);
   const { data, error } = await q;
   if (error) throw error;
@@ -8134,18 +8161,17 @@ export async function fetchPosMappings(storeId = null) {
 
 // upsert a (store, pos_name) -> product mapping
 export async function setPosMapping(storeId, posName, productId) {
-  const { data: existing } = await supabase
-    .from("cogs_pos_mappings").select("id").eq("store_id", storeId).ilike("pos_name", posName).maybeSingle();
+  const { data: existing } = await rfrom("cogs_pos_mappings").select("id").eq("store_id", storeId).ilike("pos_name", posName).maybeSingle();
   if (existing) {
-    const { error } = await supabase.from("cogs_pos_mappings").update({ product_id: productId }).eq("id", existing.id);
+    const { error } = await rfrom("cogs_pos_mappings").update({ product_id: productId }).eq("id", existing.id);
     if (error) throw error;
   } else {
-    const { error } = await supabase.from("cogs_pos_mappings").insert({ store_id: storeId, pos_name: posName, product_id: productId });
+    const { error } = await rfrom("cogs_pos_mappings").insert({ store_id: storeId, pos_name: posName, product_id: productId });
     if (error) throw error;
   }
 }
 export async function deletePosMapping(id) {
-  const { error } = await supabase.from("cogs_pos_mappings").delete().eq("id", id);
+  const { error } = await rfrom("cogs_pos_mappings").delete().eq("id", id);
   if (error) throw error;
 }
 
@@ -8156,21 +8182,19 @@ export async function deletePosMapping(id) {
 // existing rows for those names are replaced. Returns the count copied.
 export async function copyPosMappings(fromStoreId, toStoreId) {
   if (!fromStoreId || !toStoreId || fromStoreId === toStoreId) throw new Error("Pick two different stores.");
-  const { data: src, error: srcErr } = await supabase
-    .from("cogs_pos_mappings").select("pos_name, product_id").eq("store_id", fromStoreId);
+  const { data: src, error: srcErr } = await rfrom("cogs_pos_mappings").select("pos_name, product_id").eq("store_id", fromStoreId);
   if (srcErr) throw srcErr;
   const rows = (src || []).filter(r => r.pos_name && r.product_id);
   if (rows.length === 0) return 0;
   // Wipe the target's existing rows for the names we're about to set, then insert
   // fresh — simplest way to "overwrite to match source" without N upserts.
   const names = rows.map(r => r.pos_name);
-  const { error: delErr } = await supabase
-    .from("cogs_pos_mappings").delete().eq("store_id", toStoreId).in("pos_name", names);
+  const { error: delErr } = await rfrom("cogs_pos_mappings").delete().eq("store_id", toStoreId).in("pos_name", names);
   if (delErr) throw delErr;
   const insert = rows.map(r => ({ store_id: toStoreId, pos_name: r.pos_name, product_id: r.product_id }));
   const BATCH = 200;
   for (let i = 0; i < insert.length; i += BATCH) {
-    const { error: insErr } = await supabase.from("cogs_pos_mappings").insert(insert.slice(i, i + BATCH));
+    const { error: insErr } = await rfrom("cogs_pos_mappings").insert(insert.slice(i, i + BATCH));
     if (insErr) throw insErr;
   }
   return rows.length;
@@ -8207,7 +8231,7 @@ export async function discoverModifierCandidates({ storeId, from, to } = {}) {
       return all;
     })(),
     (async () => {
-      const { data, error } = await supabase.from("cogs_modifiers").select("name, till_caption");
+      const { data, error } = await rfrom("cogs_modifiers").select("name, till_caption");
       if (error) throw error; return data || [];
     })(),
   ]);
@@ -8256,7 +8280,7 @@ export async function discoverModifierCandidates({ storeId, from, to } = {}) {
 // till_caption stores the exact caption for clean matching (no stripping).
 export async function createModifierFromCaption({ caption, isGlobal, groupLabel = null }) {
   if (!caption || !caption.trim()) throw new Error("caption required");
-  const { error } = await supabase.from("cogs_modifiers").insert({
+  const { error } = await rfrom("cogs_modifiers").insert({
     name: caption.trim(),
     group_label: groupLabel,
     till_caption: caption.trim(),
@@ -8269,7 +8293,7 @@ export async function createModifierFromCaption({ caption, isGlobal, groupLabel 
 
 // ===== MODIFIER_MAPPER_V1 — per-store till caption -> modifier =============
 export async function fetchModifierMappings(storeId) {
-  let q = supabase.from("cogs_modifier_mappings").select("*");
+  let q = rfrom("cogs_modifier_mappings").select("*");
   if (storeId) q = q.eq("store_id", storeId);
   const { data, error } = await q; if (error) throw error;
   return (data || []).map(r => ({ id: r.id, storeId: r.store_id, caption: r.caption, modifierId: r.modifier_id }));
@@ -8278,19 +8302,19 @@ export async function fetchModifierMappings(storeId) {
 export async function setModifierMapping(storeId, caption, modifierId) {
   if (!storeId || !caption?.trim()) throw new Error("store and caption required");
   const c = caption.trim();
-  const { data: existing } = await supabase.from("cogs_modifier_mappings")
+  const { data: existing } = await rfrom("cogs_modifier_mappings")
     .select("id").eq("store_id", storeId).ilike("caption", c).maybeSingle();
   if (existing) {
-    const { error } = await supabase.from("cogs_modifier_mappings").update({ modifier_id: modifierId }).eq("id", existing.id);
+    const { error } = await rfrom("cogs_modifier_mappings").update({ modifier_id: modifierId }).eq("id", existing.id);
     if (error) throw error;
   } else {
-    const { error } = await supabase.from("cogs_modifier_mappings").insert({ store_id: storeId, caption: c, modifier_id: modifierId });
+    const { error } = await rfrom("cogs_modifier_mappings").insert({ store_id: storeId, caption: c, modifier_id: modifierId });
     if (error) throw error;
   }
 }
 
 export async function deleteModifierMapping(id) {
-  const { error } = await supabase.from("cogs_modifier_mappings").delete().eq("id", id);
+  const { error } = await rfrom("cogs_modifier_mappings").delete().eq("id", id);
   if (error) throw error;
 }
 
@@ -8315,7 +8339,7 @@ export async function fetchModifierCaptions({ storeId, from, to } = {}) {
       }
       return all;
     })(),
-    (async () => { const { data, error } = await supabase.from("cogs_modifiers").select("id, name, till_caption, is_global"); if (error) throw error; return data || []; })(),
+    (async () => { const { data, error } = await rfrom("cogs_modifiers").select("id, name, till_caption, is_global"); if (error) throw error; return data || []; })(),
     fetchModifierMappings(storeId),
   ]);
 
@@ -8361,7 +8385,7 @@ export async function fetchModifierCaptions({ storeId, from, to } = {}) {
 
 // ===== ACTUAL_COGS_V1 — stock counts, purchases, variance =================
 export async function fetchStockCounts(storeId) {
-  let q = supabase.from("cogs_stock_counts").select("*").order("count_date", { ascending: false });
+  let q = rfrom("cogs_stock_counts").select("*").order("count_date", { ascending: false });
   if (storeId) q = q.eq("store_id", storeId);
   const { data, error } = await q; if (error) throw error;
   return (data || []).map(r => ({ id: r.id, storeId: r.store_id, countDate: r.count_date, status: r.status, countedBy: r.counted_by, note: r.note }));
@@ -8369,8 +8393,8 @@ export async function fetchStockCounts(storeId) {
 
 export async function fetchStockCount(countId) {
   const [{ data: head, error: e1 }, { data: lines, error: e2 }] = await Promise.all([
-    supabase.from("cogs_stock_counts").select("*").eq("id", countId).maybeSingle(),
-    supabase.from("cogs_stock_count_lines").select("*").eq("count_id", countId),
+    rfrom("cogs_stock_counts").select("*").eq("id", countId).maybeSingle(),
+    rfrom("cogs_stock_count_lines").select("*").eq("count_id", countId),
   ]);
   if (e1) throw e1; if (e2) throw e2;
   return {
@@ -8380,7 +8404,7 @@ export async function fetchStockCount(countId) {
 }
 
 export async function createStockCount(storeId, countDate, countedBy) {
-  const { data, error } = await supabase.from("cogs_stock_counts")
+  const { data, error } = await rfrom("cogs_stock_counts")
     .insert({ store_id: storeId, count_date: countDate, counted_by: countedBy || null })
     .select("id").single();
   if (error) throw error; return data.id;
@@ -8391,7 +8415,7 @@ export async function createStockCount(storeId, countDate, countedBy) {
 // them to staff; staff see only their sections. All ids stored as text.
 
 export async function fetchCountAssignments(countId) {
-  const { data, error } = await supabase.from("cogs_count_assignments")
+  const { data, error } = await rfrom("cogs_count_assignments")
     .select("*").eq("count_id", String(countId)).order("section");
   if (error) throw error;
   return (data || []).map(a => ({
@@ -8403,20 +8427,20 @@ export async function fetchCountAssignments(countId) {
 
 // Replace-all save: the manager's assignment modal writes the full picture.
 export async function saveCountAssignments(countId, groupBy, rows) {
-  await supabase.from("cogs_count_assignments").delete().eq("count_id", String(countId));
+  await rfrom("cogs_count_assignments").delete().eq("count_id", String(countId));
   const ins = (rows || []).filter(r => r.section && r.userId).map(r => ({
     count_id: String(countId), group_by: groupBy || "location", section: r.section,
     assignee_user_id: r.userId, assignee_name: r.userName || "",
   }));
   if (ins.length) {
-    const { error } = await supabase.from("cogs_count_assignments").insert(ins);
+    const { error } = await rfrom("cogs_count_assignments").insert(ins);
     if (error) throw error;
   }
   return true;
 }
 
 export async function setCountAssignmentStatus(assignmentId, done) {
-  const { error } = await supabase.from("cogs_count_assignments").update({
+  const { error } = await rfrom("cogs_count_assignments").update({
     status: done ? "done" : "open", completed_at: done ? new Date().toISOString() : null,
   }).eq("id", assignmentId);
   if (error) throw error;
@@ -8508,22 +8532,22 @@ export async function closeOrderRound(roundId, { status = "placed", soId = null 
 }
 
 export async function setStockCountLine(countId, itemScope, itemId, qty, costPerUnit) {
-  const { data: existing } = await supabase.from("cogs_stock_count_lines")
+  const { data: existing } = await rfrom("cogs_stock_count_lines")
     .select("id").eq("count_id", countId).eq("item_scope", itemScope).eq("item_id", itemId).maybeSingle();
   const payload = { count_id: countId, item_scope: itemScope, item_id: itemId,
     qty: qty === "" || qty == null ? null : Number(qty), cost_per_unit: costPerUnit == null ? null : Number(costPerUnit) };
   if (existing) {
-    const { error } = await supabase.from("cogs_stock_count_lines").update(payload).eq("id", existing.id);
+    const { error } = await rfrom("cogs_stock_count_lines").update(payload).eq("id", existing.id);
     if (error) throw error;
   } else {
-    const { error } = await supabase.from("cogs_stock_count_lines").insert(payload);
+    const { error } = await rfrom("cogs_stock_count_lines").insert(payload);
     if (error) throw error;
   }
 }
 
 export async function finaliseStockCount(countId, status = "finalised") {
   // Mark the count finalised.
-  const { error } = await supabase.from("cogs_stock_counts").update({ status }).eq("id", countId);
+  const { error } = await rfrom("cogs_stock_counts").update({ status }).eq("id", countId);
   if (error) throw error;
 
   if (status !== "finalised") return;
@@ -8534,9 +8558,9 @@ export async function finaliseStockCount(countId, status = "finalised") {
   // counted truth, and store the variance on the count line. STORE ONLY — the CK
   // block below handles ck lines separately and is untouched.
   try {
-    const { data: sHead } = await supabase.from("cogs_stock_counts").select("store_id").eq("id", countId).maybeSingle();
+    const { data: sHead } = await rfrom("cogs_stock_counts").select("store_id").eq("id", countId).maybeSingle();
     const storeId = sHead?.store_id || null;
-    const { data: allLines } = await supabase.from("cogs_stock_count_lines")
+    const { data: allLines } = await rfrom("cogs_stock_count_lines")
       .select("id, item_scope, item_id, qty").eq("count_id", countId);
     const storeLines = (allLines || []).filter(l => l.item_scope === "store" && l.item_id != null && l.qty != null);
     if (storeId && storeLines.length) {
@@ -8569,8 +8593,8 @@ export async function finaliseStockCount(countId, status = "finalised") {
   // Count = truth: reconcile CK ingredient stock to the counted quantities so the
   // Planner / production see real stock. Only for CK-scoped ingredient lines.
   try {
-    const { data: head } = await supabase.from("cogs_stock_counts").select("store_id, count_date").eq("id", countId).maybeSingle();
-    const { data: lines } = await supabase.from("cogs_stock_count_lines").select("item_scope, item_id, qty, cost_per_unit").eq("count_id", countId);
+    const { data: head } = await rfrom("cogs_stock_counts").select("store_id, count_date").eq("id", countId).maybeSingle();
+    const { data: lines } = await rfrom("cogs_stock_count_lines").select("item_scope, item_id, qty, cost_per_unit").eq("count_id", countId);
     const ckLines = (lines || []).filter(l => (l.item_scope === "ck" || l.item_scope == null) && l.item_id != null && l.qty != null);
     if (!ckLines.length) return;
 
@@ -8582,7 +8606,7 @@ export async function finaliseStockCount(countId, status = "finalised") {
     const countDate = head?.count_date || new Date().toISOString().slice(0,10);
     // Pull each counted ingredient's base_unit so the stock row carries the right unit.
     const ids = [...new Set(ckLines.map(l => String(l.item_id)))];
-    const { data: items } = await supabase.from("cogs_ck_items").select("id, base_unit").in("id", ids);
+    const { data: items } = await rfrom("cogs_ck_items").select("id, base_unit").in("id", ids);
     const unitById = {}; (items || []).forEach(i => { unitById[String(i.id)] = i.base_unit || "kg"; });
 
     for (const l of ckLines) {
@@ -8616,13 +8640,13 @@ export async function finaliseStockCount(countId, status = "finalised") {
 // Returns each store line: counted vs expected (from the count_adjust movement
 // recorded at finalise), plus the variance qty/%. Worst (most negative) first.
 export async function fetchStoreCountVariance(countId) {
-  const { data: head } = await supabase.from("cogs_stock_counts")
+  const { data: head } = await rfrom("cogs_stock_counts")
     .select("id, store_id, count_date, status").eq("id", countId).maybeSingle();
   if (!head) return { head: null, rows: [] };
   const [{ data: lines }, { data: moves }, { data: items }] = await Promise.all([
-    supabase.from("cogs_stock_count_lines").select("item_scope, item_id, qty").eq("count_id", countId),
+    rfrom("cogs_stock_count_lines").select("item_scope, item_id, qty").eq("count_id", countId),
     supabase.from("store_stock_movements").select("item_id, qty, note").eq("ref", `count:${countId}`).eq("type", "count_adjust"),
-    supabase.from("cogs_store_items").select("id, name, base_unit"),
+    rfrom("cogs_store_items").select("id, name, base_unit"),
   ]);
   const nameById = new Map((items || []).map(i => [String(i.id), i.name]));
   const unitById = new Map((items || []).map(i => [String(i.id), i.base_unit]));
@@ -8644,12 +8668,12 @@ export async function fetchStoreCountVariance(countId) {
 }
 
 export async function deleteStockCount(countId) {
-  const { error } = await supabase.from("cogs_stock_counts").delete().eq("id", countId);
+  const { error } = await rfrom("cogs_stock_counts").delete().eq("id", countId);
   if (error) throw error;
 }
 
 export async function fetchPurchases({ storeId, from, to } = {}) {
-  let q = supabase.from("cogs_purchases").select("*").order("purchase_date", { ascending: false });
+  let q = rfrom("cogs_purchases").select("*").order("purchase_date", { ascending: false });
   if (storeId) q = q.eq("store_id", storeId);
   if (from) q = q.gte("purchase_date", from);
   if (to)   q = q.lte("purchase_date", to);
@@ -8659,7 +8683,7 @@ export async function fetchPurchases({ storeId, from, to } = {}) {
 }
 
 export async function addPurchase(p) {
-  const { error } = await supabase.from("cogs_purchases").insert({
+  const { error } = await rfrom("cogs_purchases").insert({
     store_id: p.storeId, purchase_date: p.purchaseDate, item_scope: p.itemScope || "store", item_id: p.itemId,
     qty: p.qty == null || p.qty === "" ? null : Number(p.qty),
     total_cost: p.totalCost == null || p.totalCost === "" ? null : Number(p.totalCost),
@@ -8669,7 +8693,7 @@ export async function addPurchase(p) {
 }
 
 export async function deletePurchase(id) {
-  const { error } = await supabase.from("cogs_purchases").delete().eq("id", id);
+  const { error } = await rfrom("cogs_purchases").delete().eq("id", id);
   if (error) throw error;
 }
 
@@ -8739,7 +8763,7 @@ export async function computeActualCogs({ storeId, openCountId, closeCountId } =
 export async function searchStoreInventory(q, limit = 12) {
   // MATCHUI: pack + cost come back too, so the match card can show OUR pack
   // beside the receipt's and the reviewer can see whether they agree.
-  let query = supabase.from("cogs_store_items")
+  let query = rfrom("cogs_store_items")
     .select("id, name, base_unit, pack_qty, pack_price, cost_per_base_unit")
     .order("name").limit(limit);
   if (q && q.trim()) query = query.ilike("name", `%${q.trim()}%`);
@@ -8751,7 +8775,7 @@ export async function searchStoreInventory(q, limit = 12) {
 // lookup that pulled the first 12 items and hoped the match was among them.
 export async function fetchStoreItemBrief(id) {
   if (id == null) return null;
-  const { data } = await supabase.from("cogs_store_items")
+  const { data } = await rfrom("cogs_store_items")
     .select("id, name, base_unit, pack_qty, pack_price, cost_per_base_unit")
     .eq("id", id).maybeSingle();
   return data || null;
@@ -8784,7 +8808,7 @@ export async function detectInvoicePriceChanges(invoiceId, { thresholdPct = 1 } 
   const matchedIds = [...new Set((lines || []).map(l => l.matched_store_item_id).filter(v => v != null))];
   const baseUnitByItem = new Map();
   if (matchedIds.length) {
-    const { data: sis } = await supabase.from("cogs_store_items").select("id, base_unit").in("id", matchedIds);
+    const { data: sis } = await rfrom("cogs_store_items").select("id, base_unit").in("id", matchedIds);
     (sis || []).forEach(r => baseUnitByItem.set(r.id, r.base_unit));
   }
 
@@ -8823,10 +8847,10 @@ export async function detectInvoicePriceChanges(invoiceId, { thresholdPct = 1 } 
     // skip if effectively unchanged
     if (oldCost != null && Math.abs(pct) < thresholdPct) continue;
     // avoid duplicate pending row for same invoice+item
-    const { data: dup } = await supabase.from("cogs_price_changes")
+    const { data: dup } = await rfrom("cogs_price_changes")
       .select("id").eq("invoice_id", invoiceId).eq("item_id", itemId).eq("status", "pending").maybeSingle();
     if (dup) continue;
-    const { error } = await supabase.from("cogs_price_changes").insert({
+    const { error } = await rfrom("cogs_price_changes").insert({
       store_id: storeId, item_id: itemId, old_cost: oldCost ?? null, new_cost: newCost,
       pct_change: pct, invoice_id: invoiceId, invoice_ref: inv.invoice_number || inv.reference || null,
       supplier: inv.supplier || inv.supplier_name || null,
@@ -8837,7 +8861,7 @@ export async function detectInvoicePriceChanges(invoiceId, { thresholdPct = 1 } 
 }
 
 export async function fetchPriceChanges(status = "pending") {
-  let q = supabase.from("cogs_price_changes").select("*").order("detected_at", { ascending: false });
+  let q = rfrom("cogs_price_changes").select("*").order("detected_at", { ascending: false });
   if (status && status !== "all") q = q.eq("status", status);
   const { data, error } = await q; if (error) throw error;
   return (data || []).map(r => ({ id: r.id, storeId: r.store_id, itemId: r.item_id, oldCost: r.old_cost,
@@ -8847,16 +8871,16 @@ export async function fetchPriceChanges(status = "pending") {
 
 // Apply a queued change: write the new cost to the store's overlay and mark applied.
 export async function applyPriceChange(id, userId) {
-  const { data: pc, error } = await supabase.from("cogs_price_changes").select("*").eq("id", id).single();
+  const { data: pc, error } = await rfrom("cogs_price_changes").select("*").eq("id", id).single();
   if (error) throw error;
   await setStoreItemOverride(pc.store_id, pc.item_id, { costPerBaseUnit: pc.new_cost });
-  const { error: e2 } = await supabase.from("cogs_price_changes")
+  const { error: e2 } = await rfrom("cogs_price_changes")
     .update({ status: "applied", resolved_at: new Date().toISOString(), resolved_by: userId || null }).eq("id", id);
   if (e2) throw e2;
 }
 
 export async function dismissPriceChange(id, userId) {
-  const { error } = await supabase.from("cogs_price_changes")
+  const { error } = await rfrom("cogs_price_changes")
     .update({ status: "dismissed", resolved_at: new Date().toISOString(), resolved_by: userId || null }).eq("id", id);
   if (error) throw error;
 }
@@ -8891,7 +8915,7 @@ const mapGoodsIn = (r) => ({
 export async function fetchCkIngredients(siteId) {
   // Unified: central-kitchen ingredients live in cogs_ck_items (shared with the
   // RecipeBuilder costing). siteId is accepted but items may be unscoped (null).
-  const { data, error } = await supabase.from("cogs_ck_items").select("*").is("archived_at", null).order("name");
+  const { data, error } = await rfrom("cogs_ck_items").select("*").is("archived_at", null).order("name");
   if (error) throw error;
   return (data || []).map(mapIngredient);
 }
@@ -8913,17 +8937,17 @@ export async function upsertCkIngredient(ing) {
     site_id: ing.siteId || null,
   };
   if (ing.id) {
-    const { data, error } = await supabase.from("cogs_ck_items").update(row).eq("id", ing.id).select().maybeSingle();
+    const { data, error } = await rfrom("cogs_ck_items").update(row).eq("id", ing.id).select().maybeSingle();
     if (error) throw error;
     return data ? mapIngredient(data) : null;
   }
-  const { data, error } = await supabase.from("cogs_ck_items").insert(row).select().maybeSingle();
+  const { data, error } = await rfrom("cogs_ck_items").insert(row).select().maybeSingle();
   if (error) throw error;
   return data ? mapIngredient(data) : null;
 }
 
 export async function archiveCkIngredient(id) {
-  const { error } = await supabase.from("cogs_ck_items").update({ archived_at: new Date().toISOString() }).eq("id", id);
+  const { error } = await rfrom("cogs_ck_items").update({ archived_at: new Date().toISOString() }).eq("id", id);
   if (error) throw error;
   return id;
 }
@@ -9051,7 +9075,7 @@ export async function archiveCkSupplier(id) { const { error } = await supabase.f
 export async function upsertCkIngredientsByName(siteId, rows) {
   const clean = (rows || []).filter(r => r.name && r.name.trim());
   if (!clean.length) return { updated: 0, created: 0 };
-  const { data: existing, error: e0 } = await supabase.from("cogs_ck_items").select("id, name").is("archived_at", null);
+  const { data: existing, error: e0 } = await rfrom("cogs_ck_items").select("id, name").is("archived_at", null);
   if (e0) throw e0;
   const byName = new Map((existing || []).map(x => [x.name.trim().toLowerCase(), x.id]));
 
@@ -9075,14 +9099,14 @@ export async function upsertCkIngredientsByName(siteId, rows) {
   for (const r of clean) {
     const id = byName.get(r.name.trim().toLowerCase());
     if (id) {
-      const { error } = await supabase.from("cogs_ck_items").update(toRow(r)).eq("id", id);
+      const { error } = await rfrom("cogs_ck_items").update(toRow(r)).eq("id", id);
       if (error) throw error; updated++;
     } else {
       inserts.push({ ...toRow(r), site_id: siteId || null });
     }
   }
   if (inserts.length) {
-    const { error } = await supabase.from("cogs_ck_items").insert(inserts);
+    const { error } = await rfrom("cogs_ck_items").insert(inserts);
     if (error) throw error; created = inserts.length;
   }
   return { updated, created };
@@ -9096,7 +9120,7 @@ export async function bulkAddCkIngredients(siteId, rows) {
     supplier: r.defaultSupplier?.trim() || null,
   }));
   if (!clean.length) return 0;
-  const { error } = await supabase.from("cogs_ck_items").insert(clean);
+  const { error } = await rfrom("cogs_ck_items").insert(clean);
   if (error) throw error;
   return clean.length;
 }
@@ -10620,7 +10644,7 @@ export async function runBatchMatchInvoiceLines({ dryRun = false, limit = 5000, 
     .is("matched_store_item_id", null).limit(limit);
   if (invoiceId) lineQ = lineQ.eq("invoice_id", invoiceId);
   const [{ data: items, error: eI }, { data: lines, error: eL }, aliasMap] = await Promise.all([
-    supabase.from("cogs_store_items").select("id, name"),
+    rfrom("cogs_store_items").select("id, name"),
     lineQ,
     fetchItemAliases().catch(() => new Map()),
   ]);
@@ -12099,7 +12123,7 @@ export async function auditTillConsumption({ storeId, date, channel = "POS", lim
 }
 
 export async function fetchIgnoredTillNames(storeId) {
-  let q = supabase.from("cogs_ignored_till_names").select("*");
+  let q = rfrom("cogs_ignored_till_names").select("*");
   if (storeId) q = q.eq("store_id", storeId);
   const { data, error } = await q;
   if (error) throw error;
@@ -12109,10 +12133,10 @@ export async function ignoreTillName(storeId, posName, by = null) {
   if (!storeId || !posName?.trim()) throw new Error("store and name required");
   const name = posName.trim();
   // Already ignored? (case-insensitive, matching the functional unique index)
-  const { data: existing } = await supabase.from("cogs_ignored_till_names")
+  const { data: existing } = await rfrom("cogs_ignored_till_names")
     .select("id, store_id, pos_name").eq("store_id", storeId).ilike("pos_name", name).maybeSingle();
   if (existing) return { id: existing.id, storeId: existing.store_id, posName: existing.pos_name };
-  const { data, error } = await supabase.from("cogs_ignored_till_names")
+  const { data, error } = await rfrom("cogs_ignored_till_names")
     .insert({ store_id: storeId, pos_name: name, created_by: by || null })
     .select().maybeSingle();
   if (error) {
@@ -12122,7 +12146,7 @@ export async function ignoreTillName(storeId, posName, by = null) {
   return data ? { id: data.id, storeId: data.store_id, posName: data.pos_name } : null;
 }
 export async function unignoreTillName(id) {
-  const { error } = await supabase.from("cogs_ignored_till_names").delete().eq("id", id);
+  const { error } = await rfrom("cogs_ignored_till_names").delete().eq("id", id);
   if (error) throw error;
   return id;
 }
@@ -17605,7 +17629,7 @@ export async function createStoreDeliveryFromDispatch(soId, dispatchId, dispatch
     const deliverable = (dispatchLines || []).filter(l => rideVan(l.itemId));
     if (!deliverable.length) return null; // everything on this dispatch was fresh - nothing for the van
     const distIds = [...new Set(deliverable.map(l => l.itemId).filter(Boolean))];
-    const { data: storeItems } = await supabase.from("cogs_store_items")
+    const { data: storeItems } = await rfrom("cogs_store_items")
       .select("id, name, dist_item_id").in("dist_item_id", distIds.length ? distIds : ["__none__"]);
     const storeByDist = new Map((storeItems || []).map(s => [s.dist_item_id, s]));
 
@@ -17738,7 +17762,7 @@ export async function saveDeliveryReceipt(deliveryId, lines) {
 async function ensureStoreItemForDistItem(distItemId, fallbackName, unitCost) {
   if (!distItemId) return null;
   // Already linked?
-  const { data: existing } = await supabase.from("cogs_store_items")
+  const { data: existing } = await rfrom("cogs_store_items")
     .select("id").eq("dist_item_id", distItemId).limit(1).maybeSingle();
   if (existing) return existing.id;
   // Pull the dist item's details to copy across.
@@ -17756,7 +17780,7 @@ async function ensureStoreItemForDistItem(distItemId, fallbackName, unitCost) {
     pack_desc: packDesc, pack_qty: (packSize != null ? packSize * packCount : packCount),
     pack_price: packPrice, dist_item_id: distItemId,
   };
-  const { data: created, error } = await supabase.from("cogs_store_items").insert(body).select("id").single();
+  const { data: created, error } = await rfrom("cogs_store_items").insert(body).select("id").single();
   if (error) { console.error("ensureStoreItemForDistItem failed:", error.message); return null; }
   return created.id;
 }
@@ -17768,7 +17792,7 @@ async function ensureStoreItemForDistItem(distItemId, fallbackName, unitCost) {
 // (supplier_name set, so receiving auto-writes purchases under that supplier).
 
 export async function fetchStoreSupplierOverrides(storeId) {
-  const { data, error } = await supabase.from("store_item_suppliers")
+  const { data, error } = await rfrom("store_item_suppliers")
     .select("*").eq("store_id", storeId);
   if (error) throw error;
   const m = {};
@@ -17778,10 +17802,10 @@ export async function fetchStoreSupplierOverrides(storeId) {
 
 export async function setStoreSupplierOverride(storeId, itemId, vendorId) {
   if (vendorId === undefined) {
-    await supabase.from("store_item_suppliers").delete().eq("store_id", storeId).eq("item_id", itemId);
+    await rfrom("store_item_suppliers").delete().eq("store_id", storeId).eq("item_id", itemId);
     return true;
   }
-  const { error } = await supabase.from("store_item_suppliers")
+  const { error } = await rfrom("store_item_suppliers")
     .upsert({ store_id: storeId, item_id: itemId, vendor_id: vendorId }, { onConflict: "store_id,item_id" });
   if (error) throw error;
   return true;
@@ -17905,7 +17929,7 @@ export async function confirmStoreDelivery(deliveryId, receivedBy) {
         if (hit) { storeItemId = hit; resolvedByName = true; }
         else {
           const clean = normItemAlias(l.item_name);
-          const { data: si } = await supabase.from("cogs_store_items").select("id, name");
+          const { data: si } = await rfrom("cogs_store_items").select("id, name");
           const found = (si || []).find(r => normItemAlias(r.name) === clean
                                           || stripPackSuffix(r.name).toLowerCase() === stripPackSuffix(l.item_name).toLowerCase());
           if (found) { storeItemId = found.id; resolvedByName = true; }
@@ -17934,7 +17958,7 @@ export async function confirmStoreDelivery(deliveryId, receivedBy) {
       // ledger and the purchases register answer different questions.
       try {
         if (!resolvedByName) {
-          await supabase.from("cogs_purchases").insert({
+          await rfrom("cogs_purchases").insert({
             store_id: storeId, purchase_date: new Date().toISOString().slice(0, 10),
             item_scope: "store", item_id: storeItemId,
             qty: recv,
@@ -17957,12 +17981,12 @@ export async function confirmStoreDelivery(deliveryId, receivedBy) {
       try {
         if (!resolvedByName && l.unit_cost != null && Number(l.unit_cost) > 0) {
           const paid = Math.round(Number(l.unit_cost) * 100) / 100;
-          const { data: si } = await supabase.from("cogs_store_items")
+          const { data: si } = await rfrom("cogs_store_items")
             .select("pack_price").eq("id", storeItemId).maybeSingle();
           // Only write when it actually moved, so the row isn't touched on
           // every delivery of an unchanged item.
           if (!si || si.pack_price == null || Math.abs(Number(si.pack_price) - paid) >= 0.005) {
-            await supabase.from("cogs_store_items").update({ pack_price: paid }).eq("id", storeItemId);
+            await rfrom("cogs_store_items").update({ pack_price: paid }).eq("id", storeItemId);
           }
         }
       } catch (e) { console.error("store item cost refresh failed:", e.message); }
@@ -18092,7 +18116,7 @@ export async function createCkDeliveryFromDispatch(soId, dispatchId, dispatchLin
         .select("id, name, pack_count, pack_size, pack_unit").in("id", distIds);
       (di || []).forEach(d => distById.set(d.id, d));
     }
-    const { data: ckItems } = await supabase.from("cogs_ck_items")
+    const { data: ckItems } = await rfrom("cogs_ck_items")
       .select("id, name, dist_item_id").in("dist_item_id", distIds.length ? distIds : ["__none__"]).is("archived_at", null);
     const ckByDist = new Map((ckItems || []).map(s => [s.dist_item_id, s]));
 
@@ -18159,7 +18183,7 @@ export async function saveCkDeliveryReceipt(deliveryId, lines) {
 // Ensure a CK ingredient exists for a dist item (mirror of the store version).
 async function ensureCkItemForDistItem(distItemId, fallbackName) {
   if (!distItemId) return null;
-  const { data: existing } = await supabase.from("cogs_ck_items")
+  const { data: existing } = await rfrom("cogs_ck_items")
     .select("id").eq("dist_item_id", distItemId).limit(1).maybeSingle();
   if (existing) return existing.id;
   const { data: di } = await supabase.from("dist_items")
@@ -18176,7 +18200,7 @@ async function ensureCkItemForDistItem(distItemId, fallbackName) {
     pack_price: di?.purchase_rate != null ? Number(di.purchase_rate) : null,
     dist_item_id: distItemId,
   };
-  const { data: created, error } = await supabase.from("cogs_ck_items").insert(body).select("id").single();
+  const { data: created, error } = await rfrom("cogs_ck_items").insert(body).select("id").single();
   if (error) { console.error("ensureCkItemForDistItem failed:", error.message); return null; }
   return created.id;
 }
@@ -18314,7 +18338,7 @@ export async function depleteStoreStockFromSales(storeId, date) {
 // ─── RECIPE CARDS — office creates, all stores view ─────────────────────────
 // List cards for the browse view (published only by default).
 export async function fetchRecipeCards({ includeUnpublished = false } = {}) {
-  let q = supabase.from("recipe_cards").select("id, name, main_category, category, published, updated_at").order("name");
+  let q = rfrom("recipe_cards").select("id, name, main_category, category, published, updated_at").order("name");
   if (!includeUnpublished) q = q.eq("published", true);
   const { data, error } = await q;
   if (error) throw error;
@@ -18323,7 +18347,7 @@ export async function fetchRecipeCards({ includeUnpublished = false } = {}) {
 
 // Full card (with its data JSON) for the viewer/editor.
 export async function fetchRecipeCard(id) {
-  const { data, error } = await supabase.from("recipe_cards").select("*").eq("id", id).maybeSingle();
+  const { data, error } = await rfrom("recipe_cards").select("*").eq("id", id).maybeSingle();
   if (error) throw error;
   return data;
 }
@@ -18332,13 +18356,13 @@ export async function fetchRecipeCard(id) {
 export async function saveRecipeCard({ id, name, mainCategory, category, data, published = true, createdBy }) {
   const fields = { name, main_category: mainCategory || null, category: category || null, data, published };
   if (id) {
-    const { data: row, error } = await supabase.from("recipe_cards")
+    const { data: row, error } = await rfrom("recipe_cards")
       .update({ ...fields, updated_at: new Date().toISOString() })
       .eq("id", id).select().single();
     if (error) throw error;
     return row;
   }
-  const { data: row, error } = await supabase.from("recipe_cards")
+  const { data: row, error } = await rfrom("recipe_cards")
     .insert({ ...fields, created_by: createdBy || null })
     .select().single();
   if (error) throw error;
@@ -18346,19 +18370,19 @@ export async function saveRecipeCard({ id, name, mainCategory, category, data, p
 }
 
 export async function deleteRecipeCard(id) {
-  const { error } = await supabase.from("recipe_cards").delete().eq("id", id);
+  const { error } = await rfrom("recipe_cards").delete().eq("id", id);
   if (error) throw error;
   return id;
 }
 
 // Duplicate a card (copies all fields, appends "(copy)" to the name).
 export async function duplicateRecipeCard(id) {
-  const { data: src, error: e1 } = await supabase.from("recipe_cards").select("*").eq("id", id).maybeSingle();
+  const { data: src, error: e1 } = await rfrom("recipe_cards").select("*").eq("id", id).maybeSingle();
   if (e1) throw e1;
   if (!src) throw new Error("Recipe not found.");
   const data = src.data || {};
   const newName = `${src.name || "Untitled"} (copy)`;
-  const { data: row, error } = await supabase.from("recipe_cards")
+  const { data: row, error } = await rfrom("recipe_cards")
     .insert({ name: newName, main_category: src.main_category, category: src.category,
       data: { ...data, name: newName }, published: src.published })
     .select().single();
@@ -18369,29 +18393,29 @@ export async function duplicateRecipeCard(id) {
 // Rename / re-file a card (name, main_category, category) without touching the design.
 // TREE-LEVEL OPS — categories are derived from recipe fields, so these bulk-update.
 export async function renameRecipeMainCategory(oldMain, newMain) {
-  const q = supabase.from("recipe_cards").update({ main_category: newMain || null, updated_at: new Date().toISOString() });
+  const q = rfrom("recipe_cards").update({ main_category: newMain || null, updated_at: new Date().toISOString() });
   const { error } = oldMain ? await q.eq("main_category", oldMain) : await q.is("main_category", null);
   if (error) throw error; return true;
 }
 export async function renameRecipeCategory(main, oldCat, newCat) {
-  let q = supabase.from("recipe_cards").update({ category: newCat || null, updated_at: new Date().toISOString() });
+  let q = rfrom("recipe_cards").update({ category: newCat || null, updated_at: new Date().toISOString() });
   q = main ? q.eq("main_category", main) : q.is("main_category", null);
   q = oldCat ? q.eq("category", oldCat) : q.is("category", null);
   const { error } = await q; if (error) throw error; return true;
 }
 export async function moveRecipeCard(id, { mainCategory, category }) {
-  const { error } = await supabase.from("recipe_cards")
+  const { error } = await rfrom("recipe_cards")
     .update({ main_category: mainCategory || null, category: category || null, updated_at: new Date().toISOString() })
     .eq("id", id);
   if (error) throw error; return true;
 }
 export async function deleteRecipeMainCategory(main) {
-  const q = supabase.from("recipe_cards").delete();
+  const q = rfrom("recipe_cards").delete();
   const { error } = main ? await q.eq("main_category", main) : await q.is("main_category", null);
   if (error) throw error; return true;
 }
 export async function deleteRecipeCategory(main, cat) {
-  let q = supabase.from("recipe_cards").delete();
+  let q = rfrom("recipe_cards").delete();
   q = main ? q.eq("main_category", main) : q.is("main_category", null);
   q = cat ? q.eq("category", cat) : q.is("category", null);
   const { error } = await q; if (error) throw error; return true;
@@ -18401,7 +18425,7 @@ export async function createRecipeInCategory(mainCategory, category, name) {
   const data = { name:nm, script:"Build", brand:"choco-tini", time:"", crockery:"", photo:null,
     style:{ accent:"#844429", headBar:"#E4C9AE", panel:"#FBF6EC", iconSize:48, stepCols:3, showBands:true, showTimeBadge:true },
     steps:[], ingredients:[], tools:[] };
-  const { data: row, error } = await supabase.from("recipe_cards")
+  const { data: row, error } = await rfrom("recipe_cards")
     .insert({ name:nm, main_category:mainCategory||null, category:category||null, data, published:true })
     .select().single();
   if (error) throw error; return row;
@@ -18414,10 +18438,10 @@ export async function renameRecipeCard(id, { name, mainCategory, category }) {
   if (category !== undefined) patch.category = category || null;
   // keep data.name in sync if the display name changed
   if (name !== undefined) {
-    const { data: src } = await supabase.from("recipe_cards").select("data").eq("id", id).maybeSingle();
+    const { data: src } = await rfrom("recipe_cards").select("data").eq("id", id).maybeSingle();
     if (src?.data) patch.data = { ...src.data, name };
   }
-  const { data: row, error } = await supabase.from("recipe_cards").update(patch).eq("id", id).select().single();
+  const { data: row, error } = await rfrom("recipe_cards").update(patch).eq("id", id).select().single();
   if (error) throw error;
   return row;
 }
