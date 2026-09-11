@@ -1,5 +1,5 @@
 // petpooja-sync — pulls Dubai sales from the Petpooja billing portal into flipdish_sales.
-// PETPOOJA 2026-09-11f — fields object is index->name
+// PETPOOJA 2026-09-11g — status column (PAID / CANCELLED / REFUNDED)
 //
 // How it works (discovered from the portal's own network traffic, like the RMS sync):
 //   1. POST https://billing.petpooja.com/  header_changed_rest_id=<id>   -> selects the outlet for the session
@@ -237,6 +237,7 @@ function buildSales(restId: string, bills: Row[], lines: Row[]) {
       amount_tax: num(pick(b, "Total Tax (Rs.)", "Total Tax")),
       amount_total: num(pick(b, "Total (Rs.)", "Total")),
       payment_method: String(pick(b, "Payment Type") ?? ""),
+      status: cancelled ? "CANCELLED" : (/refund/i.test(status) ? "REFUNDED" : "PAID"),
       is_cancelled: cancelled,
       is_fully_refunded: false,
       sale_items: items,
