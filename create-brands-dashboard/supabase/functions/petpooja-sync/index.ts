@@ -1,5 +1,5 @@
 // petpooja-sync — pulls Dubai sales from the Petpooja billing portal into flipdish_sales.
-// PETPOOJA 2026-09-11j — channel = platform name (Talabat/Deliveroo/Keeta/... or POS)
+// PETPOOJA 2026-09-11k — platform read from Payment Type too
 //
 // How it works (discovered from the portal's own network traffic, like the RMS sync):
 //   1. POST https://billing.petpooja.com/  header_changed_rest_id=<id>   -> selects the outlet for the session
@@ -185,7 +185,9 @@ const PLATFORMS: [RegExp, string][] = [
   [/uber/i, "UberEats"],
 ];
 function platformOf(b: Row): string | null {
-  const t = [pick(b, "Area"), pick(b, "sub_order_type"), pick(b, "Order Type"), pick(b, "Payment Description")]
+  // Petpooja puts the aggregator in Payment Type ("Other [Deliveroo]", "Other [Talabat Cash]",
+  // "Other [keeta]") for orders keyed in by hand, and in Area / sub_order_type for integrated ones.
+  const t = [pick(b, "Payment Type"), pick(b, "Payment Description"), pick(b, "Area"), pick(b, "sub_order_type"), pick(b, "Order Type")]
     .map(x => String(x ?? "")).join(" | ");
   for (const [re, name] of PLATFORMS) if (re.test(t)) return name;
   return null;
