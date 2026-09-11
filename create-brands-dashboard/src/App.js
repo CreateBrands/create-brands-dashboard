@@ -208,7 +208,7 @@ import {
   fetchEmployeeNotesBulk,
   fetchPayrollSeparators, addPayrollSeparator, updatePayrollSeparator,
   deletePayrollSeparator, reorderPayrollList,
-  setActiveRegion,
+  setActiveRegion, fetchDailySalesReport,
 } from "./supabase";
 import {
   ComposedChart, Bar, Line, PieChart, Pie, Cell,
@@ -739,6 +739,19 @@ function setActiveCurrency(code) { ACTIVE_CURRENCY = CURRENCY_META[String(code |
 const ccySym = () => ACTIVE_CURRENCY.symbol;          // "£" or "AED "
 const ccyLocale = () => ACTIVE_CURRENCY.locale;
 const fmtCurrency = v => v == null ? "—" : `${ccySym()}${Math.round(v).toLocaleString(ccyLocale())}`;
+// TZ 2026-09-11b: hour / weekday of a sale in a given IANA timezone (store-local, not browser-local)
+const _tzFmtCache = {};
+function tzParts(iso, tz) {
+  const key = tz || "Europe/London";
+  try {
+    if (!_tzFmtCache[key]) _tzFmtCache[key] = new Intl.DateTimeFormat("en-GB", { hour: "numeric", hour12: false, weekday: "short", timeZone: key });
+    const parts = _tzFmtCache[key].formatToParts(new Date(iso));
+    const hour = Number(parts.find(p => p.type === "hour")?.value) % 24;
+    const wd = parts.find(p => p.type === "weekday")?.value || "";
+    const dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(wd);
+    return { hour: isNaN(hour) ? new Date(iso).getHours() : hour, dow: dow < 0 ? new Date(iso).getDay() : dow };
+  } catch { const d = new Date(iso); return { hour: d.getHours(), dow: d.getDay() }; }
+}
 // Decimal hours -> "Xh YYm" for consistent time display across the app.
 const fmtHM = (hrs) => {
   if (hrs == null || isNaN(hrs)) return "—";
@@ -1068,7 +1081,7 @@ function HeroRevenueCard({ current, previous, forecast = null, target, prevLabel
       {/* Header */}
       <div className="relative flex items-center justify-between mb-4">
         <div className="flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: "rgba(132,68,41,0.10)" }}><PoundSterling size={17} className="text-[#844429]"/></div>
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: "rgba(132,68,41,0.10)" }}>{ccySym().trim() !== "£" ? <span className="text-[11px] font-bold" style={{ color: "#844429" }}>{ccySym().trim()}</span> : <PoundSterling size={17} className="text-[#844429]"/>}</div>
           <div>
             <div className="text-[11px] font-bold text-[#9C6B3F] uppercase tracking-[0.14em]">Revenue · Today</div>
             <div className="text-[10px] text-[#A8835C]">{orders} orders{peak ? ` · peaks ${peak.label}` : ""}</div>
@@ -31657,12 +31670,12 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
     valid.forEach(s => {
       const t = s.saleTime ? new Date(s.saleTime) : null;
       if (!t || isNaN(t)) return;
-      let h = t.getHours(); if (h < 6) h += 24;   // wrap small hours into "Late"
+      let h = tzParts(s.saleTime, store?.timezone).hour; if (h < 6) h += 24;   // store-local; wrap small hours into "Late"
       const b = buckets.find(b => h >= b.from && h < b.to);
       if (b) { b.revenue += amt(s); b.orders += 1; }
     });
     return buckets;
-  }, [valid, basis]);
+  }, [valid, basis, store?.timezone]);
 
   const payments = useMemo(() => {
     const m = {};
@@ -31680,12 +31693,12 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
     valid.forEach(s => {
       const t = s.saleTime ? new Date(s.saleTime) : null;
       if (!t || isNaN(t)) return;
-      const dow = t.getDay(), hr = t.getHours();
+      const { dow, hour: hr } = tzParts(s.saleTime, store?.timezone);
       grid[dow][hr] += heatMetric === "revenue" ? amt(s) : 1;
       if (grid[dow][hr] > max) max = grid[dow][hr];
     });
     return { grid, max };
-  }, [valid, heatMetric, basis]);
+  }, [valid, heatMetric, basis, store?.timezone]);
 
   const topItems = useMemo(() => {
     const m = {};
@@ -31995,7 +32008,7 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
             </div>
             <div>
               <div className="text-2xl font-bold text-red-300">{fmtMoney(refunds.refundedValue)}</div>
-              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mt-0.5">Refund £</div>
+              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mt-0.5">Refund {ccySym().trim()}</div>
             </div>
           </div>
           <div className="text-[10px] text-slate-600 mt-3">Out of {sales.length} total transactions in {periodLabel}.</div>
@@ -33348,6 +33361,121 @@ function MultiStorePicker({ stores = [], brands = [], value, onChange, allowAll 
     </div>
   );
 }
+// ─── DSR 2026-09-11a: Daily Sales Report card (UAE stores, single day) ─────────
+// Mirrors the Petpooja WhatsApp daily report: transactions vs LW, gross/discount/
+// net, budget variance, MTD, delivery by platform, API, product mix, tomorrow.
+function pctVar(a, b) { if (b == null || b === 0 || a == null) return null; return ((a - b) / b) * 100; }
+function DsrVar({ a, b }) {
+  const v = pctVar(a, b); if (v == null) return <span className="text-slate-400">—</span>;
+  return <span className={v >= 0 ? "text-emerald-600" : "text-red-500"}>{v >= 0 ? "+" : ""}{v.toFixed(1)}%</span>;
+}
+function dsrText(r) {
+  const m = (v) => v == null ? "—" : Number(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const pv = (a, b) => { const v = pctVar(a, b); return v == null ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`; };
+  const d = new Date(r.date + "T00:00:00");
+  const dateStr = `${String(d.getDate()).padStart(2,"0")}/${String(d.getMonth()+1).padStart(2,"0")}/${String(d.getFullYear()).slice(2)}`;
+  const del = Object.entries(r.delivery || {}).sort((a, b) => b[1] - a[1]);
+  const mix = r.productMix || {}; const mixTot = Object.values(mix).reduce((a, v) => a + Number(v), 0) || 1;
+  const L = [];
+  L.push(`DAILY SALES REPORT`, `${r.store.name}`, `Date: ${dateStr} ${r.weekday}`, ``);
+  L.push(`📊 TRANSACTION SUMMARY`, `No. of Invoice: ${r.invoices}`, `LW: ${r.invoicesLw}`, `Var: ${pv(r.invoices, r.invoicesLw)}`);
+  if (r.pax) L.push(`Pax: ${r.pax} / LW: ${r.paxLw || 0} / Var: ${pv(r.pax, r.paxLw)}`);
+  L.push(``);
+  L.push(`💰 SALES PERFORMANCE`, `Gross Sale: ${m(r.gross)}`, `LW: ${m(r.grossLw)}`, `Var: ${pv(r.gross, r.grossLw)}`,
+    `Discount amount: ${m(r.discount)}`, `Net Sale: ${m(r.net)}`);
+  if (r.budget != null) L.push(`Budget Target: ${m(r.budget)}`, `Variance: ${pv(r.net, r.budget)}`);
+  L.push(``, `MTD Performance`, `MTD Gross Sales: ${m(r.mtdGross)}`);
+  if (r.mtdBudget != null) L.push(`MTD Budget: ${m(r.mtdBudget)}`, `Var: ${pv(r.mtdGross, r.mtdBudget)}`);
+  const ch = r.channels || {}, chLw = r.channelsLw || {};
+  if (Object.keys(ch).length) {
+    L.push(``, `🍽️ CHANNEL BREAKDOWN`);
+    ["Dine In", "Pick Up", "Delivery"].forEach(k => { if (ch[k] != null) L.push(`${k === "Dine In" ? "Dining" : k}: ${m(ch[k])} / LW: ${m(chLw[k] || 0)} / Var: ${pv(ch[k], chLw[k])}`); });
+  }
+  L.push(``, `📱 DELIVERY SALES`);
+  const brands = r.deliveryBrands || {};
+  del.forEach(([k, v]) => {
+    L.push(`${k}: ${m(v)}`);
+    const b = brands[k]; if (b) ["Chocoberry", "Eggtok", "Joy"].forEach(n => { if (b[n]) L.push(`  ${n} - ${m(b[n].revenue)} / ${b[n].bills}`); });
+  });
+  L.push(`TOTAL Delivery: ${m(r.deliveryTotal)}`, `Total as ${r.gross ? (r.deliveryTotal / r.gross * 100).toFixed(2) : "0"}% of Gross Sale: ${m(r.gross)}`,
+    `TOTAL Delivery MTD: ${m(r.deliveryMtd)}`, `Total as ${r.mtdGross ? (r.deliveryMtd / r.mtdGross * 100).toFixed(2) : "0"}% of Month Gross Sales: ${m(r.mtdGross)}`, ``);
+  L.push(`📈 KEY METRICS`, `API (Avg Per Invoice): ${m(r.api)} (LW: ${m(r.apiLw)})`);
+  if (r.apc != null) L.push(`APC (Avg Per Cover): ${m(r.apc)} (LW: ${m(r.apcLw)})`);
+  L.push(``);
+  L.push(`🍕 PRODUCT MIX`);
+  ["Food", "Dessert", "Beverage"].forEach(k => { if (mix[k] != null) L.push(`${k}: ${m(mix[k])} (${(Number(mix[k]) / mixTot * 100).toFixed(2)}%)`); });
+  L.push(``, `📅 TOMORROW'S OUTLOOK`, `Next Day Target: ${m(r.nextDayTarget)} (${r.nextDaySource})`);
+  return L.join("\n");
+}
+function DailySalesReportCard({ storeId, date }) {
+  const [rep, setRep] = useState(null); const [busy, setBusy] = useState(false); const [err, setErr] = useState("");
+  const [copied, setCopied] = useState(false);
+  useEffect(() => { setRep(null); setErr(""); }, [storeId, date]);
+  const load = async () => {
+    setBusy(true); setErr("");
+    try { setRep(await fetchDailySalesReport(storeId, date)); } catch (e) { setErr(e.message || String(e)); } finally { setBusy(false); }
+  };
+  const copy = async () => { try { await navigator.clipboard.writeText(dsrText(rep)); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch {} };
+  const m = (v) => v == null ? "—" : `${ccySym()}${Number(v).toLocaleString(ccyLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const Row = ({ label, value, sub }) => (
+    <div className="flex items-baseline justify-between py-1 border-b border-[#EADFCF] last:border-0">
+      <span className="text-[13px] text-[#7A5A3A]">{label}</span>
+      <span className="text-[13px] font-semibold text-[#3E2A18] tabular-nums">{value}{sub && <span className="ml-2 text-[11px] font-normal">{sub}</span>}</span>
+    </div>
+  );
+  return (
+    <div className="rounded-2xl border border-[#EADFCF] bg-[#FFFBF3] p-4 mt-4">
+      <div className="flex items-center justify-between mb-2">
+        <div>
+          <div className="text-[11px] font-bold text-[#9C6B3F] uppercase tracking-[0.14em]">Daily sales report</div>
+          <div className="text-[12px] text-[#A8835C]">{date} · same format as the outlet report</div>
+        </div>
+        <div className="flex gap-2">
+          {rep && <button onClick={copy} className="text-xs px-3 py-1.5 rounded-lg border border-[#D9C6AE] text-[#7A5A3A] hover:bg-[#F6EBDD]">{copied ? "Copied" : "Copy for WhatsApp"}</button>}
+          <button onClick={load} disabled={busy} className="text-xs px-3 py-1.5 rounded-lg bg-[#7A4A2E] text-white hover:bg-[#5F3A22] disabled:opacity-50">{busy ? "Working…" : (rep ? "Refresh" : "Generate")}</button>
+        </div>
+      </div>
+      {err && <div className="text-xs text-red-500">{err}</div>}
+      {rep && !rep.error && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3 mt-2">
+          <div>
+            <div className="text-[11px] font-bold text-[#9C6B3F] uppercase tracking-wider mb-1">Transactions</div>
+            <Row label="Invoices" value={rep.invoices} sub={<>LW {rep.invoicesLw} · <DsrVar a={rep.invoices} b={rep.invoicesLw}/></>}/>
+            {rep.pax > 0 && <Row label="Pax (covers)" value={rep.pax} sub={<>LW {rep.paxLw || 0} · <DsrVar a={rep.pax} b={rep.paxLw}/></>}/>}
+            <Row label="API (avg per invoice)" value={m(rep.api)} sub={<>LW {m(rep.apiLw)}</>}/>
+            {rep.apc != null && <Row label="APC (avg per cover)" value={m(rep.apc)} sub={<>LW {m(rep.apcLw)}</>}/>}
+            <div className="text-[11px] font-bold text-[#9C6B3F] uppercase tracking-wider mt-3 mb-1">Sales</div>
+            <Row label="Gross sale" value={m(rep.gross)} sub={<>LW {m(rep.grossLw)} · <DsrVar a={rep.gross} b={rep.grossLw}/></>}/>
+            <Row label="Discount" value={m(rep.discount)}/>
+            <Row label="Net sale" value={m(rep.net)} sub={rep.budget != null ? <>Budget {m(rep.budget)} · <DsrVar a={rep.net} b={rep.budget}/></> : "no budget set"}/>
+            <Row label="MTD gross" value={m(rep.mtdGross)} sub={rep.mtdBudget != null ? <>Budget {m(rep.mtdBudget)} · <DsrVar a={rep.mtdGross} b={rep.mtdBudget}/></> : null}/>
+          </div>
+          <div>
+            {rep.channels && Object.keys(rep.channels).length > 0 && (<>
+              <div className="text-[11px] font-bold text-[#9C6B3F] uppercase tracking-wider mb-1">Channels</div>
+              {["Dine In", "Pick Up", "Delivery"].filter(k => rep.channels[k] != null).map(k =>
+                <Row key={k} label={k} value={m(rep.channels[k])} sub={<>LW {m((rep.channelsLw || {})[k] || 0)} · <DsrVar a={rep.channels[k]} b={(rep.channelsLw || {})[k]}/></>}/>)}
+            </>)}
+            <div className="text-[11px] font-bold text-[#9C6B3F] uppercase tracking-wider mt-3 mb-1">Delivery</div>
+            {Object.entries(rep.delivery || {}).sort((a, b) => b[1] - a[1]).map(([k, v]) => {
+              const b = (rep.deliveryBrands || {})[k];
+              const sub = b ? ["Chocoberry", "Eggtok", "Joy"].filter(n => b[n]).map(n => `${n} ${m(b[n].revenue)}/${b[n].bills}`).join(" · ") : null;
+              return <Row key={k} label={k} value={m(v)} sub={sub}/>;
+            })}
+            <Row label="Total delivery" value={m(rep.deliveryTotal)} sub={rep.gross ? `${(rep.deliveryTotal / rep.gross * 100).toFixed(1)}% of gross` : null}/>
+            <Row label="Delivery MTD" value={m(rep.deliveryMtd)} sub={rep.mtdGross ? `${(rep.deliveryMtd / rep.mtdGross * 100).toFixed(1)}% of MTD` : null}/>
+            <div className="text-[11px] font-bold text-[#9C6B3F] uppercase tracking-wider mt-3 mb-1">Product mix</div>
+            {(() => { const mix = rep.productMix || {}; const t = Object.values(mix).reduce((a, v) => a + Number(v), 0) || 1;
+              return ["Food", "Dessert", "Beverage"].filter(k => mix[k] != null).map(k => <Row key={k} label={k} value={m(mix[k])} sub={`${(Number(mix[k]) / t * 100).toFixed(1)}%`}/>); })()}
+            <div className="text-[11px] font-bold text-[#9C6B3F] uppercase tracking-wider mt-3 mb-1">Tomorrow</div>
+            <Row label="Next day target" value={m(rep.nextDayTarget)} sub={rep.nextDaySource}/>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentUser, defaultStoreId = "all" }) {
   const { user } = useAuth();
   const isHQ = isHqOrAbove(user.role);
@@ -34198,6 +34326,11 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         <StatCard label="Open Issues" value={openIssues} sub={criticalIssues > 0 ? `${criticalIssues} critical` : "All under control"} icon={AlertCircle} accent="gold" status={criticalIssues > 0 ? "bad" : openIssues > 0 ? "warn" : "good"} note={criticalIssues > 0 ? `${criticalIssues} critical` : openIssues > 0 ? `${openIssues} open` : "clear"} alert={criticalIssues > 0} />
         <StatCard label="Google Rating" value={ratingAvg != null ? ratingAvg.toFixed(2) : "—"} sub={`${totalReviews} reviews · all-time`} icon={Star} accent="caramel" status={ratingAvg == null ? "neut" : ratingAvg >= 4.3 ? "good" : ratingAvg >= 4.0 ? "warn" : "bad"} note={ratingAvg == null ? null : `${ratingAvg.toFixed(2)}★`} />
       </div>
+
+      {/* DSR 2026-09-11a: daily sales report — one UAE store, one day */}
+      {isSingleDay && scopedStores.length === 1 && /united arab emirates|\buae\b/i.test(scopedStores[0].country || "") && (
+        <DailySalesReportCard storeId={scopedStores[0].id} date={period.from}/>
+      )}
 
       {/* ── Store leaderboard (only when ranking >1 store) ───────────────────── */}
       {storeLeaderboard.length >= 2 && (
@@ -67815,7 +67948,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: UAE 2026-09-11c (currency helper renamed)");
+      console.log("CB build: UAE 2026-09-11d (tz analytics, currency stragglers, DSR pax/channels/sub-brands)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
