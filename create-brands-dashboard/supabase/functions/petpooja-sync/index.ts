@@ -1,5 +1,5 @@
 // petpooja-sync — pulls Dubai sales from the Petpooja billing portal into flipdish_sales.
-// PETPOOJA 2026-09-11l — expiry notification to every owner, once
+// PETPOOJA 2026-09-11m — subtotal = net_sales (after discount); cleaner payment labels
 //
 // How it works (discovered from the portal's own network traffic, like the RMS sync):
 //   1. POST https://billing.petpooja.com/  header_changed_rest_id=<id>   -> selects the outlet for the session
@@ -192,6 +192,14 @@ function platformOf(b: Row): string | null {
   for (const [re, name] of PLATFORMS) if (re.test(t)) return name;
   return null;
 }
+// "Other [Deliveroo]" -> "Deliveroo", "Other [Talabat Cash]" -> "Talabat Cash", "Online" on a Talabat order -> "Talabat Online"
+function cleanPayment(raw: string, platform: string | null): string {
+  let p = raw.replace(/^other\s*\[(.*)\]$/i, "$1").trim();
+  if (/^online$/i.test(p) && platform) p = `${platform} Online`;
+  if (/^card$/i.test(p)) p = "Card";
+  if (/^cash$/i.test(p)) p = "Cash";
+  return p.replace(/\bkeeta\b/i, "Keeta").replace(/\bdeliveroo\b/i, "Deliveroo").replace(/\btalabat\b/i, "Talabat");
+}
 function channelOf(b: Row): string {
   const p = platformOf(b);
   if (p) return p;
@@ -251,11 +259,14 @@ function buildSales(restId: string, bills: Row[], lines: Row[]) {
       channel: channelOf(b),
       sale_time: when,
       business_date: businessDateOf(when),
-      amount_subtotal: num(pick(b, "My Amount (Rs.)", "My Amount")),
+      // ex-VAT AFTER discount (Petpooja net_sales); "My Amount" is before discount and stays in raw_rms
+      amount_subtotal: (pick(b, "net_sales") != null && String(pick(b, "net_sales")) !== "")
+        ? num(pick(b, "net_sales"))
+        : num(pick(b, "My Amount (Rs.)", "My Amount")) - num(pick(b, "Discount (Rs.)", "Discount")),
       amount_discount: num(pick(b, "Discount (Rs.)", "Discount")),
       amount_tax: num(pick(b, "Total Tax (Rs.)", "Total Tax")),
       amount_total: num(pick(b, "Total (Rs.)", "Total")),
-      payment_method: String(pick(b, "Payment Type") ?? ""),
+      payment_method: cleanPayment(String(pick(b, "Payment Type") ?? ""), platformOf(b)),
       status: cancelled ? "CANCELLED" : (/refund/i.test(status) ? "REFUNDED" : "PAID"),
       is_cancelled: cancelled,
       is_fully_refunded: false,
