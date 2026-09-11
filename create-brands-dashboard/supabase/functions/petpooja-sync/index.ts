@@ -1,5 +1,5 @@
 // petpooja-sync — pulls Dubai sales from the Petpooja billing portal into flipdish_sales.
-// PETPOOJA 2026-09-11e — tolerant `fields` parsing with catalogue fallback
+// PETPOOJA 2026-09-11f — fields object is index->name
 //
 // How it works (discovered from the portal's own network traffic, like the RMS sync):
 //   1. POST https://billing.petpooja.com/  header_changed_rest_id=<id>   -> selects the outlet for the session
@@ -151,7 +151,11 @@ function normalizeFields(f: any, ds: number, width: number): string[] {
   if (Array.isArray(f)) out = f.map((x: any) => typeof x === "string" ? x : String(x?.display ?? x?.name ?? x?.field ?? x?.alias ?? ""));
   else if (f && typeof f === "object") {
     const sel = f.select && typeof f.select === "object" ? f.select : f;
-    out = Object.keys(sel);
+    const keys = Object.keys(sel);
+    // Petpooja sends {"0":"Invoice No.","1":"Date",...}: numeric keys, names as VALUES
+    out = keys.every(k => /^\d+$/.test(k))
+      ? keys.sort((a, b) => Number(a) - Number(b)).map(k => String(sel[k] ?? ""))
+      : keys;
   }
   if (out.length && out.every(x => x)) return out;
   const cat = CATALOGUE_FIELDS[ds] || [];
