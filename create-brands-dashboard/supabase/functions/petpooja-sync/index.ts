@@ -1,5 +1,5 @@
 // petpooja-sync — pulls Dubai sales from the Petpooja billing portal into flipdish_sales.
-// PETPOOJA 2026-09-11c — probe selects an outlet first
+// PETPOOJA 2026-09-11d — dedupe bills by invoice, platform-aware channel
 //
 // How it works (discovered from the portal's own network traffic, like the RMS sync):
 //   1. POST https://billing.petpooja.com/  header_changed_rest_id=<id>   -> selects the outlet for the session
@@ -146,10 +146,16 @@ function pick(row: Row, ...cands: string[]): any {
   return undefined;
 }
 
-function channelOf(orderType: string): string {
-  const t = (orderType || "").toLowerCase();
-  if (/online|zomato|swiggy|talabat|deliveroo|noon|careem|web|app/.test(t)) return "online";
+function channelOf(b: Row): string {
+  const t = [pick(b, "Order Type"), pick(b, "Area"), pick(b, "sub_order_type"), pick(b, "Payment Type")]
+    .map(x => String(x ?? "").toLowerCase()).join(" | ");
+  if (/talabat|deliveroo|noon|careem|zomato|swiggy|smiles|instashop|online order|web|app\b/.test(t)) return "online";
   return "pos";
+}
+function platformOf(b: Row): string | null {
+  const t = [pick(b, "Area"), pick(b, "sub_order_type")].map(x => String(x ?? "")).join(" ");
+  const m = t.match(/talabat|deliveroo|noon|careem|zomato|swiggy|smiles|instashop/i);
+  return m ? m[0] : null;
 }
 
 function buildSales(restId: string, bills: Row[], lines: Row[]) {
@@ -161,10 +167,13 @@ function buildSales(restId: string, bills: Row[], lines: Row[]) {
     if (!linesByInv.has(inv)) linesByInv.set(inv, []);
     linesByInv.get(inv)!.push(l);
   }
+  // one row per invoice: a bill with split payments comes back as several rows
+  const seen = new Set<string>();
   const out: any[] = [];
   for (const b of bills) {
     const inv = String(pick(b, "Invoice No.", "Invoice No", "invoice_no") ?? "").trim();
-    if (!inv) continue;
+    if (!inv || seen.has(inv)) continue;
+    seen.add(inv);
     const when = toIso(String(pick(b, "Date", "created") ?? ""));
     if (!when) continue;
     const status = String(pick(b, "Status") ?? "");
@@ -196,7 +205,7 @@ function buildSales(restId: string, bills: Row[], lines: Row[]) {
       store_id: outlet.storeId,
       storefront_id: `pp-${restId}`,
       property_name: outlet.name,
-      channel: channelOf(String(pick(b, "Order Type") ?? "")),
+      channel: channelOf(b),
       sale_time: when,
       business_date: when.slice(0, 10),
       amount_subtotal: num(pick(b, "My Amount (Rs.)", "My Amount")),
@@ -210,7 +219,9 @@ function buildSales(restId: string, bills: Row[], lines: Row[]) {
       receipt_lines: [{ method: String(pick(b, "Payment Type") ?? ""), description: pick(b, "Payment Description") ?? null,
                         amount: num(pick(b, "Total (Rs.)", "Total")) }],
       discounts_detail: null,
-      raw_rms: { source: "petpooja", bill: b, lines: linesByInv.get(inv) || [] },
+      raw_rms: { source: "petpooja", platform: platformOf(b), order_type: pick(b, "Order Type") ?? null,
+                 payment_rows: bills.filter(x => String(pick(x, "Invoice No.", "Invoice No") ?? "").trim() === inv).map(x => ({ type: pick(x, "Payment Type"), desc: pick(x, "Payment Description"), total: pick(x, "Total (Rs.)") })),
+                 bill: b, lines: linesByInv.get(inv) || [] },
       source: "petpooja",
       currency: CURRENCY,
     });
