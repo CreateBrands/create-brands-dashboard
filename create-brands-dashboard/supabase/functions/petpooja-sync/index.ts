@@ -1,5 +1,5 @@
 // petpooja-sync — pulls Dubai sales from the Petpooja billing portal into flipdish_sales.
-// PETPOOJA 2026-09-11a
+// PETPOOJA 2026-09-11b — browser UA, cookie jar (Set-Cookie merged), probe mode
 //
 // How it works (discovered from the portal's own network traffic, like the RMS sync):
 //   1. POST https://billing.petpooja.com/  header_changed_rest_id=<id>   -> selects the outlet for the session
@@ -62,21 +62,39 @@ function toIso(dateStr: string, timeStr?: string): string | null {
 
 class NeedsLogin extends Error {}
 
-async function ppFetch(cookie: string, path: string, form: Record<string, string>) {
+const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+// Cookie jar: starts from the secret, absorbs any Set-Cookie the portal sends (the outlet switch may rotate the session)
+const jar = new Map<string, string>();
+function loadJar(cookie: string) {
+  cookie.split(";").map(s => s.trim()).filter(Boolean).forEach(kv => { const i = kv.indexOf("="); if (i > 0) jar.set(kv.slice(0, i), kv.slice(i + 1)); });
+}
+function jarHeader() { return [...jar.entries()].map(([k, v]) => `${k}=${v}`).join("; "); }
+function absorb(res: Response) {
+  const raw: string[] = (res.headers as any).getSetCookie ? (res.headers as any).getSetCookie() : [];
+  for (const line of raw) { const kv = line.split(";")[0]; const i = kv.indexOf("="); if (i > 0) jar.set(kv.slice(0, i).trim(), kv.slice(i + 1)); }
+}
+
+async function ppFetch(_cookie: string, path: string, form: Record<string, string>, referer = BASE + "/custom_reports/view_report/60") {
   const body = new URLSearchParams(form).toString();
   const res = await fetch(BASE + path, {
     method: "POST",
     headers: {
-      "cookie": cookie,
+      "cookie": jarHeader(),
       "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+      "accept": "*/*",
+      "accept-language": "en-GB,en-US;q=0.9,en;q=0.8",
       "x-requested-with": "XMLHttpRequest",
       "x-app-client": "billing-web",
       "origin": BASE,
-      "referer": BASE + "/custom_reports/reports/",
-      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) create-brands-sync",
+      "referer": referer,
+      "user-agent": UA,
+      "sec-fetch-dest": "empty", "sec-fetch-mode": "cors", "sec-fetch-site": "same-origin",
     },
+    body,
     redirect: "manual",
   });
+  absorb(res);
   const text = await res.text();
   if (res.status === 302 || res.status === 301) {
     const loc = res.headers.get("location") || "";
@@ -87,8 +105,16 @@ async function ppFetch(cookie: string, path: string, form: Record<string, string
 
 async function selectOutlet(cookie: string, restId: string) {
   // The portal's hidden form: <form id="change_res" method=post action="https://billing.petpooja.com/">
-  const r = await ppFetch(cookie, "/", { header_changed_rest_id: restId });
-  if (r.status >= 400) throw new Error(`outlet switch ${restId} -> HTTP ${r.status}`);
+  const res = await fetch(BASE + "/", {
+    method: "POST", redirect: "manual",
+    headers: { "cookie": jarHeader(), "content-type": "application/x-www-form-urlencoded", "origin": BASE,
+               "referer": BASE + "/custom_reports/reports/", "user-agent": UA, "accept": "text/html,application/xhtml+xml,*/*;q=0.8" },
+    body: new URLSearchParams({ header_changed_rest_id: restId }).toString(),
+  });
+  absorb(res); await res.text();
+  if (res.status >= 400) throw new Error(`outlet switch ${restId} -> HTTP ${res.status}`);
+  const loc = res.headers.get("location") || "";
+  if (/login/i.test(loc)) throw new NeedsLogin("outlet switch redirected to login");
 }
 
 async function runDatasource(cookie: string, ds: number, from: string, to: string): Promise<Row[]> {
@@ -206,6 +232,19 @@ Deno.serve(async (req) => {
   const to = body.toDate || today;
   const dry = !!body.dry;
 
+  loadJar(cookie);
+  if (body.probe) {
+    const out: any = {};
+    for (const ds of [52, 28, 39]) {
+      const filter = ds === 52
+        ? [{ table: "B", field: "created_date", operator: "gteq", value: from }, { table: "B", field: "created_date", operator: "lteq", value: to }]
+        : [{ table: "B", field: "created", operator: "gteq", value: `${from} 00:00:00` }, { table: "B", field: "created", operator: "lteq", value: `${to} 23:59:59` }];
+      const r = await ppFetch(cookie, `/custom_reports/get_data_query/1/${ds}`, { json_query: "", datasource: String(ds), replace: "[]", filter: JSON.stringify(filter) });
+      out[ds] = { status: r.status, contentType: r.contentType, head: r.text.slice(0, 400) };
+    }
+    out.cookiesNow = [...jar.keys()];
+    return Response.json(out);
+  }
   const started = new Date().toISOString();
   const summary: any = { from, to, dry, outlets: {} };
   let status = "ok", errorText: string | null = null, upserted = 0;
