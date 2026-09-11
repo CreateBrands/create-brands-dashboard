@@ -1,5 +1,5 @@
 // petpooja-sync — pulls Dubai sales from the Petpooja billing portal into flipdish_sales.
-// PETPOOJA 2026-09-11b — browser UA, cookie jar (Set-Cookie merged), probe mode
+// PETPOOJA 2026-09-11c — probe selects an outlet first
 //
 // How it works (discovered from the portal's own network traffic, like the RMS sync):
 //   1. POST https://billing.petpooja.com/  header_changed_rest_id=<id>   -> selects the outlet for the session
@@ -235,6 +235,8 @@ Deno.serve(async (req) => {
   loadJar(cookie);
   if (body.probe) {
     const out: any = {};
+    // single-outlet datasources are only reachable with an outlet selected
+    await selectOutlet(cookie, "328987"); out.outlet = "328987 Downtown";
     for (const ds of [52, 28, 39]) {
       const filter = ds === 52
         ? [{ table: "B", field: "created_date", operator: "gteq", value: from }, { table: "B", field: "created_date", operator: "lteq", value: to }]
