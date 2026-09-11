@@ -1,5 +1,5 @@
 // petpooja-sync — pulls Dubai sales from the Petpooja billing portal into flipdish_sales.
-// PETPOOJA 2026-09-11d — dedupe bills by invoice, platform-aware channel
+// PETPOOJA 2026-09-11e — tolerant `fields` parsing with catalogue fallback
 //
 // How it works (discovered from the portal's own network traffic, like the RMS sync):
 //   1. POST https://billing.petpooja.com/  header_changed_rest_id=<id>   -> selects the outlet for the session
@@ -132,10 +132,30 @@ async function runDatasource(cookie: string, ds: number, from: string, to: strin
     throw new Error(`datasource ${ds}: non-JSON response (HTTP ${r.status}): ${r.text.slice(0, 200)}`);
   }
   if (j.error && j.error !== 0 && j.error !== "0") throw new Error(`datasource ${ds}: ${JSON.stringify(j).slice(0, 300)}`);
-  const fields: string[] = j.fields || [];
+  const fields = normalizeFields(j.fields, ds, (j.final_result || [])[0]?.length || 0);
+  lastFieldShapes[ds] = { raw: j.fields, used: fields };
   return (j.final_result || []).map((arr: any[]) => {
     const o: Row = {}; fields.forEach((f, i) => { o[f] = arr[i]; }); return o;
   });
+}
+
+// Column order per datasource from the portal's own catalogue (json_display_fields), used when the
+// response's `fields` isn't a plain string array.
+const CATALOGUE_FIELDS: Record<number, string[]> = {
+  28: ["Invoice No.","Date","Biller","Kot No.","Payment Type","Payment Description","Order Type","Status","Area","sub_order_type","group_name","brand_name","gstin","Assign To","Customer Phone","Customer Name","Customer Address","Customer Locality","Persons","Order Cancel Reason","My Amount (Rs.)","Discount (Rs.)","net_sales","Delivery Charge","Container Charge","Service Charge","Additional Charge","Total Tax (Rs.)","Round Off","Waived off","Total (Rs.)","Online Tax Calculated","GST Paid by Merchant","GST Paid by Ecommerce","Tip (Rs.)"],
+  39: ["Date","Timestamp","Invoice No.","Item","Price","Qty.","Sub Total","Discount","Tax","Final Total","Table No.","Server Name","Covers","Variation","Category","hsn_code"],
+};
+const lastFieldShapes: Record<number, any> = {};
+function normalizeFields(f: any, ds: number, width: number): string[] {
+  let out: string[] = [];
+  if (Array.isArray(f)) out = f.map((x: any) => typeof x === "string" ? x : String(x?.display ?? x?.name ?? x?.field ?? x?.alias ?? ""));
+  else if (f && typeof f === "object") {
+    const sel = f.select && typeof f.select === "object" ? f.select : f;
+    out = Object.keys(sel);
+  }
+  if (out.length && out.every(x => x)) return out;
+  const cat = CATALOGUE_FIELDS[ds] || [];
+  return cat.length ? cat : Array.from({ length: width }, (_, i) => `col${i}`);
 }
 
 // tolerant column access: first key that matches any of the candidates (case/space-insensitive)
@@ -270,7 +290,8 @@ Deno.serve(async (req) => {
       const sales = buildSales(restId, bills, lines);
       summary.outlets[restId] = { store: OUTLETS[restId].storeId, bills: bills.length, lines: lines.length, sales: sales.length,
         sample: dry ? sales.slice(0, 2) : undefined, billFields: dry ? Object.keys(bills[0] || {}) : undefined,
-        lineFields: dry ? Object.keys(lines[0] || {}) : undefined };
+        lineFields: dry ? Object.keys(lines[0] || {}) : undefined,
+        fieldShapes: dry ? { bills: lastFieldShapes[DS_BILLS]?.raw, lines: lastFieldShapes[DS_LINES]?.raw } : undefined };
       if (dry) continue;
       for (let i = 0; i < sales.length; i += 200) {
         const chunk = sales.slice(i, i + 200);
