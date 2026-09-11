@@ -1827,6 +1827,7 @@ function dbStoreToApp(s) {
     city:             s.city,
     postcode:         s.postcode,
     country:          s.country,
+    timezone:         s.timezone || "Europe/London",
     latitude:         s.lat ?? s.latitude,
     longitude:        s.lng ?? s.longitude,
     openedDate:       s.opened_date,

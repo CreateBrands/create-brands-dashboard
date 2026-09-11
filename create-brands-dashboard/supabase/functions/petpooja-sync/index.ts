@@ -1,5 +1,5 @@
 // petpooja-sync — pulls Dubai sales from the Petpooja billing portal into flipdish_sales.
-// PETPOOJA 2026-09-11k — platform read from Payment Type too
+// PETPOOJA 2026-09-11l — expiry notification to every owner, once
 //
 // How it works (discovered from the portal's own network traffic, like the RMS sync):
 //   1. POST https://billing.petpooja.com/  header_changed_rest_id=<id>   -> selects the outlet for the session
@@ -332,12 +332,18 @@ Deno.serve(async (req) => {
   summary.upserted = upserted; summary.status = status; summary.error = errorText;
   if (!dry) {
     await sb.from("petpooja_sync_log").insert({ started_at: started, from_date: from, to_date: to, status, upserted, detail: summary });
-    if (status === "needs_login") {
+    const { data: prevLog } = await sb.from("petpooja_sync_log").select("status").order("id", { ascending: false }).range(1, 1);
+    const alreadyFlagged = (prevLog || [])[0]?.status === "needs_login";
+    if (status === "needs_login" && !alreadyFlagged) {
       // surface it in the dashboard rather than fail silently
-      await sb.from("notifications").insert({
-        title: "Petpooja session expired", body: "Dubai sales sync needs a fresh portal login cookie (PETPOOJA_COOKIE secret).",
-        kind: "system", created_at: new Date().toISOString(),
-      }).then(() => {}, () => {});
+      // notifications are per recipient: tell every owner login
+      const { data: owners } = await sb.from("users").select("id").eq("role", "owner");
+      const rows = (owners || []).map((u: any) => ({
+        recipient_type: "user", recipient_id: u.id, kind: "system",
+        title: "Petpooja session expired",
+        body: "Dubai sales sync stopped: sign in to billing.petpooja.com, copy the PETPOOJA_CO / user_id / user_key cookies and update the PETPOOJA_COOKIE secret.",
+      }));
+      if (rows.length) await sb.from("notifications").insert(rows).then(() => {}, () => {});
     }
   }
   return Response.json(summary, { status: status === "ok" ? 200 : 500 });

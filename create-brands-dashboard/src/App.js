@@ -724,7 +724,21 @@ function sumStoreTargetsForPeriod(storeKpiTargets, from, to) {
 }
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
-const fmtCurrency = v => v == null ? "—" : `£${Math.round(v).toLocaleString()}`;
+// CURRENCY 2026-09-11a: one active currency per session, set by the app root from
+// the brand in scope (UAE -> AED, everything else -> GBP). Every formatter below
+// and every `${cur()}${...}` template in this file reads it, so the UK renders exactly
+// as before and a Dubai session renders in dirhams. `£` stays as the GBP symbol.
+const CURRENCY_META = {
+  GBP: { symbol: "£",    locale: "en-GB", code: "GBP" },
+  AED: { symbol: "AED ", locale: "en-AE", code: "AED" },
+  USD: { symbol: "$",    locale: "en-US", code: "USD" },
+  EUR: { symbol: "€",    locale: "en-IE", code: "EUR" },
+};
+let ACTIVE_CURRENCY = CURRENCY_META.GBP;
+function setActiveCurrency(code) { ACTIVE_CURRENCY = CURRENCY_META[String(code || "GBP").toUpperCase()] || CURRENCY_META.GBP; }
+const cur = () => ACTIVE_CURRENCY.symbol;          // "£" or "AED "
+const curLocale = () => ACTIVE_CURRENCY.locale;
+const fmtCurrency = v => v == null ? "—" : `${cur()}${Math.round(v).toLocaleString(curLocale())}`;
 // Decimal hours -> "Xh YYm" for consistent time display across the app.
 const fmtHM = (hrs) => {
   if (hrs == null || isNaN(hrs)) return "—";
@@ -734,7 +748,7 @@ const fmtHM = (hrs) => {
   return h > 0 ? `${h}h ${String(m).padStart(2,"0")}m` : `${m}m`;
 };
 const fmtPct = v => v == null ? "—" : `${v.toFixed(1)}%`;
-const fmtSPLH = v => v == null ? "—" : `£${v.toFixed(2)}`;
+const fmtSPLH = v => v == null ? "—" : `${cur()}${v.toFixed(2)}`;
 const fmtNum = v => v == null ? "—" : Math.round(v).toLocaleString();
 function formatKPI(v, format) {
   if (v == null) return "—";
@@ -1170,7 +1184,7 @@ function ChartTooltip({ active, payload, label }) {
         <div key={i} className="flex items-center gap-2">
           <div className="w-2 h-2 rounded-full" style={{ background: p.color }} />
           <span className="text-slate-300">{p.name}:</span>
-          <span className="text-white font-semibold">{typeof p.value === "number" ? (p.name?.includes("£") || p.name?.includes("Revenue") || p.name?.includes("Sales") ? `£${Math.round(p.value).toLocaleString()}` : p.value.toFixed(1)) : p.value}</span>
+          <span className="text-white font-semibold">{typeof p.value === "number" ? (p.name?.includes("£") || p.name?.includes("Revenue") || p.name?.includes("Sales") ? `${cur()}${Math.round(p.value).toLocaleString()}` : p.value.toFixed(1)) : p.value}</span>
         </div>
       ))}
     </div>
@@ -3292,7 +3306,7 @@ function PayslipsSection({ employeeId, currentUser, canUpload = false }) {
   const [ni, setNi] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const money = (n) => n == null ? "—" : `£${Number(n).toFixed(2)}`;
+  const money = (n) => n == null ? "—" : `${cur()}${Number(n).toFixed(2)}`;
 
   const load = useCallback(() => {
     if (!employeeId) return;
@@ -5562,7 +5576,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
   const [aiBusy, setAiBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
-  const money = (n) => n == null ? "—" : `£${Number(n).toFixed(2)}`;
+  const money = (n) => n == null ? "—" : `${cur()}${Number(n).toFixed(2)}`;
 
   // Distribution depots (destinations for dispatch).
   const distributionSites = useMemo(() => (stores || []).filter(s => s.siteType === "distribution" && !s.archivedAt), [stores]);
@@ -6330,7 +6344,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                         <div className="text-sm font-bold text-white">{l.item_name}{!l.ck_item_id && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-indigo-600 text-white">new — will be added to ingredients</span>}</div>
                         <div className="text-[11px] text-slate-500">
                           Dispatched: {l.qty_dispatched} × {l.pack_count || 1}{l.pack_size ? `*${l.pack_size}${l.pack_unit || ""}` : (l.pack_unit || "")} = <b className="text-slate-300">{eqv.equivalent} {eqv.unit}</b>
-                          {l.unit_price != null && <> · £{Number(l.unit_price).toFixed(2)}/case</>}
+                          {l.unit_price != null && <> · {cur()}{Number(l.unit_price).toFixed(2)}/case</>}
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
@@ -7179,7 +7193,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
                 ) : (
                   <>
                     <div className="text-[10px] text-slate-500">
-                      Rate {effRate?`£${effRate.toFixed(2)}/hr`:"—"}{labourRate===""&&kitchenAvgRate?` (avg of kitchen staff)`:labourRate!==""?` (manual)`:""} · one person ≈ {labourPlan.capPerPerson}h productive/day ({shiftHours}h × {Math.round(efficiency*100)}%)
+                      Rate {effRate?`${cur()}${effRate.toFixed(2)}/hr`:"—"}{labourRate===""&&kitchenAvgRate?` (avg of kitchen staff)`:labourRate!==""?` (manual)`:""} · one person ≈ {labourPlan.capPerPerson}h productive/day ({shiftHours}h × {Math.round(efficiency*100)}%)
                     </div>
                     {/* Optimal staffing per day */}
                     <div className="grid grid-cols-7 gap-1.5">
@@ -7500,7 +7514,7 @@ function CentralKitchenView({ stores = [], currentUser, opsTeam = [] }) {
               <div><label className={labelCls}>Pack price £</label><input type="number" value={ingForm.packPrice??""} onChange={e=>setIngForm(f=>({...f,packPrice:e.target.value}))} className={inputCls} placeholder="0.00"/></div>
             </div>
             {(Number(ingForm.packQty)>0 && Number(ingForm.packPrice)>=0 && ingForm.packPrice!=="" && ingForm.packPrice!=null) && (
-              <div className="text-[11px] text-emerald-400">Cost: £{(Number(ingForm.packPrice)/Number(ingForm.packQty)).toFixed(4)} / {ingForm.unit||"kg"}</div>
+              <div className="text-[11px] text-emerald-400">Cost: {cur()}{(Number(ingForm.packPrice)/Number(ingForm.packQty)).toFixed(4)} / {ingForm.unit||"kg"}</div>
             )}
             <div>
               <label className={labelCls}>Allergens (contains)</label>
@@ -8468,7 +8482,7 @@ function DistItemTable({ items, taxRates, lines, setLines, vatMode, setVatMode, 
                 {unpricedWarn(l) && <div className="text-[10px] text-amber-500 mt-0.5 text-right">No price on file</div>}
               </div>
               <div className="col-span-1"><select value={l.taxRateId || ""} onChange={e => upd(i, { taxRateId: e.target.value || null })} className="w-full px-1 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-[11px] text-white"><option value="">—</option>{taxRates.map(t => <option key={t.id} value={t.id}>{t.percent}%</option>)}</select></div>
-              <div className="col-span-2 flex items-center justify-end gap-1.5"><span className="text-xs text-white">£{(row._amount || 0).toFixed(2)}</span><button onClick={() => del(i)} className="text-slate-600 hover:text-red-400"><Trash2 size={13}/></button></div>
+              <div className="col-span-2 flex items-center justify-end gap-1.5"><span className="text-xs text-white">{cur()}{(row._amount || 0).toFixed(2)}</span><button onClick={() => del(i)} className="text-slate-600 hover:text-red-400"><Trash2 size={13}/></button></div>
             </div>
           );
         })}
@@ -8477,15 +8491,15 @@ function DistItemTable({ items, taxRates, lines, setLines, vatMode, setVatMode, 
       {/* Totals */}
       <div className="flex justify-end">
         <div className="w-72 space-y-1.5 text-sm">
-          <div className="flex justify-between text-slate-400"><span>Sub Total</span><span className="text-white">£{totals.subTotalBeforeDiscount.toFixed(2)}</span></div>
+          <div className="flex justify-between text-slate-400"><span>Sub Total</span><span className="text-white">{cur()}{totals.subTotalBeforeDiscount.toFixed(2)}</span></div>
           <div className="flex justify-between items-center text-slate-400"><span>Discount</span>
             <span className="flex items-center gap-1">
               <input type="number" value={discountPercent || ""} onChange={e => setDiscountPercent(e.target.value)} className="w-16 px-1.5 py-1 rounded bg-slate-800 border border-slate-700 text-xs text-white text-right"/>
               <select value={discountType || "percent"} onChange={e => setDiscountType(e.target.value)} className="px-1 py-1 rounded bg-slate-800 border border-slate-700 text-xs text-white"><option value="percent">%</option><option value="value">£</option></select>
-              <span className="text-white text-xs w-16 text-right">−£{totals.discountAmount.toFixed(2)}</span>
+              <span className="text-white text-xs w-16 text-right">−{cur()}{totals.discountAmount.toFixed(2)}</span>
             </span></div>
-          <div className="flex justify-between text-slate-400"><span>VAT</span><span className="text-white">£{totals.vatTotal.toFixed(2)}</span></div>
-          <div className="flex justify-between font-bold text-base border-t border-slate-700 pt-1.5"><span className="text-white">Total</span><span className="text-white">£{totals.grandTotal.toFixed(2)}</span></div>
+          <div className="flex justify-between text-slate-400"><span>VAT</span><span className="text-white">{cur()}{totals.vatTotal.toFixed(2)}</span></div>
+          <div className="flex justify-between font-bold text-base border-t border-slate-700 pt-1.5"><span className="text-white">Total</span><span className="text-white">{cur()}{totals.grandTotal.toFixed(2)}</span></div>
         </div>
       </div>
     </div>
@@ -9004,11 +9018,11 @@ function DistGRNView({ currentUser, pendingConvert, setPendingConvert }) {
                   <div className="col-span-6 text-white truncate">{itemName(l.itemId)}</div>
                   <div className="col-span-2"><input type="number" value={l.qty} onChange={e => setConfirming({ ...confirming, lines: confirming.lines.map((x, j) => j === i ? { ...x, qty: e.target.value } : x) })} className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-right"/></div>
                   <div className="col-span-2"><input type="number" value={l.landedCost} onChange={e => setConfirming({ ...confirming, lines: confirming.lines.map((x, j) => j === i ? { ...x, landedCost: e.target.value } : x) })} className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-right"/></div>
-                  <div className="col-span-2 text-right text-slate-300">£{((Number(l.qty)||0)*(Number(l.landedCost)||0)).toFixed(2)}</div>
+                  <div className="col-span-2 text-right text-slate-300">{cur()}{((Number(l.qty)||0)*(Number(l.landedCost)||0)).toFixed(2)}</div>
                 </div>
               ))}
             </div>
-            <div className="flex justify-end"><div className="text-sm text-slate-400">Stock value: <span className="text-white font-semibold">£{(confirming.lines || []).reduce((s, l) => s + (Number(l.qty)||0)*(Number(l.landedCost)||0), 0).toFixed(2)}</span></div></div>
+            <div className="flex justify-end"><div className="text-sm text-slate-400">Stock value: <span className="text-white font-semibold">{cur()}{(confirming.lines || []).reduce((s, l) => s + (Number(l.qty)||0)*(Number(l.landedCost)||0), 0).toFixed(2)}</span></div></div>
             <div className="flex justify-end gap-2"><button onClick={() => setConfirming(null)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Cancel</button><button onClick={confirmDraft} disabled={busy} className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold">{busy?"Confirming…":"Confirm & raise stock"}</button></div>
           </div>
         </Modal>
@@ -10878,8 +10892,8 @@ function DistPaymentsView({ currentUser, pendingConvert, setPendingConvert }) {
                       <div key={b.id} className="grid grid-cols-12 gap-1 px-3 py-2 border-t border-slate-800/60 items-center text-xs">
                         <div className="col-span-2 text-slate-400">{b.billDate}</div>
                         <div className="col-span-3 text-white font-mono">{b.billNumber}</div>
-                        <div className="col-span-3 text-right text-slate-300">£{gross.toFixed(2)}</div>
-                        <div className="col-span-2 text-right text-slate-400">£{due.toFixed(2)}</div>
+                        <div className="col-span-3 text-right text-slate-300">{cur()}{gross.toFixed(2)}</div>
+                        <div className="col-span-2 text-right text-slate-400">{cur()}{due.toFixed(2)}</div>
                         <div className="col-span-2"><input type="number" value={alloc?.amount || ""} onChange={e => { const others = (creating.allocations || []).filter(a => a.billId !== b.id); setCreating({ ...creating, allocations: e.target.value ? [...others, { billId: b.id, amount: Number(e.target.value) }] : others }); }} placeholder="0.00" className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-right"/></div>
                       </div>
                     );
@@ -10888,9 +10902,9 @@ function DistPaymentsView({ currentUser, pendingConvert, setPendingConvert }) {
                 {/* Summary */}
                 <div className="flex justify-end">
                   <div className="w-72 space-y-1.5 text-sm bg-amber-950/20 border border-amber-900/40 rounded-xl p-3">
-                    <div className="flex justify-between text-slate-400"><span>Amount paid</span><span className="text-white">£{(Number(creating.amount)||0).toFixed(2)}</span></div>
-                    <div className="flex justify-between text-slate-400"><span>Amount used for payments</span><span className="text-white">£{totalAllocated.toFixed(2)}</span></div>
-                    <div className={`flex justify-between font-semibold ${amountInExcess < 0 ? "text-red-400" : "text-amber-300"}`}><span>{amountInExcess < 0 ? "Over-allocated" : "Amount in excess"}</span><span>£{Math.abs(amountInExcess).toFixed(2)}</span></div>
+                    <div className="flex justify-between text-slate-400"><span>Amount paid</span><span className="text-white">{cur()}{(Number(creating.amount)||0).toFixed(2)}</span></div>
+                    <div className="flex justify-between text-slate-400"><span>Amount used for payments</span><span className="text-white">{cur()}{totalAllocated.toFixed(2)}</span></div>
+                    <div className={`flex justify-between font-semibold ${amountInExcess < 0 ? "text-red-400" : "text-amber-300"}`}><span>{amountInExcess < 0 ? "Over-allocated" : "Amount in excess"}</span><span>{cur()}{Math.abs(amountInExcess).toFixed(2)}</span></div>
                   </div>
                 </div>
               </div>
@@ -11308,7 +11322,7 @@ function DistPriceListView() {
             <div key={it.id} className="grid grid-cols-12 gap-2 px-4 py-2 text-sm border-b border-slate-800/50 items-center">
               <div className="col-span-2 font-mono text-[11px] text-indigo-300">{it.sku}</div>
               <div className="col-span-5 text-white truncate">{it.name}</div>
-              <div className="col-span-2 text-right text-slate-500">{it.sellRate != null ? `£${it.sellRate}` : "—"}</div>
+              <div className="col-span-2 text-right text-slate-500">{it.sellRate != null ? `${cur()}${it.sellRate}` : "—"}</div>
               <div className="col-span-3"><input type="number" defaultValue={priceFor(it.id) ?? ""} onBlur={e => { if (String(e.target.value) !== String(priceFor(it.id) ?? "")) setPrice(it.id, e.target.value); }} placeholder={it.sellRate != null ? String(it.sellRate) : "0.00"} className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-right text-xs"/></div>
             </div>
           ))}
@@ -11785,7 +11799,7 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
                     <div className="text-[11px] text-slate-500">qty {l.qty}</div>
                   </div>
                   <div className="flex items-center gap-1.5 flex-shrink-0">
-                    <span className="text-slate-500 text-sm">£</span>
+                    <span className="text-slate-500 text-sm">{cur()}</span>
                     <input type="number" step="0.01" value={freshPrompt.costs[l.itemId] ?? ""}
                       onChange={e => setFreshPrompt(p => ({ ...p, costs: { ...p.costs, [l.itemId]: e.target.value } }))}
                       placeholder="0.00" className="w-24 px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-right text-sm"/>
@@ -12747,7 +12761,7 @@ function DistPicksView({ currentUser, pendingConvert, setPendingConvert }) {
                 return (
                   <div key={i} className="grid grid-cols-12 gap-1 px-3 py-2 border-t border-slate-800/60 items-center text-xs">
                     <div className="col-span-4 text-white truncate">{distItemNameFrom(items, l.itemId)}{l.short > 0 && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-red-600 text-white">short {l.short}</span>}</div>
-                    <div className="col-span-5"><select value={l.batchId || ""} onChange={e => updLine(i, { batchId: e.target.value })} className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white"><option value="">Select batch…</option>{(batches[l.itemId] || []).map(b => <option key={b.id} value={b.id}>{b.batchNo || "batch"}{b.expiryDate ? ` · exp ${b.expiryDate}` : ""} · £{b.landedCost}</option>)}</select></div>
+                    <div className="col-span-5"><select value={l.batchId || ""} onChange={e => updLine(i, { batchId: e.target.value })} className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white"><option value="">Select batch…</option>{(batches[l.itemId] || []).map(b => <option key={b.id} value={b.id}>{b.batchNo || "batch"}{b.expiryDate ? ` · exp ${b.expiryDate}` : ""} · {cur()}{b.landedCost}</option>)}</select></div>
                     <div className="col-span-2"><input type="number" value={l.qty} onChange={e => updLine(i, { qty: e.target.value })} className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-right"/></div>
                     <div className="col-span-1 text-right"><button onClick={() => setCreating({ ...creating, lines: creating.lines.filter((_, j) => j !== i) })} className="text-slate-600 hover:text-red-400"><Trash2 size={13}/></button></div>
                   </div>
@@ -12870,11 +12884,11 @@ function DistDispatchView({ currentUser, pendingConvert, setPendingConvert }) {
                   <div className="col-span-5 text-white truncate">{distItemNameFrom(items, l.itemId)}</div>
                   <div className="col-span-4 text-slate-400">{(batches[l.itemId] || []).find(b => b.id === l.batchId)?.batchNo || "—"}</div>
                   <div className="col-span-1 text-right text-white">{l.qty}</div>
-                  <div className="col-span-2 text-right text-slate-400">£{Number(l.landedCost).toFixed(2)}</div>
+                  <div className="col-span-2 text-right text-slate-400">{cur()}{Number(l.landedCost).toFixed(2)}</div>
                 </div>
               ))}
             </div>
-            <div className="flex justify-end"><div className="text-sm text-slate-400">COGS to post: <span className="text-white font-semibold">£{cogsTotal.toFixed(2)}</span></div></div>
+            <div className="flex justify-end"><div className="text-sm text-slate-400">COGS to post: <span className="text-white font-semibold">{cur()}{cogsTotal.toFixed(2)}</span></div></div>
             <div className="flex justify-end gap-2"><button onClick={() => setCreating(null)} className="px-3 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm">Cancel</button><button onClick={save} disabled={busy} className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white text-sm font-semibold">{busy?"Posting…":"Dispatch & post COGS"}</button></div>
           </div>
         </Modal>
@@ -13201,7 +13215,7 @@ function DistReceiptsView({ currentUser, pendingConvert, setPendingConvert }) {
                     <td className="px-4 py-2.5 text-slate-300">{cName(p.customerId)}</td>
                     <td className="px-4 py-2.5 text-slate-400 capitalize">{p.method}</td>
                     <td className="px-4 py-2.5 text-right text-slate-400 tabular-nums">{p.allocations.length}</td>
-                    <td className="px-4 py-2.5 text-right text-white font-semibold whitespace-nowrap">£{p.amount.toFixed(2)}</td>
+                    <td className="px-4 py-2.5 text-right text-white font-semibold whitespace-nowrap">{cur()}{p.amount.toFixed(2)}</td>
                     <td className="px-2 py-2.5 text-center">
                       <button onClick={async () => { if (!window.confirm(`Delete payment ${p.paymentNumber}? This reverses the receipt and reopens the invoice(s) it paid. This cannot be undone.`)) return; try { await deleteDistInvoicePayment(p.id); await load(); } catch (e) { alert(e.message); } }} className="text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity" title="Delete payment"><Trash2 size={14}/></button>
                     </td>
@@ -13235,17 +13249,17 @@ function DistReceiptsView({ currentUser, pendingConvert, setPendingConvert }) {
                       <div key={i.id} className="grid grid-cols-12 gap-1 px-3 py-2 border-t border-slate-800/60 items-center text-xs">
                         <div className="col-span-2 text-slate-400">{i.invoiceDate}</div>
                         <div className="col-span-3 text-white font-mono">{i.invoiceNumber}</div>
-                        <div className="col-span-3 text-right text-slate-300">£{gross.toFixed(2)}</div>
-                        <div className="col-span-2 text-right text-slate-400">£{due.toFixed(2)}</div>
+                        <div className="col-span-3 text-right text-slate-300">{cur()}{gross.toFixed(2)}</div>
+                        <div className="col-span-2 text-right text-slate-400">{cur()}{due.toFixed(2)}</div>
                         <div className="col-span-2"><input type="number" value={alloc?.amount || ""} onChange={e => { const others = (creating.allocations || []).filter(a => a.invoiceId !== i.id); setCreating({ ...creating, allocations: e.target.value ? [...others, { invoiceId: i.id, amount: Number(e.target.value) }] : others }); }} placeholder="0.00" className="w-full px-2 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-white text-right"/><button onClick={() => payInFull(i)} className="block ml-auto mt-0.5 text-[10px] text-indigo-400 hover:text-indigo-300">Pay in full</button></div>
                       </div>
                     );
                   })}
                 </div>
                 <div className="flex justify-end"><div className="w-72 space-y-1.5 text-sm bg-amber-950/20 border border-amber-900/40 rounded-xl p-3">
-                  <div className="flex justify-between text-slate-400"><span>Amount received</span><span className="text-white">£{(Number(creating.amount)||0).toFixed(2)}</span></div>
-                  <div className="flex justify-between text-slate-400"><span>Amount used for payments</span><span className="text-white">£{totalAllocated.toFixed(2)}</span></div>
-                  <div className={`flex justify-between font-semibold ${amountInExcess < 0 ? "text-red-400" : "text-amber-300"}`}><span>{amountInExcess < 0 ? "Over-allocated" : "Amount in excess"}</span><span>£{Math.abs(amountInExcess).toFixed(2)}</span></div>
+                  <div className="flex justify-between text-slate-400"><span>Amount received</span><span className="text-white">{cur()}{(Number(creating.amount)||0).toFixed(2)}</span></div>
+                  <div className="flex justify-between text-slate-400"><span>Amount used for payments</span><span className="text-white">{cur()}{totalAllocated.toFixed(2)}</span></div>
+                  <div className={`flex justify-between font-semibold ${amountInExcess < 0 ? "text-red-400" : "text-amber-300"}`}><span>{amountInExcess < 0 ? "Over-allocated" : "Amount in excess"}</span><span>{cur()}{Math.abs(amountInExcess).toFixed(2)}</span></div>
                 </div></div>
               </div>
             )}
@@ -13284,7 +13298,7 @@ function DistCreditNotesView({ currentUser }) {
             <div key={cn.id} className="flex items-center justify-between px-4 py-2.5 text-sm border-b border-slate-800/50 group">
               <div><span className="text-white font-mono text-xs">{cn.cnNumber}</span> <span className="text-slate-400">{cName(cn.customerId)}</span><div className="text-[11px] text-slate-500">{cn.cnDate}</div></div>
               <div className="flex items-center gap-3">
-                <span className="text-white text-xs">£{t.grandTotal.toFixed(2)}</span>
+                <span className="text-white text-xs">{cur()}{t.grandTotal.toFixed(2)}</span>
                 <button onClick={async () => { if (!window.confirm(`Delete credit note ${cn.cnNumber}? This reverses its accounting entry. This cannot be undone.`)) return; try { await deleteDistCreditNote(cn.id); await load(); } catch (e) { alert(e.message); } }} className="text-slate-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity" title="Delete credit note"><Trash2 size={14}/></button>
               </div>
             </div>
@@ -14725,7 +14739,7 @@ function DistReportsView() {
   );
 }
 
-const gbp = (n) => `£${(Number(n) || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const gbp = (n) => `${cur()}${(Number(n) || 0).toLocaleString(curLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 function DistReportShell({ loading, err, children }) {
   if (loading) return <div className="text-sm text-slate-500 py-10 text-center">Loading…</div>;
@@ -15567,7 +15581,7 @@ function SalesCategoryMapView() {
   };
 
   const CAT_COLORS = { "Breakfast":"#f59e0b", "Dinner":"#844429", "Desserts":"#ec4899", "Hot Drinks":"#ef4444", "Cold Drinks":"#06b6d4" };
-  const gbp = (n) => "£" + (Number(n)||0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const gbp = (n) => cur() + (Number(n)||0).toLocaleString(curLocale(), { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   if (loading) return <div className="text-sm text-slate-500 text-center py-12">Loading Flipdish categories…</div>;
 
@@ -16953,13 +16967,13 @@ function AgentInboxView({ currentUser, onNavigate }) {
                         {t.payload.reconRows.slice(0, 10).map((g, i) => (
                           <div key={i} className="px-3 py-1.5 text-sm" style={{ backgroundColor: i % 2 ? "#FDF2E0" : "#FBF6EC" }}>
                             <div className="font-semibold" style={{ color: "#3A2E26" }}>{g.account}</div>
-                            <div className="text-[11px]" style={{ color: "#9A8770" }}>revenue £{(g.revenue||0).toFixed(2)} · fees £{Math.abs(g.fees||0).toFixed(2)} · paid £{(g.paid||0).toFixed(2)}{g.reasons && g.reasons.length ? ` — ${g.reasons.join(", ")}` : ""}</div>
+                            <div className="text-[11px]" style={{ color: "#9A8770" }}>revenue {cur()}{(g.revenue||0).toFixed(2)} · fees {cur()}{Math.abs(g.fees||0).toFixed(2)} · paid {cur()}{(g.paid||0).toFixed(2)}{g.reasons && g.reasons.length ? ` — ${g.reasons.join(", ")}` : ""}</div>
                           </div>
                         ))}
                       </div>
                     )}
                     {t.agent === "reconciliation" && t.payload?.summary && (
-                      <div className="mt-2 text-sm" style={{ color: "#9A8770" }}>{t.payload.count} payouts · £{(t.payload.totalPaid||0).toFixed(2)} net paid · £{(t.payload.totalFees||0).toFixed(2)} fees</div>
+                      <div className="mt-2 text-sm" style={{ color: "#9A8770" }}>{t.payload.count} payouts · {cur()}{(t.payload.totalPaid||0).toFixed(2)} net paid · {cur()}{(t.payload.totalFees||0).toFixed(2)} fees</div>
                     )}
                     <div className="flex items-center gap-2 mt-3">
                       <button onClick={() => approve(t)} className="px-4 py-1.5 rounded-lg text-sm font-bold" style={{ backgroundColor: "#5C9442", color: "#fff" }}>{t.agent === "ordering" ? "Approve & create order" : "Mark done"}</button>
@@ -20422,7 +20436,7 @@ function InventoryImport({ scope, onClose, onDone }) {
                       <td className="px-2 py-1 text-slate-200">{r.name}</td>
                       <td className="px-2 py-1 text-slate-400">{r.category}</td>
                       <td className="px-2 py-1 text-slate-400">{r.supplier || "—"}</td>
-                      <td className="px-2 py-1 text-right font-mono text-slate-300">{r.packPrice!=null?"£"+r.packPrice:"—"}</td>
+                      <td className="px-2 py-1 text-right font-mono text-slate-300">{r.packPrice!=null?cur()+r.packPrice:"—"}</td>
                       <td className={`px-2 py-1 text-right font-mono ${r.packQty?"text-slate-300":"text-amber-400"}`}>{r.packQty??"—"}</td>
                       <td className="px-2 py-1 text-slate-400">{r.baseUnit||"—"}</td>
                     </tr>
@@ -20947,11 +20961,11 @@ function RecipeBuilder({ mode }) {
                         const costs = xVariants.map(v => productBaseCost(x, v.id).cost);
                         const mn = Math.min(...costs), mx = Math.max(...costs);
                         done = costs.some(c => c > 0);
-                        costLabel = done ? (mn===mx ? "£"+mx.toFixed(2) : `£${mn.toFixed(2)}–${mx.toFixed(2)}`) : "—";
+                        costLabel = done ? (mn===mx ? cur()+mx.toFixed(2) : `${cur()}${mn.toFixed(2)}–${mx.toFixed(2)}`) : "—";
                       } else {
                         const bc = productBaseCost(x, null);
                         done = bc.count > 0;
-                        costLabel = bc.cost>0 ? "£"+bc.cost.toFixed(2) : (done ? "£0.00" : "—");
+                        costLabel = bc.cost>0 ? cur()+bc.cost.toFixed(2) : (done ? (cur()+"0.00") : "—");
                       }
                       const isSel = selId===x.id;
                       return (
@@ -20992,7 +21006,7 @@ function RecipeBuilder({ mode }) {
                 <button key={x.id} onClick={()=>setSelId(x.id)}
                   className={`w-full text-left px-3 py-2 border-t border-slate-800/60 flex items-center justify-between ${selId===x.id?"bg-indigo-600/15":"hover:bg-slate-800/40"}`}>
                   <span className="text-sm text-slate-200">{x.name}</span>
-                  <span className="text-xs font-mono text-slate-400">{c!=null?"£"+c.toFixed(3):"—"}</span>
+                  <span className="text-xs font-mono text-slate-400">{c!=null?cur()+c.toFixed(3):"—"}</span>
                 </button>
               );
             })}
@@ -21099,7 +21113,7 @@ function ModifierRow({ m, inv, preps, cost, onSave, onDelete }) {
       ) : (
         <td className="px-2 py-1.5"><input value={f.unit} onChange={e=>set("unit",e.target.value)} onBlur={()=>blur("unit")} className={cell+" w-12"} placeholder="g"/></td>
       )}
-      <td className="px-2 py-1.5 text-right font-mono text-slate-300 text-xs">{cost!=null?"£"+cost.toFixed(4):"—"}</td>
+      <td className="px-2 py-1.5 text-right font-mono text-slate-300 text-xs">{cost!=null?cur()+cost.toFixed(4):"—"}</td>
       <td className="px-2 py-1.5 text-right"><button onClick={onDelete} className="text-slate-600 hover:text-red-400"><Trash2 size={14}/></button></td>
     </tr>
   );
@@ -21128,7 +21142,7 @@ function PrepEditor({ prep, rec, inv, prepCost, prepBatchCostById, reload, onDel
         <span className="text-slate-400 font-semibold">This recipe makes (yield):</span>
         <input value={y.qty} onChange={e=>setY(s=>({...s,qty:e.target.value}))} onBlur={async()=>{await updatePrep(prep.id,{yieldQty:y.qty}); await reload();}} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white w-24 text-right" placeholder="0"/>
         <input value={y.unit} onChange={e=>setY(s=>({...s,unit:e.target.value}))} onBlur={async()=>{await updatePrep(prep.id,{yieldUnit:y.unit}); await reload();}} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white w-20" placeholder="g / ml / ea"/>
-        <span className="ml-auto text-slate-300 text-base">Cost per unit: <span className="font-mono font-bold text-white text-lg">{cost!=null?"£"+cost.toFixed(4):"—"}</span></span>
+        <span className="ml-auto text-slate-300 text-base">Cost per unit: <span className="font-mono font-bold text-white text-lg">{cost!=null?cur()+cost.toFixed(4):"—"}</span></span>
       </div>
 
       <div>
@@ -21189,7 +21203,7 @@ function PrepCompRow({ c, inv, preps = [], prepBatchCostById, reload }) {
       <td className="px-3 py-2">{isPrep
         ? <input value={f.unit||"batch"} onChange={e=>setF(s=>({...s,unit:e.target.value}))} onBlur={async()=>{await updatePrepComponent(c.id,{unit:f.unit}); await reload();}} className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white w-16" placeholder="batch"/>
         : <span title="Locked to the item's base unit — quantities are counted in this unit" className="inline-block bg-slate-800/50 border border-slate-800 rounded-lg px-2 py-2 text-sm text-slate-400 w-16 text-center cursor-not-allowed">{((inv?.[c.itemScope]||[]).find(i=>String(i.id)===String(c.itemId))?.baseUnit)||c.unit||"—"}</span>}</td>
-      <td className="px-3 py-2 text-right font-mono text-slate-300 text-sm">{cost!=null?"£"+cost.toFixed(4):"—"}</td>
+      <td className="px-3 py-2 text-right font-mono text-slate-300 text-sm">{cost!=null?cur()+cost.toFixed(4):"—"}</td>
       <td className="px-3 py-2 text-right"><button onClick={async()=>{await deletePrepComponent(c.id); await reload();}} className="text-slate-600 hover:text-red-400"><X size={16}/></button></td>
     </tr>
   );
@@ -21293,7 +21307,7 @@ function ProductEditor({ product, rec, inv, productBaseCost, prepCostPerUnit, mo
       <div className="flex items-center gap-3 text-sm flex-wrap">
         <input defaultValue={product.category||""} onBlur={async e=>{await updateProduct(product.id,{category:e.target.value}); await reload();}} placeholder="Category" className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white w-44"/>
         <input defaultValue={product.posName||""} onBlur={async e=>{await updateProduct(product.id,{posName:e.target.value}); await reload();}} placeholder="POS name (optional)" className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white w-52"/>
-        {!hasVariants && <span className="ml-auto text-slate-300 text-base">Cost: <span className="font-mono font-bold text-white text-lg">£{cost.toFixed(3)}</span>{missing>0 && <span className="text-amber-400 text-sm"> ({missing} unpriced)</span>}</span>}
+        {!hasVariants && <span className="ml-auto text-slate-300 text-base">Cost: <span className="font-mono font-bold text-white text-lg">{cur()}{cost.toFixed(3)}</span>{missing>0 && <span className="text-amber-400 text-sm"> ({missing} unpriced)</span>}</span>}
       </div>
 
       {/* Variation tabs (only when the product has variations) */}
@@ -21306,7 +21320,7 @@ function ProductEditor({ product, rec, inv, productBaseCost, prepCostPerUnit, mo
               return (
                 <button key={v.id} onClick={()=>setActiveVariantId(v.id)}
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 ${activeVariantId===v.id?"bg-indigo-600 text-white":"bg-slate-800 text-slate-300 hover:bg-slate-700"}`}>
-                  {v.name} <span className={`font-mono ${activeVariantId===v.id?"text-indigo-200":"text-slate-500"}`}>£{vc.cost.toFixed(2)}</span>
+                  {v.name} <span className={`font-mono ${activeVariantId===v.id?"text-indigo-200":"text-slate-500"}`}>{cur()}{vc.cost.toFixed(2)}</span>
                 </button>
               );
             })}
@@ -21321,7 +21335,7 @@ function ProductEditor({ product, rec, inv, productBaseCost, prepCostPerUnit, mo
           {hasVariants
             ? <>
                 <input key={activeVariant?.id} defaultValue={activeVariant?.name||""} onBlur={e=>{ if(activeVariant && e.target.value!==activeVariant.name) renameVariant(e.target.value); }} className="bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm font-semibold text-white w-48" placeholder="Variation name (e.g. Full)"/>
-                <span className="text-slate-300 text-sm">Cost: <span className="font-mono font-bold text-white text-base">£{cost.toFixed(3)}</span>{missing>0 && <span className="text-amber-400 text-xs"> ({missing} unpriced)</span>}</span>
+                <span className="text-slate-300 text-sm">Cost: <span className="font-mono font-bold text-white text-base">{cur()}{cost.toFixed(3)}</span>{missing>0 && <span className="text-amber-400 text-xs"> ({missing} unpriced)</span>}</span>
                 <button onClick={removeVariant} className="ml-auto text-slate-500 hover:text-red-400 text-xs flex items-center gap-1"><Trash2 size={13}/> Remove this variation</button>
               </>
             : <div className="text-sm font-semibold text-slate-300">Recipe</div>}
@@ -21347,7 +21361,7 @@ function ProductEditor({ product, rec, inv, productBaseCost, prepCostPerUnit, mo
                   <td className="px-3 py-2">{c.kind==="item"
                     ? <span title="Locked to the item's base unit — quantities are counted in this unit" className="inline-block bg-slate-800/50 border border-slate-800 rounded-lg px-2 py-2 text-sm text-slate-400 w-16 text-center cursor-not-allowed">{((inv?.[c.itemScope]||[]).find(i=>String(i.id)===String(c.itemId))?.baseUnit)||c.unit||"—"}</span>
                     : <input defaultValue={c.unit||""} onBlur={async e=>{await updateProductComponent(c.id,{unit:e.target.value}); await reload();}} className="bg-slate-800 border border-slate-700 rounded-lg px-2 py-2 text-sm text-white w-16" placeholder="g"/>}</td>
-                  <td className="px-3 py-2 text-right font-mono text-slate-300 text-sm">{compCost(c)!=null?"£"+compCost(c).toFixed(4):"—"}</td>
+                  <td className="px-3 py-2 text-right font-mono text-slate-300 text-sm">{compCost(c)!=null?cur()+compCost(c).toFixed(4):"—"}</td>
                   <td className="px-3 py-2 text-right"><button onClick={async()=>{await deleteProductComponent(c.id); await reload();}} className="text-slate-600 hover:text-red-400"><X size={16}/></button></td>
                 </tr>
                 );
@@ -21373,7 +21387,7 @@ function ProductEditor({ product, rec, inv, productBaseCost, prepCostPerUnit, mo
             const c = mod ? modifierCost(mod) : null;
             return (
               <span key={pm.id} className="inline-flex items-center gap-1.5 bg-slate-800 text-slate-300 text-sm rounded-lg px-3 py-1.5">
-                {mod?.name || "?"}{c!=null && <span className="text-slate-500 font-mono">£{c.toFixed(2)}</span>}
+                {mod?.name || "?"}{c!=null && <span className="text-slate-500 font-mono">{cur()}{c.toFixed(2)}</span>}
                 <button onClick={async()=>{await detachProductModifier(pm.id); await reload();}} className="text-slate-500 hover:text-red-400"><X size={13}/></button>
               </span>
             );
@@ -21406,7 +21420,7 @@ function OrderInspector({ stores = [] }) {
   const [showRaw, setShowRaw] = useState({});
   const [limit, setLimit] = useState(25);
 
-  const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  const money = (n) => `${cur()}${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
 
   const run = async () => {
     setLoading(true); setErr(null); setOrders(null); setOpen(null);
@@ -21548,7 +21562,7 @@ function ActualCogs({ stores = [], initialSub, hideTabs, currentUser }) {
   const scopedStores = (mgrStoreIds && mgrStoreIds.length) ? activeStores.filter(s => mgrStoreIds.includes(s.id)) : activeStores;
   const [storeId, setStoreId] = useState(scopedStores[0]?.id || null);
   const [sub, setSub] = useState(initialSub || "counts"); // counts | purchases | variance | settings | pricechanges
-  const money = (n) => n==null ? "—" : `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  const money = (n) => n==null ? "—" : `${cur()}${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
 
   return (
     <div className="space-y-4">
@@ -21856,8 +21870,8 @@ function PriceChanges({ stores = [], money }) {
                   <tr key={r.id} className="border-t border-slate-800/60">
                     <td className="px-3 py-2 text-white">{itemName(r.itemId)}</td>
                     <td className="px-3 py-2 text-slate-400">{storeName(r.storeId)}</td>
-                    <td className="px-3 py-2 text-right font-mono text-slate-400">{r.oldCost!=null?`£${Number(r.oldCost).toFixed(4)}`:"—"}</td>
-                    <td className="px-3 py-2 text-right font-mono text-white">£{Number(r.newCost).toFixed(4)}</td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-400">{r.oldCost!=null?`${cur()}${Number(r.oldCost).toFixed(4)}`:"—"}</td>
+                    <td className="px-3 py-2 text-right font-mono text-white">{cur()}{Number(r.newCost).toFixed(4)}</td>
                     <td className={`px-3 py-2 text-right font-mono ${r.pctChange==null?"text-slate-500":up?"text-red-300":"text-emerald-300"}`}>{r.pctChange!=null?`${up?"+":""}${r.pctChange.toFixed(1)}%`:"new"}</td>
                     <td className="px-3 py-2 text-slate-400 text-xs">{r.invoiceRef||"—"}{r.supplier?` · ${r.supplier}`:""}</td>
                     <td className="px-3 py-2 text-slate-500 text-xs">{(r.detectedAt||"").slice(0,10)}</td>
@@ -22180,7 +22194,7 @@ function StockCountEditor({ countId, storeId, money, currentUser, onBack }) {
                           </div>
                           <div className="text-[11px] text-slate-500 truncate">
                             {i.packDesc?`${i.packDesc} · `:""}{i.baseUnit?`per ${i.baseUnit}`:""}
-                            {showValues && c!=null?` · £${c.toFixed(3)}/${i.baseUnit||"unit"}`:""}
+                            {showValues && c!=null?` · ${cur()}${c.toFixed(3)}/${i.baseUnit||"unit"}`:""}
                             {showValues && val!=null?` · ${money(val)}`:""}
                             {c==null && <span className="text-amber-400 ml-1">no cost</span>}
                           </div>
@@ -22538,8 +22552,8 @@ function TillAudit({ stores = [] }) {
   const [err, setErr] = useState(null);
   const [openId, setOpenId] = useState(null);
 
-  const money = (n) => n==null ? "—" : `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
-  const money4 = (n) => n==null ? "—" : `£${Number(n).toFixed(4)}`;
+  const money = (n) => n==null ? "—" : `${cur()}${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  const money4 = (n) => n==null ? "—" : `${cur()}${Number(n).toFixed(4)}`;
   const pct = (n) => n==null ? "—" : `${(n*100).toFixed(1)}%`;
   const qtyFmt = (n, unit) => n==null ? "—" : `${(Math.round(Number(n)*100)/100).toLocaleString("en-GB")}${unit?` ${unit}`:""}`;
 
@@ -22725,7 +22739,7 @@ function CogsReconciliation({ stores = [] }) {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
 
-  const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  const money = (n) => `${cur()}${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
   const pct = (n) => n==null ? "—" : `${(n*100).toFixed(1)}%`;
 
   const run = async () => {
@@ -22894,7 +22908,7 @@ function ModifierDiscovery({ stores = [] }) {
                   <td className="px-3 py-2 text-white">{r.caption}</td>
                   <td className="px-3 py-2 text-right text-slate-300 font-mono">{r.occurrences}</td>
                   <td className="px-3 py-2 text-right text-slate-400 font-mono">{r.distinctParents}</td>
-                  <td className="px-3 py-2 text-right text-slate-400 font-mono">{r.maxPrice ? "£"+r.maxPrice.toFixed(2) : "—"}</td>
+                  <td className="px-3 py-2 text-right text-slate-400 font-mono">{r.maxPrice ? cur()+r.maxPrice.toFixed(2) : "—"}</td>
                   <td className="px-3 py-2"><span className={`text-[11px] px-2 py-0.5 rounded ${r.suggestGlobal?"bg-emerald-600 text-white":"bg-slate-800 text-slate-400"}`}>{r.suggestGlobal?"global":"scoped"}</span></td>
                   <td className="px-3 py-2 text-right whitespace-nowrap">
                     <button disabled={busy===r.captionNorm} onClick={()=>create(r,true)} className="text-xs px-2 py-1 rounded bg-emerald-700 hover:bg-emerald-600 text-white mr-1 disabled:opacity-50">Global</button>
@@ -22924,7 +22938,7 @@ function OrderSimulator({ stores = [] }) {
   const [err, setErr] = useState(null);
   const [openOrder, setOpenOrder] = useState(null);
 
-  const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  const money = (n) => `${cur()}${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
   const pct = (n) => n==null ? "—" : `${(n*100).toFixed(1)}%`;
   const Stat = ({ label, value, tone }) => (
     <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
@@ -23253,7 +23267,7 @@ function PosMapper({ stores = [] }) {
                       <td className="px-2 py-2.5 text-center"><input type="checkbox" checked={sel} onChange={()=>toggleSel(r.name)} className="rounded"/></td>
                       <td className="px-2 py-2.5 text-right text-[11px] text-slate-600 tabular-nums">{idx+1}</td>
                       <td className="px-3 py-2.5 text-slate-200 text-sm">{r.name}</td>
-                      <td className="px-3 py-2.5 text-right font-mono text-slate-400 text-xs">{r.revenue>0?"£"+r.revenue.toFixed(0):"—"}</td>
+                      <td className="px-3 py-2.5 text-right font-mono text-slate-400 text-xs">{r.revenue>0?cur()+r.revenue.toFixed(0):"—"}</td>
                       <td className="px-3 py-2.5">
                         <select value={m?.productId || ""} onChange={e=>save(r.name, e.target.value?Number(e.target.value):null)}
                           className={`bg-slate-800 border rounded-lg px-3 py-2 text-sm text-white w-96 max-w-full ${m?.productId?"border-slate-700":"border-amber-500/40"}`}>
@@ -23322,7 +23336,7 @@ function CogsItemRow({ item, scope, cats, sups, distItems = [], saving, onSave, 
         </select>
       </td>
       <td className="px-2 py-1.5 text-right"><input value={f.packPrice} onChange={e=>set("packPrice",e.target.value)} onBlur={()=>blur("packPrice")} className={cell+" w-16 text-right"}/></td>
-      <td className="px-2 py-1.5 text-right font-mono text-slate-400 text-xs">{perUnit!=null?"£"+perUnit.toFixed(4):"—"}</td>
+      <td className="px-2 py-1.5 text-right font-mono text-slate-400 text-xs">{perUnit!=null?cur()+perUnit.toFixed(4):"—"}</td>
       {(scope === "store" || scope === "ck") && (() => {
         // ── Warehouse link + pack-drift warning ─────────────────────────────
         // The consumption engine converts base-unit usage to cases with the
@@ -24412,7 +24426,7 @@ function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
           <div className="text-sm font-bold text-white truncate">{claim.description}</div>
           <div className="text-[11px] text-slate-500">{claim.expenseDate}{claim.vendor ? ` · ${claim.vendor}` : ""} · {claim.submittedBy || ""}</div>
         </div>
-        <div className="ml-auto text-base font-black text-white flex-shrink-0">£{Number(claim.amount || 0).toFixed(2)}</div>
+        <div className="ml-auto text-base font-black text-white flex-shrink-0">{cur()}{Number(claim.amount || 0).toFixed(2)}</div>
       </div>
       <div className="flex-1 overflow-y-auto">
         <div className="w-[95%] mx-auto p-4 grid md:grid-cols-[minmax(340px,42%)_1fr] gap-4 items-start">
@@ -24453,13 +24467,13 @@ function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
                 const matches = Math.abs((anchor || 0) - claimAmt) <= 0.05;
                 return (
                   <div className="rounded-xl border border-slate-800 bg-slate-900/60 px-3 py-2 text-xs space-y-1">
-                    <div className="flex justify-between"><span className="text-slate-500">Lines total (Σ items)</span><span className="tabular-nums text-slate-300 font-semibold">£{linesTotal.toFixed(2)}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Lines total (Σ items)</span><span className="tabular-nums text-slate-300 font-semibold">{cur()}{linesTotal.toFixed(2)}</span></div>
                     {savings != null && Math.abs(savings) > 0.01 && (
-                      <div className="flex justify-between"><span className="text-slate-500">{savings > 0 ? "Savings / discounts on receipt" : "Unitemised extras"}</span><span className={`tabular-nums font-semibold ${savings > 0 ? "text-emerald-400" : "text-amber-400"}`}>{savings > 0 ? "−" : "+"}£{Math.abs(savings).toFixed(2)}</span></div>
+                      <div className="flex justify-between"><span className="text-slate-500">{savings > 0 ? "Savings / discounts on receipt" : "Unitemised extras"}</span><span className={`tabular-nums font-semibold ${savings > 0 ? "text-emerald-400" : "text-amber-400"}`}>{savings > 0 ? "−" : "+"}{cur()}{Math.abs(savings).toFixed(2)}</span></div>
                     )}
-                    {vat != null && vat !== 0 && <div className="flex justify-between"><span className="text-slate-500">VAT (per receipt)</span><span className="tabular-nums text-slate-300">£{vat.toFixed(2)}</span></div>}
-                    <div className="flex justify-between border-t border-slate-800 pt-1"><span className="text-slate-400 font-semibold">Receipt total{exVat != null ? "" : " (from claim)"}</span><span className="tabular-nums text-white font-bold">£{(anchor || 0).toFixed(2)}</span></div>
-                    <div className="flex justify-between"><span className="text-slate-500">Claimed by {claim.submittedBy || "driver"}</span><span className={`tabular-nums font-bold ${matches ? "text-emerald-400" : "text-red-400"}`}>£{claimAmt.toFixed(2)} {matches ? "✓" : "≠"}</span></div>
+                    {vat != null && vat !== 0 && <div className="flex justify-between"><span className="text-slate-500">VAT (per receipt)</span><span className="tabular-nums text-slate-300">{cur()}{vat.toFixed(2)}</span></div>}
+                    <div className="flex justify-between border-t border-slate-800 pt-1"><span className="text-slate-400 font-semibold">Receipt total{exVat != null ? "" : " (from claim)"}</span><span className="tabular-nums text-white font-bold">{cur()}{(anchor || 0).toFixed(2)}</span></div>
+                    <div className="flex justify-between"><span className="text-slate-500">Claimed by {claim.submittedBy || "driver"}</span><span className={`tabular-nums font-bold ${matches ? "text-emerald-400" : "text-red-400"}`}>{cur()}{claimAmt.toFixed(2)} {matches ? "✓" : "≠"}</span></div>
                   </div>
                 );
               })()}
@@ -24517,9 +24531,9 @@ function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
                     {hasPrices && <td className="px-3 py-2 text-right tabular-nums text-slate-400">
                       {editing
                         ? <input type="number" inputMode="decimal" step="0.01" value={l.price ?? ""} onChange={ev => setLines(ls => ls.map((x, j) => j === i ? { ...x, price: ev.target.value === "" ? null : Number(ev.target.value) } : x))} className="w-16 px-1.5 py-1 rounded bg-slate-950 border border-amber-600/60 text-white text-right tabular-nums"/>
-                        : (l.price != null ? `£${l.price.toFixed(2)}` : "")}
+                        : (l.price != null ? `${cur()}${l.price.toFixed(2)}` : "")}
                     </td>}
-                    {hasPrices && <td className="px-3 py-2 text-right tabular-nums text-slate-300">{l.price != null ? `£${((l.qty || 0) * l.price).toFixed(2)}` : ""}</td>}
+                    {hasPrices && <td className="px-3 py-2 text-right tabular-nums text-slate-300">{l.price != null ? `${cur()}${((l.qty || 0) * l.price).toFixed(2)}` : ""}</td>}
                   </tr>
                 ))}
               </tbody>
@@ -24527,7 +24541,7 @@ function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
             {lineTotal != null && (
               <div className="px-3 py-2 border-t border-slate-800 flex justify-between text-xs">
                 <span className="text-slate-500">Lines total {Math.abs(lineTotal - Number(claim.amount || 0)) > 0.05 ? "· differs from claim amount" : "· matches claim"}</span>
-                <span className="font-bold text-white tabular-nums">£{lineTotal.toFixed(2)}</span>
+                <span className="font-bold text-white tabular-nums">{cur()}{lineTotal.toFixed(2)}</span>
               </div>
             )}
             {canEdit && (
@@ -24560,7 +24574,7 @@ function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
 }
 
 function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [], myClaims = [], onSubmit, onSubmitMany, accountOptions = [], payees = [], currentUser }) {
-  const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  const money = (n) => `${cur()}${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
   const ec = "w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none";
   const [mode, setMode] = useState("new"); // new | split | mine
   const [form, setForm] = useState({ vendor:"", expenseTypeId:"", categoryId:"", storeId:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), reference:"", description:"", accountKey:"" });
@@ -24599,7 +24613,7 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
       // told to eyeball them BEFORE a delivery gets raised on bad numbers.
       const invTotal = Number(invoice?.total_inc_vat ?? invoice?.total ?? invoice?.grand_total ?? 0);
       if (invTotal > 0 && total > 0 && Math.abs(total - invTotal) / invTotal > 0.05) {
-        setErr(`Check the quantities: the scanned lines add to £${total.toFixed(2)} but the receipt total looks like £${invTotal.toFixed(2)}. Adjust any line that's wrong before submitting.`);
+        setErr(`Check the quantities: the scanned lines add to ${cur()}${total.toFixed(2)} but the receipt total looks like ${cur()}${invTotal.toFixed(2)}. Adjust any line that's wrong before submitting.`);
       }
       if (total > 0 && !form.amount) setF("amount", String(Math.round(total * 100) / 100));
       if (items.length && !form.description) setF("description", `${items.length} item purchase`);
@@ -24687,17 +24701,17 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
                     className="w-14 px-1.5 py-1 rounded bg-slate-950 border border-slate-700 text-white text-right tabular-nums"/>
                   <span className="text-slate-500">×</span>
                   <span className="flex-1 min-w-0 truncate text-slate-300">{it.desc}</span>
-                  <span className="text-slate-500">£</span>
+                  <span className="text-slate-500">{cur()}</span>
                   <input type="number" inputMode="decimal" step="0.01" value={it.price}
                     onChange={ev => setScanLines(ls => ls.map((x, j) => j === i ? { ...x, price: Number(ev.target.value) || 0 } : x))}
                     className="w-16 px-1.5 py-1 rounded bg-slate-950 border border-slate-700 text-white text-right tabular-nums"/>
-                  <span className="w-14 text-right tabular-nums text-slate-400">£{(it.units * it.price).toFixed(2)}</span>
+                  <span className="w-14 text-right tabular-nums text-slate-400">{cur()}{(it.units * it.price).toFixed(2)}</span>
                   <button onClick={() => setScanLines(ls => ls.filter((_, j) => j !== i))} className="text-slate-600 hover:text-red-400 px-1">×</button>
                 </div>
               ))}
               <div className="flex justify-between text-[11px] pt-1 border-t border-slate-700">
                 <span className="text-slate-500">Lines total</span>
-                <span className="font-bold text-white tabular-nums">£{scanLines.reduce((s2, it) => s2 + it.units * it.price, 0).toFixed(2)}</span>
+                <span className="font-bold text-white tabular-nums">{cur()}{scanLines.reduce((s2, it) => s2 + it.units * it.price, 0).toFixed(2)}</span>
               </div>
             </div>
           )}
@@ -26696,7 +26710,7 @@ function InvoiceLineRow({ line, domain, onChanged, vendor = "" }) {
   const ourUnitCost  = matchedItem?.cost_per_base_unit != null ? Number(matchedItem.cost_per_base_unit) : null;
   const deltaPct = (rcptUnitCost != null && ourUnitCost > 0)
     ? ((rcptUnitCost - ourUnitCost) / ourUnitCost) * 100 : null;
-  const money = (v, dp = 2) => (v == null || Number.isNaN(v)) ? "—" : `£${Number(v).toFixed(dp)}`;
+  const money = (v, dp = 2) => (v == null || Number.isNaN(v)) ? "—" : `${cur()}${Number(v).toFixed(dp)}`;
 
   const Row = ({ label, children, strong }) => (
     <div className="flex items-baseline gap-2 py-0.5">
@@ -27108,19 +27122,19 @@ function InvoicesView({ currentUser, categories = [], storeFilter = "all", entit
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
           <div className="text-[10px] text-slate-500 uppercase tracking-widest">Total (ex VAT)</div>
-          <div className="text-lg font-black text-white tabular-nums mt-1">£{summary.total.toFixed(0)}</div>
+          <div className="text-lg font-black text-white tabular-nums mt-1">{cur()}{summary.total.toFixed(0)}</div>
         </div>
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
           <div className="text-[10px] text-slate-500 uppercase tracking-widest">Outstanding</div>
-          <div className={`text-lg font-black tabular-nums mt-1 ${summary.outstanding>0?"text-amber-400":"text-emerald-400"}`}>£{summary.outstanding.toFixed(0)}</div>
+          <div className={`text-lg font-black tabular-nums mt-1 ${summary.outstanding>0?"text-amber-400":"text-emerald-400"}`}>{cur()}{summary.outstanding.toFixed(0)}</div>
         </div>
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
           <div className="text-[10px] text-slate-500 uppercase tracking-widest">Overdue</div>
-          <div className={`text-lg font-black tabular-nums mt-1 ${summary.overdue>0?"text-red-400":"text-slate-300"}`}>£{summary.overdue.toFixed(0)}</div>
+          <div className={`text-lg font-black tabular-nums mt-1 ${summary.overdue>0?"text-red-400":"text-slate-300"}`}>{cur()}{summary.overdue.toFixed(0)}</div>
         </div>
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
           <div className="text-[10px] text-slate-500 uppercase tracking-widest">VAT total</div>
-          <div className="text-lg font-black text-slate-300 tabular-nums mt-1">£{summary.vat.toFixed(0)}</div>
+          <div className="text-lg font-black text-slate-300 tabular-nums mt-1">{cur()}{summary.vat.toFixed(0)}</div>
         </div>
       </div>
 
@@ -27148,7 +27162,7 @@ function InvoicesView({ currentUser, categories = [], storeFilter = "all", entit
               <div className="text-slate-500 mt-0.5 flex items-center gap-1.5 flex-wrap">
                 <span>{inv.entity === "kitchen" ? "Central Kitchen" : (stores.find((s) => s.id === inv.entity)?.name || inv.entity)}</span>
                 {inv.invoice_date ? <span>· {inv.invoice_date}</span> : null}
-                {inv.total_ex_vat != null ? <span>· £{inv.total_ex_vat}</span> : null}
+                {inv.total_ex_vat != null ? <span>· {cur()}{inv.total_ex_vat}</span> : null}
                 {inv.category ? <span className="text-indigo-400">· {inv.category}</span> : null}
                 <span className={`px-1 py-0.5 rounded text-[8px] uppercase ${isOverdue(inv)?"bg-red-600 text-white":(inv.payment_status==="paid"?"bg-emerald-600 text-white":(inv.payment_status==="partial"?"bg-amber-500 text-amber-950":"bg-slate-700/30 text-slate-400"))}`}>{isOverdue(inv)?"overdue":(inv.payment_status||"unpaid")}</span>
               </div>
@@ -27169,7 +27183,7 @@ function InvoicesView({ currentUser, categories = [], storeFilter = "all", entit
                   <span className={`px-2 py-0.5 rounded-md border text-[10px] uppercase ${statusChip(selected.status)}`}>{selected.status}</span>
                 </div>
                 <div className="text-xs text-slate-500">
-                  total ex-VAT £{selected.total_ex_vat ?? "—"} · VAT £{selected.total_vat ?? "—"} · lines sum £{confirmedSum.toFixed(2)}
+                  total ex-VAT {cur()}{selected.total_ex_vat ?? "—"} · VAT {cur()}{selected.total_vat ?? "—"} · lines sum {cur()}{confirmedSum.toFixed(2)}
                 </div>
               </div>
 
@@ -27208,7 +27222,7 @@ function InvoicesView({ currentUser, categories = [], storeFilter = "all", entit
 
               {mismatch && (
                 <div className="bg-rose-950/40 border border-rose-800/50 rounded-xl p-3 text-xs text-rose-300 space-y-1">
-                  <div>Lines don't add up to the invoice total (difference £{Math.abs(confirmedSum - Number(selected.total_ex_vat)).toFixed(2)}). Fix lines or skip non-product charges.</div>
+                  <div>Lines don't add up to the invoice total (difference {cur()}{Math.abs(confirmedSum - Number(selected.total_ex_vat)).toFixed(2)}). Fix lines or skip non-product charges.</div>
                   <label className="flex items-center gap-2 text-rose-200">
                     <input type="checkbox" checked={overrideMismatch} onChange={(e) => setOverrideMismatch(e.target.checked)} />
                     I've reviewed the difference — approve anyway
@@ -27249,7 +27263,7 @@ function InvoicesView({ currentUser, categories = [], storeFilter = "all", entit
                         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 flex-shrink-0">
                           <div className="text-sm font-bold text-white truncate">
                             {selected.supplier_name || "Invoice"} {selected.invoice_number ? `· ${selected.invoice_number}` : ""}
-                            <span className="text-xs text-slate-500 font-normal ml-2">ex-VAT £{selected.total_ex_vat ?? "—"} · lines £{confirmedSum.toFixed(2)}</span>
+                            <span className="text-xs text-slate-500 font-normal ml-2">ex-VAT {cur()}{selected.total_ex_vat ?? "—"} · lines {cur()}{confirmedSum.toFixed(2)}</span>
                           </div>
                           <button onClick={()=>setFullscreen(false)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 hover:text-white text-xs font-semibold flex-shrink-0">
                             <X size={14}/> Close
@@ -29334,7 +29348,7 @@ function TimesheetReportsView({ stores, brands, opsTeam, currentUser }) {
   const fmtT = (ts) => ts ? new Date(ts).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "—";
   const fmtD = (d) => d ? new Date(d + "T00:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) : "";
   const n2 = (v) => (v == null ? "" : (Math.round(v * 100) / 100));
-  const gbp = (v) => (v == null ? "" : `£${(Math.round(v * 100) / 100).toFixed(2)}`);
+  const gbp = (v) => (v == null ? "" : `${cur()}${(Math.round(v * 100) / 100).toFixed(2)}`);
   const schedHrs = (s) => {
     const [sh, sm] = (s.startTime || "0:0").split(":").map(Number);
     const [eh, em] = (s.endTime || "0:0").split(":").map(Number);
@@ -30026,7 +30040,7 @@ function ForecastDayModal({ date, rows, stores, scopedStoreId, onClose }) {
   const [hourly, setHourly] = useState([]);
   const [hourlyLoading, setHourlyLoading] = useState(false);
 
-  const fmtMoney = (n) => "£" + (n || 0).toLocaleString("en-GB", { maximumFractionDigits: 0 });
+  const fmtMoney = (n) => cur() + (n || 0).toLocaleString("en-GB", { maximumFractionDigits: 0 });
   const storeName = (sid) => {
     const s = (stores || []).find(x => x.id === sid);
     return s?.shortName || s?.name || sid;
@@ -30192,7 +30206,7 @@ function ForecastPanel({ storeId, stores }) {
   }, [rows, storeId]);
 
   const maxRev = Math.max(...days.map(d => d.revenue), 1);
-  const fmtMoney = (n) => "£" + (n || 0).toLocaleString("en-GB", { maximumFractionDigits: 0 });
+  const fmtMoney = (n) => cur() + (n || 0).toLocaleString("en-GB", { maximumFractionDigits: 0 });
   const dayLabel = (d) => new Date(d + "T00:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
 
   return (
@@ -30420,8 +30434,8 @@ function UberEatsPerformanceView({ stores = [], currentUser, selectedStore }) {
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  const gbp = (n) => "£" + (Number(n)||0).toLocaleString("en-GB", { maximumFractionDigits: 0 });
-  const gbp2 = (n) => "£" + (Number(n)||0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const gbp = (n) => cur() + (Number(n)||0).toLocaleString("en-GB", { maximumFractionDigits: 0 });
+  const gbp2 = (n) => cur() + (Number(n)||0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const scopedRows = useMemo(() => {
     if (!selectedStore) return rows;
@@ -31212,8 +31226,8 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser, select
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  const gbp = (n) => "£" + (Number(n)||0).toLocaleString("en-GB", { maximumFractionDigits: 0 });
-  const gbp2 = (n) => "£" + (Number(n)||0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const gbp = (n) => cur() + (Number(n)||0).toLocaleString("en-GB", { maximumFractionDigits: 0 });
+  const gbp2 = (n) => cur() + (Number(n)||0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   // Estate totals
   const totals = useMemo(() => {
@@ -31551,8 +31565,8 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser, select
 // heatmap, top items, payment methods, refunds/cancellations.
 function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDate, periodLabel }) {
   const toLocalDate = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-  const fmtMoney = (n) => "£" + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-  const fmtMoneyDec = (n) => "£" + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtMoney = (n) => cur() + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  const fmtMoneyDec = (n) => cur() + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   const [sales, setSales] = useState([]);
   const [prevSales, setPrevSales] = useState([]);
@@ -32022,8 +32036,8 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
   const now = new Date();
   const today = new Date(now); today.setHours(0,0,0,0);
   const toLocalDate = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-  const fmtMoney = (n) => "£" + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-  const fmtMoneyDec = (n) => "£" + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtMoney = (n) => cur() + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  const fmtMoneyDec = (n) => cur() + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const fmtPct = (n) => (n >= 0 ? "+" : "") + n.toFixed(0) + "%";
 
   const { fromDate, toDate, prevFromDate, prevToDate, periodLabel } = useMemo(() => {
@@ -32190,6 +32204,7 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
       saleJe: 0,     revJe: 0,
       saleFda: 0,    revFda: 0,
       saleKiosk: 0,  revKiosk: 0,
+      saleTalabat: 0, revTalabat: 0, saleKeeta: 0, revKeeta: 0, saleNoon: 0, revNoon: 0, saleCareem: 0, revCareem: 0, // CHANNELS 2026-09-11a
       totalSales: 0, salesRevenue: 0,
       prevTotalSales: 0, prevSalesRevenue: 0,
     });
@@ -32229,6 +32244,10 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
         case "JustEats":       m[a.storeId].saleJe    += cnt; m[a.storeId].revJe    += amt; break;
         case "FlipdishWebApp": m[a.storeId].saleFda   += cnt; m[a.storeId].revFda   += amt; break;
         case "FlipdishKIOSK":  m[a.storeId].saleKiosk += cnt; m[a.storeId].revKiosk += amt; break;
+        case "Talabat":        m[a.storeId].saleTalabat += cnt; m[a.storeId].revTalabat += amt; break; // CHANNELS 2026-09-11a
+        case "Keeta":          m[a.storeId].saleKeeta   += cnt; m[a.storeId].revKeeta   += amt; break;
+        case "Noon":           m[a.storeId].saleNoon    += cnt; m[a.storeId].revNoon    += amt; break;
+        case "Careem":         m[a.storeId].saleCareem  += cnt; m[a.storeId].revCareem  += amt; break;
       }
     });
     prevSalesAgg.forEach(a => {
@@ -32281,6 +32300,7 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
     let orders = 0, prevOrders = 0;
     let revPos = 0, revUber = 0, revDeli = 0, revJe = 0, revFda = 0, revKiosk = 0;
     let salePos = 0, saleUber = 0, saleDeli = 0, saleJe = 0, saleFda = 0, saleKiosk = 0;
+    let revTalabat = 0, revKeeta = 0, revNoon = 0, revCareem = 0, saleTalabat = 0, saleKeeta = 0, saleNoon = 0, saleCareem = 0;
     leaderboard.forEach(r => {
       revenue       += r.totalRevenue;
       prevRevenue   += r.prevTotalRevenue;
@@ -32290,6 +32310,8 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
       saleJe  += r.saleJe;  saleFda  += r.saleFda;  saleKiosk += r.saleKiosk;
       revPos  += r.revPos;  revUber  += r.revUber;  revDeli  += r.revDeli;
       revJe   += r.revJe;   revFda   += r.revFda;   revKiosk += r.revKiosk;
+      revTalabat += r.revTalabat || 0; revKeeta += r.revKeeta || 0; revNoon += r.revNoon || 0; revCareem += r.revCareem || 0;
+      saleTalabat += r.saleTalabat || 0; saleKeeta += r.saleKeeta || 0; saleNoon += r.saleNoon || 0; saleCareem += r.saleCareem || 0;
     });
     const atv         = orders > 0 ? revenue / orders : 0;
     const prevAtv     = prevOrders > 0 ? prevRevenue / prevOrders : 0;
@@ -32298,6 +32320,7 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
     const atvDelta    = prevAtv     > 0 ? ((atv     - prevAtv)     / prevAtv)     * 100 : 0;
     const activeStores = leaderboard.filter(r => r.totalOrders > 0).length;
     return {
+      revTalabat, revKeeta, revNoon, revCareem, saleTalabat, saleKeeta, saleNoon, saleCareem,
       revenue, orders, atv,
       revPos, revUber, revDeli, revJe, revFda, revKiosk,
       salePos, saleUber, saleDeli, saleJe, saleFda, saleKiosk,
@@ -32561,6 +32584,10 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
               <ChannelRow label="JustEat"    value={totals.revJe}    total={totals.revenue} color="bg-orange-500"  textColor="text-orange-400"/>
               <ChannelRow label="Flipdish Web" value={totals.revFda} total={totals.revenue} color="bg-pink-500"    textColor="text-pink-400"/>
               <ChannelRow label="Kiosk"      value={totals.revKiosk} total={totals.revenue} color="bg-rose-400"    textColor="text-rose-400"/>
+              {totals.revTalabat > 0 && <ChannelRow label="Talabat" value={totals.revTalabat} total={totals.revenue} color="bg-orange-600" textColor="text-orange-400"/>}
+              {totals.revKeeta   > 0 && <ChannelRow label="Keeta"   value={totals.revKeeta}   total={totals.revenue} color="bg-yellow-500" textColor="text-yellow-400"/>}
+              {totals.revNoon    > 0 && <ChannelRow label="Noon"    value={totals.revNoon}    total={totals.revenue} color="bg-yellow-300" textColor="text-yellow-300"/>}
+              {totals.revCareem  > 0 && <ChannelRow label="Careem"  value={totals.revCareem}  total={totals.revenue} color="bg-lime-500"   textColor="text-lime-400"/>}
             </div>
           )}
         </div>
@@ -32579,7 +32606,7 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
           <div className="rounded-2xl border border-slate-800/60 bg-slate-900/40 p-4">
             <div className="mb-4">
               <h3 className="text-sm font-bold text-white">Top stores by revenue</h3>
-              <div className="text-[11px] text-slate-500">{periodLabel} · share of £{(chainRev/1000).toFixed(0)}k chain total</div>
+              <div className="text-[11px] text-slate-500">{periodLabel} · share of {cur()}{(chainRev/1000).toFixed(0)}k chain total</div>
             </div>
             <div className="flex items-end gap-2 md:gap-3 overflow-x-auto pb-1" style={{ minHeight: 220 }}>
               {top.map((r, i) => {
@@ -32703,6 +32730,10 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
                   { key: "je",    count: r.saleJe,    color: "bg-orange-500",  label: "JustEat" },
                   { key: "fda",   count: r.saleFda,   color: "bg-pink-500",    label: "Web" },
                   { key: "kiosk", count: r.saleKiosk, color: "bg-rose-400",    label: "Kiosk" },
+                  { key: "talabat", count: r.saleTalabat || 0, color: "bg-orange-600", label: "Talabat" },
+                  { key: "keeta",   count: r.saleKeeta   || 0, color: "bg-yellow-500", label: "Keeta" },
+                  { key: "noon",    count: r.saleNoon    || 0, color: "bg-yellow-300", label: "Noon" },
+                  { key: "careem",  count: r.saleCareem  || 0, color: "bg-lime-500",   label: "Careem" },
                 ];
                 const channelTotal = chanCounts.reduce((a, c) => a + c.count, 0);
                 return (
@@ -32860,7 +32891,7 @@ function ChannelRow({ label, value, total, color, textColor }) {
     <div>
       <div className="flex items-center justify-between text-xs mb-1">
         <span className="text-slate-400 font-semibold">{label}</span>
-        <span className={`${textColor} font-bold tabular-nums`}>£{value.toLocaleString("en-GB", { maximumFractionDigits: 0 })} <span className="text-slate-500 font-normal">{pct.toFixed(0)}%</span></span>
+        <span className={`${textColor} font-bold tabular-nums`}>{cur()}{value.toLocaleString("en-GB", { maximumFractionDigits: 0 })} <span className="text-slate-500 font-normal">{pct.toFixed(0)}%</span></span>
       </div>
       <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
         <div className={`h-full ${color}`} style={{ width: `${pct}%` }}/>
@@ -32873,8 +32904,8 @@ function ChannelRow({ label, value, total, color, textColor }) {
 // Per-store drill-down modal
 // ═══════════════════════════════════════════════════════════════════════════════
 function StoreDetailModal({ store, flipdishStores, fromDate, toDate, periodLabel, onClose }) {
-  const fmtMoney = (n) => "£" + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-  const fmtMoneyDec = (n) => "£" + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtMoney = (n) => cur() + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+  const fmtMoneyDec = (n) => cur() + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
   // Flipdish stores for THIS physical store (used to display linked IDs at the bottom)
   const myFsIds = useMemo(() =>
@@ -33742,9 +33773,13 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
     if (isSingleDay) {
       // bucket the day's raw sales by LOCAL hour (0-23)
       const buckets = {};
+      // TZ 2026-09-11a: bucket by the STORE's timezone (stores.timezone, default
+      // Europe/London), not the browser's — a UK owner looking at Dubai sees Dubai hours.
+      const tzOf = {}; allStores.forEach(s => { tzOf[s.id] = s.timezone || "Europe/London"; });
+      const hourIn = (iso, tz) => { try { return Number(new Intl.DateTimeFormat("en-GB", { hour: "numeric", hour12: false, timeZone: tz }).format(new Date(iso))) % 24; } catch { return new Date(iso).getHours(); } };
       hourlyRows.filter(r => scopedStoreIds.has(r.storeId) && !r.isCancelled).forEach(r => {
         if (!r.saleTime) return;
-        const h = new Date(r.saleTime).getHours(); // local hour
+        const h = hourIn(r.saleTime, tzOf[r.storeId]);
         buckets[h] = buckets[h] || { revenue: 0, orders: 0 };
         buckets[h].revenue += r.amountTotal || 0;
         buckets[h].orders += 1;
@@ -34228,7 +34263,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
       {/* Sales by category — estate-wide, honours period + selected brands */}
       {(() => {
         const CAT_COLORS = { "Breakfast":"#E0A100", "Dinner":"#844429", "Desserts":"#D6428A", "Hot Drinks":"#D0492E", "Cold Drinks":"#2C97B0", "Uncategorised":"#B7A688" };
-        const gbp2 = (n) => "£" + (Number(n)||0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        const gbp2 = (n) => cur() + (Number(n)||0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         return (
           <AnalysisBlock title={`Sales by category · ${period.label}`} action={salesByCat ? <span className="text-[11px] text-[#9A8770]">{gbp2(salesByCat.total)} total</span> : null}>
             {catLoading && !salesByCat ? (
@@ -34276,7 +34311,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
             <ComposedChart data={chart} margin={{ top: 5, right: 20, left: 0, bottom: 0 }}>
               <CartesianGrid stroke="#EADFCB" strokeDasharray="3 3" />
               <XAxis dataKey="label" tick={{ fill: "#9A8770", fontSize: 10 }} />
-              <YAxis yAxisId="left" tick={{ fill: "#9A8770", fontSize: 10 }} tickFormatter={v => v >= 1000 ? `£${(v/1000).toFixed(0)}k` : `£${Math.round(v)}`} />
+              <YAxis yAxisId="left" tick={{ fill: "#9A8770", fontSize: 10 }} tickFormatter={v => v >= 1000 ? `${cur()}${(v/1000).toFixed(0)}k` : `${cur()}${Math.round(v)}`} />
               <YAxis yAxisId="right" orientation="right" tick={{ fill: "#9A8770", fontSize: 10 }} tickFormatter={v => `${v.toFixed(0)}%`} />
               <Tooltip content={<ChartTooltip/>} />
               <Legend wrapperStyle={{ fontSize: 11, color: "#8A7866" }} />
@@ -34612,8 +34647,8 @@ function TacticalOpsView({ brands, stores, visibleStoreIds, entries, issues, use
             <ComposedChart data={chartData} margin={{top:5,right:20,left:0,bottom:0}}>
               <CartesianGrid stroke="#1e293b" strokeDasharray="3 3"/>
               <XAxis dataKey="idx" tick={{fill:"#64748b",fontSize:10}}/>
-              <YAxis yAxisId="left" tick={{fill:"#64748b",fontSize:10}} tickFormatter={v=>`£${(v/1000).toFixed(0)}k`}/>
-              <YAxis yAxisId="right" orientation="right" tick={{fill:"#64748b",fontSize:10}} tickFormatter={v=>`£${v.toFixed(0)}`}/>
+              <YAxis yAxisId="left" tick={{fill:"#64748b",fontSize:10}} tickFormatter={v=>`${cur()}${(v/1000).toFixed(0)}k`}/>
+              <YAxis yAxisId="right" orientation="right" tick={{fill:"#64748b",fontSize:10}} tickFormatter={v=>`${cur()}${v.toFixed(0)}`}/>
               <Tooltip content={<ChartTooltip/>}/>
               <Legend wrapperStyle={{fontSize:11,color:"#94a3b8"}}/>
               <Bar yAxisId="left" dataKey="curSales" name="£ Current" fill="#844429" opacity={0.85} radius={[3,3,0,0]}/>
@@ -34703,7 +34738,7 @@ function EodReconView({ brands, stores = [], visibleStoreIds = [], entries = [],
   // Include the manager's visible scope, not just currentUser.storeIds (which can
   // be stale after a session restore) — so the Save/amend ability is reliable.
   const myStoreIds = Array.from(new Set([...(currentUser.storeIds || []), ...(visibleStoreIds || [])]));
-  const fmtMoney = (n) => "£" + (Number(n) || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const fmtMoney = (n) => cur() + (Number(n) || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const storeName = (id) => stores.find(s => s.id === id)?.shortName || stores.find(s => s.id === id)?.name || null;
   const brandName = (id) => brands.find(b => b.id === id)?.name || id;
 
@@ -35382,13 +35417,13 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
   const reviewRows = [
     ["Store", (selectedStore?.shortName || selectedStore?.name || "—")],
     ["Date", form.date],
-    ["Gross sales", `£${(ns||0).toFixed(2)}`],
-    ["Flipdish (card)", `£${(parseFloat(form.cardRevenue)||0).toFixed(2)}`],
-    ["Lopay (card)", `£${(lopay||0).toFixed(2)}`],
-    ["Cash expected", `£${(ce||0).toFixed(2)}`],
-    ["Physical cash", `£${(pc||0).toFixed(2)}`],
-    ["Cash variance", `£${(variance||0).toFixed(2)}`],
-    ["Unreported expense", `£${(parseFloat(form.unreportedExpense)||0).toFixed(2)}`],
+    ["Gross sales", `${cur()}${(ns||0).toFixed(2)}`],
+    ["Flipdish (card)", `${cur()}${(parseFloat(form.cardRevenue)||0).toFixed(2)}`],
+    ["Lopay (card)", `${cur()}${(lopay||0).toFixed(2)}`],
+    ["Cash expected", `${cur()}${(ce||0).toFixed(2)}`],
+    ["Physical cash", `${cur()}${(pc||0).toFixed(2)}`],
+    ["Cash variance", `${cur()}${(variance||0).toFixed(2)}`],
+    ["Unreported expense", `${cur()}${(parseFloat(form.unreportedExpense)||0).toFixed(2)}`],
   ];
 
   if (reviewing) return (
@@ -35511,14 +35546,14 @@ function EODFormView({ brands, stores, visibleStoreIds, onAddEntry }) {
             <div><label className={labelCls}>Shift Notes</label><textarea value={form.notes} onChange={e=>set("notes",e.target.value)} className={`${inputCls} h-24 resize-none`} placeholder="Any notable events, incidents or handover notes…"/></div>
             {(lopay > 0 || unrepExp > 0) && (
               <div className="bg-slate-950 border border-slate-800/60 rounded-xl p-3 text-xs text-slate-400">
-                Expected cash £{ce.toFixed(2)}{lopay>0 && <> − Lopay £{lopay.toFixed(2)}</>}{unrepExp>0 && <> − expense £{unrepExp.toFixed(2)}</>} = <span className="text-white font-semibold">£{adjustedCashExpected.toFixed(2)}</span> to count.
+                Expected cash {cur()}{ce.toFixed(2)}{lopay>0 && <> − Lopay {cur()}{lopay.toFixed(2)}</>}{unrepExp>0 && <> − expense {cur()}{unrepExp.toFixed(2)}</>} = <span className="text-white font-semibold">{cur()}{adjustedCashExpected.toFixed(2)}</span> to count.
               </div>
             )}
             {hasVariance && (
               <div className="bg-amber-950/20 border border-amber-500/30 rounded-xl p-4">
                 <div className="flex items-center gap-2 text-amber-400 text-sm font-semibold mb-2">
-                  <AlertTriangle size={14}/> Cash Variance: {variance>=0?"+":""}£{variance.toFixed(2)}
-                  <span className="text-slate-500 font-normal">(physical £{pc.toFixed(2)} vs expected £{adjustedCashExpected.toFixed(2)})</span>
+                  <AlertTriangle size={14}/> Cash Variance: {variance>=0?"+":""}{cur()}{variance.toFixed(2)}
+                  <span className="text-slate-500 font-normal">(physical {cur()}{pc.toFixed(2)} vs expected {cur()}{adjustedCashExpected.toFixed(2)})</span>
                 </div>
                 <label className={labelCls}>Justification (required)</label>
                 <textarea value={form.varianceJustification} onChange={e=>set("varianceJustification",e.target.value)} className={`${inputCls} h-20 resize-none`} placeholder="Explain the variance…"/>
@@ -36225,7 +36260,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
   };
 
   const inputCls = "px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
-  const fmtGBP = (n) => `£${Number(n || 0).toFixed(2)}`;
+  const fmtGBP = (n) => `${cur()}${Number(n || 0).toFixed(2)}`;
   const brandName = (id) => brands?.find(b => b.id === id)?.name || "";
   const storeName = (id) => {
     const s = stores?.find(x => x.id === id);
@@ -36337,7 +36372,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
           // Guard the class of mistake that produced the £4m payslip: an hourly
           // rate this large is a salary or a pence value in the wrong field.
           if (Number(res.rate) > 150) {
-            rowError = `Hourly rate of £${Number(res.rate).toFixed(2)} is not plausible — check the employee's pay type and rate.`;
+            rowError = `Hourly rate of ${cur()}${Number(res.rate).toFixed(2)} is not plausible — check the employee's pay type and rate.`;
             continue;
           }
           if (res.beforeEffective) {
@@ -37127,7 +37162,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                         <td className="py-1.5 pr-3 text-stone-900 font-semibold tabular-nums">{fmtGBP(r.totalPay)}</td>
                         <td className="py-1.5 pr-3">
                           <div className="flex items-center gap-1">
-                            <span className="text-slate-500 text-xs">£</span>
+                            <span className="text-slate-500 text-xs">{cur()}</span>
                             <input type="number" step="0.01" min="0"
                               value={bankInput[r.employeeId] ?? Number(r.bankAmount.toFixed(2))}
                               onChange={e => {
@@ -37322,7 +37357,7 @@ function MinimumWageAdmin() {
 
   const inputCls = "w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
   const labelCls = "block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1";
-  const fmtRate = (n) => `£${Number(n).toFixed(2)}`;
+  const fmtRate = (n) => `${cur()}${Number(n).toFixed(2)}`;
 
   // Group by band for display
   const byBand = NMW_BANDS.map(b => ({
@@ -40789,7 +40824,7 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
               <div className="sticky top-0 px-4 py-3 border-b flex items-center justify-between" style={{ background: C.cream, borderColor: C.line }}>
                 <div>
                   <div className="text-sm font-bold" style={{ color: C.ink }}>Original receipt</div>
-                  <div className="text-[11px]" style={{ color: C.inkFaint }}>{receipt.claim.vendor || "Supplier"} · {receipt.claim.expenseDate} · £{(receipt.claim.amount||0).toFixed(2)}</div>
+                  <div className="text-[11px]" style={{ color: C.inkFaint }}>{receipt.claim.vendor || "Supplier"} · {receipt.claim.expenseDate} · {cur()}{(receipt.claim.amount||0).toFixed(2)}</div>
                 </div>
                 <button onClick={() => setShowReceipt(false)} style={{ color: C.inkFaint }}><X size={18}/></button>
               </div>
@@ -40815,8 +40850,8 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
             const linked = lines.filter(l => l.store_item_id).length;
             return (
               <div className="flex flex-wrap gap-2 mt-2.5 text-[11px]">
-                <span className="px-2 py-1 rounded-lg font-bold" style={{ background: "#EFE3CC", color: C.ink }}>{lines.length} lines · £{dispVal.toFixed(2)} dispatched</span>
-                <span className="px-2 py-1 rounded-lg font-bold" style={{ background: totalVal < dispVal - 0.005 ? "#FBEAD5" : "#E7F0E4", color: totalVal < dispVal - 0.005 ? "#9A5B00" : "#3F6B3A" }}>Receiving £{totalVal.toFixed(2)}</span>
+                <span className="px-2 py-1 rounded-lg font-bold" style={{ background: "#EFE3CC", color: C.ink }}>{lines.length} lines · {cur()}{dispVal.toFixed(2)} dispatched</span>
+                <span className="px-2 py-1 rounded-lg font-bold" style={{ background: totalVal < dispVal - 0.005 ? "#FBEAD5" : "#E7F0E4", color: totalVal < dispVal - 0.005 ? "#9A5B00" : "#3F6B3A" }}>Receiving {cur()}{totalVal.toFixed(2)}</span>
                 <span className="px-2 py-1 rounded-lg font-bold" style={{ background: linked === lines.length ? "#E7F0E4" : "#FBEAD5", color: linked === lines.length ? "#3F6B3A" : "#9A5B00" }}>
                   {linked}/{lines.length} linked to stock{linked < lines.length ? " — unlinked lines book the purchase but won't move inventory. Match items in the expense/invoice review (matches are remembered)." : ""}
                 </span>
@@ -40843,8 +40878,8 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
                     <div className="text-[11px]" style={{ color: C.inkFaint }}>
                       Expected: {disp}
                       {(l.pack_count > 1 || l.pack_size) && <span> · {l.pack_count > 1 ? `${l.pack_count} × ` : ""}{l.pack_size ? `${l.pack_size}${l.pack_unit || ""}` : `${l.pack_unit || "unit"}`}/pack</span>}
-                      {l.unit_cost != null && <span> · £{Number(l.unit_cost).toFixed(2)} ea</span>}
-                      {l.unit_cost != null && <span> · line <b style={{ color: short ? "#9A5B00" : C.inkSoft }}>£{(got * (Number(l.unit_cost) || 0)).toFixed(2)}</b></span>}
+                      {l.unit_cost != null && <span> · {cur()}{Number(l.unit_cost).toFixed(2)} ea</span>}
+                      {l.unit_cost != null && <span> · line <b style={{ color: short ? "#9A5B00" : C.inkSoft }}>{cur()}{(got * (Number(l.unit_cost) || 0)).toFixed(2)}</b></span>}
                       {short && <span style={{ color: "#9A5B00" }}> · SHORT {disp - got}</span>}
                       {unlinked && <span style={{ color: C.inkFaint }}> · ⚠ not linked</span>}
                     </div>
@@ -40962,7 +40997,7 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
                   </div>
                   <div className="text-[13px] mt-1" style={{ color: C.ink }}>
                     {d.lineCount ? `${d.lineCount} item${d.lineCount !== 1 ? "s" : ""}` : "No items"}
-                    {d.lineValue ? <span style={{ color: C.inkFaint }}> · £{d.lineValue.toFixed(2)}</span> : null}
+                    {d.lineValue ? <span style={{ color: C.inkFaint }}> · {cur()}{d.lineValue.toFixed(2)}</span> : null}
                     {d.firstItem && <span style={{ color: C.inkFaint }}> · {d.firstItem}{d.lineCount > 1 ? ` +${d.lineCount - 1}` : ""}</span>}
                   </div>
                   {/* Identifying detail line: store · ordered · sent · driver */}
@@ -42648,8 +42683,8 @@ function formatPayDisplay(amount, payType) {
   const meta = getPayTypeMeta(payType);
   // Hourly shows 2 decimals; salary uses thousands separator
   const formatted = payType === "hourly"
-    ? `£${amount.toFixed(2)}`
-    : `£${amount.toLocaleString("en-GB", { maximumFractionDigits: 0 })}`;
+    ? `${cur()}${amount.toFixed(2)}`
+    : `${cur()}${amount.toLocaleString("en-GB", { maximumFractionDigits: 0 })}`;
   return `${formatted}${meta.suffix}`;
 }
 
@@ -44031,7 +44066,7 @@ function PayrollAttributesTab({ employee, stores, brands, currentUser, onUpdateE
 
   const inputCls = "w-full px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
   const labelCls = "block text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-1";
-  const fmtGBP = (n) => `£${Number(n || 0).toFixed(2)}`;
+  const fmtGBP = (n) => `${cur()}${Number(n || 0).toFixed(2)}`;
 
   // Store options (with brand prefix for clarity across the chain).
   // PAYROLLSITES 2026-07-29e — payroll and accounting location are ENTITIES,
@@ -45642,7 +45677,7 @@ function PayRateHistoryEditor({ employeeId }) {
               {rows.map(r => (
                 <tr key={r.id} className="border-t border-slate-800/60">
                   <td className="px-2 py-1.5 text-slate-200">{r.effectiveFrom}</td>
-                  <td className="px-2 py-1.5 text-right font-mono text-slate-200">£{Number(r.rate).toFixed(2)}</td>
+                  <td className="px-2 py-1.5 text-right font-mono text-slate-200">{cur()}{Number(r.rate).toFixed(2)}</td>
                   <td className="px-2 py-1.5 text-right"><button onClick={() => del(r.id)} className="text-slate-600 hover:text-red-400"><X size={14}/></button></td>
                 </tr>
               ))}
@@ -48568,7 +48603,7 @@ function OpsTeamMemberFormModal({
                             return (
                               <button key={r.id} type="button" onClick={() => toggleRole(r.id)}
                                 className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-colors ${on ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-900 border-slate-700 text-slate-300 hover:border-slate-600"}`}>
-                                {on ? "✓ " : ""}{r.name}{r.hourlyRate != null ? ` (£${r.hourlyRate.toFixed(2)})` : ""}
+                                {on ? "✓ " : ""}{r.name}{r.hourlyRate != null ? ` (${cur()}${r.hourlyRate.toFixed(2)})` : ""}
                               </button>
                             );
                           })}
@@ -48585,7 +48620,7 @@ function OpsTeamMemberFormModal({
                           return (
                             <button key={r.id} type="button" onClick={() => toggleRole(r.id)}
                               className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition-colors ${on ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-900 border-slate-700 text-slate-300 hover:border-slate-600"}`}>
-                              {on ? "✓ " : ""}{r.name}{r.hourlyRate != null ? ` (£${r.hourlyRate.toFixed(2)})` : ""}
+                              {on ? "✓ " : ""}{r.name}{r.hourlyRate != null ? ` (${cur()}${r.hourlyRate.toFixed(2)})` : ""}
                             </button>
                           );
                         })}
@@ -48635,7 +48670,7 @@ function OpsTeamMemberFormModal({
           />
           {form.payType === "hourly" && selectedRole?.hourlyRate != null && Number(form.hourlyRate) !== Number(selectedRole.hourlyRate) && (
             <div className="text-[10px] text-slate-600 mt-1">
-              Role default: £{selectedRole.hourlyRate.toFixed(2)}/hr
+              Role default: {cur()}{selectedRole.hourlyRate.toFixed(2)}/hr
               {" — "}
               <button onClick={() => set("hourlyRate", selectedRole.hourlyRate)} className="text-indigo-400 hover:text-indigo-300 underline">use role default</button>
             </div>
@@ -48931,7 +48966,7 @@ function StructureSection({
                           {role.isManagement && <Badge label="Management" color="indigo"/>}
                           {role.advertiseForHiring && !role.archivedAt && <Badge label="Hiring" color="green"/>}
                           {role.archivedAt && <Badge label="Archived" color="slate"/>}
-                          {role.hourlyRate != null && <span className="text-xs text-slate-500 tabular-nums">£{role.hourlyRate.toFixed(2)}/hr</span>}
+                          {role.hourlyRate != null && <span className="text-xs text-slate-500 tabular-nums">{cur()}{role.hourlyRate.toFixed(2)}/hr</span>}
                           {staffCount > 0 && <span className="text-xs text-slate-600">· {staffCount} staff</span>}
                         </div>
                         <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -48974,7 +49009,7 @@ function StructureSection({
                 const staffCount = teamCountByRole[role.id] || 0;
                 return (
                   <div key={role.id} className="flex items-center justify-between px-4 py-2">
-                    <div className="flex items-center gap-3"><div className="text-sm text-white">{role.name}</div>{role.hourlyRate != null && <span className="text-xs text-slate-500 tabular-nums">£{role.hourlyRate.toFixed(2)}/hr</span>}{staffCount > 0 && <span className="text-xs text-slate-600">· {staffCount} staff</span>}</div>
+                    <div className="flex items-center gap-3"><div className="text-sm text-white">{role.name}</div>{role.hourlyRate != null && <span className="text-xs text-slate-500 tabular-nums">{cur()}{role.hourlyRate.toFixed(2)}/hr</span>}{staffCount > 0 && <span className="text-xs text-slate-600">· {staffCount} staff</span>}</div>
                     <div className="flex items-center gap-1.5">
                       <button onClick={() => setRoleModal(role)} className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700"><Edit size={13}/></button>
                       <button onClick={() => setConfirmAction({ msg: `Archive role "${role.name}"?`, fn: () => onArchiveRole(role.id) })} className="p-1.5 rounded-lg bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20"><Trash2 size={13}/></button>
@@ -49628,7 +49663,7 @@ function SuppliersView({ stores = [], storeFilter = "all" }) {
 
   const today = new Date();
   const daysOld = (d) => d ? Math.floor((today - new Date(d)) / 86400000) : 0;
-  const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:0,maximumFractionDigits:0})}`;
+  const money = (n) => `${cur()}${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:0,maximumFractionDigits:0})}`;
 
   const suppliers = useMemo(() => {
     const map = {};
@@ -49935,7 +49970,7 @@ function ExpenseManage({ expenseTypes = [], categories = [], payees = [], cashAc
 }
 
 function SpendDashboardView({ claims = [], payees = [], bankTransactions = [], bankAccounts = [], cashAccounts = [], cashLedger = [], stores = [] }) {
-  const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  const money = (n) => `${cur()}${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
   const today = new Date();
   const ym = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
   const [periodMode, setPeriodMode] = useState("this_month");
@@ -50118,7 +50153,7 @@ function SpendDashboardView({ claims = [], payees = [], bankTransactions = [], b
 }
 
 function PettyCashView({ accounts = [], ledger = [], stores = [], target = 0, handlers = {} }) {
-  const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  const money = (n) => `${cur()}${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
   const ec = "w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white";
   const petty = accounts.find(a => a.isPetty) || null;
   const balances = useMemo(() => computeCashBalances(accounts, ledger), [accounts, ledger]);
@@ -50252,7 +50287,7 @@ function ExpenseSplitFlow({ stores = [], categories = [], expenseTypes = [], acc
   const [pickStores, setPickStores] = useState([]); // store ids selected for this split
   const [allocFor, setAllocFor] = useState(null);   // line id whose allocation panel is open
 
-  const money = (n) => `£${(Number(n)||0).toFixed(2)}`;
+  const money = (n) => `${cur()}${(Number(n)||0).toFixed(2)}`;
   const lineTotal = (l) => (Number(l.qty)||0) * (Number(l.price)||0);
   const grandTotal = lines.reduce((a,l)=>a+lineTotal(l), 0);
   // How many units of a line are allocated to stores so far, and what's left.
@@ -50550,7 +50585,7 @@ function ExpenseSplitFlow({ stores = [], categories = [], expenseTypes = [], acc
 }
 
 function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expenseTypes = [], categories = [], payees = [], bankTransactions = [], stores = [], opsTeam = [], currentUser, effectiveRole, canReconcile = false, typeAccounts = {}, memberAccounts = {}, excludedStores = [], memberTypes = {}, memberCategories = {}, memberStores = {}, handlers = {} }) {
-  const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  const money = (n) => `${cur()}${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
   const ec = "px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white w-full";
   const [tab, setTab] = useState("submitted"); // submitted | approved | reconciled | rejected | new
   const [viewReceipt, setViewReceipt] = useState(null);  // receipt being viewed full-screen
@@ -50933,7 +50968,7 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
 }
 
 function CashAccountsView({ accounts = [], sources = [], expenseTypes = [], ledger = [], stores = [], categories = [], handlers = {} }) {
-  const money = (n) => `${n<0?"−":""}£${Math.abs(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+  const money = (n) => `${n<0?"−":""}${cur()}${Math.abs(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
   const [tab, setTab] = useState("accounts"); // accounts | ledger | manage
   const [cashStoreFilter, setCashStoreFilter] = useState("all");
   const [moveModal, setMoveModal] = useState(null); // movement form
@@ -51401,7 +51436,7 @@ function LedgerView({ entities = [], entityFilter = "all", stores = [] }) {
   }, [entityId]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [load]);
 
-  const money = (n) => `£${(Number(n)||0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const money = (n) => `${cur()}${(Number(n)||0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const jeSum = jeLines.reduce((a, l) => a + (Number(l.amount) || 0), 0);
   const jeBalanced = Math.abs(jeSum) < 0.005 && jeLines.filter(l => l.accountId && Number(l.amount) !== 0).length >= 2;
 
@@ -51643,7 +51678,7 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
   const [busy, setBusy] = useState(false);
   const [autoMsg, setAutoMsg] = useState("");
 
-  const money = (n) => `${n<0?"−":""}£${Math.abs(n).toFixed(2)}`;
+  const money = (n) => `${n<0?"−":""}${cur()}${Math.abs(n).toFixed(2)}`;
   const eq = (a,b) => Math.round((Number(a)||0)*100) === Math.round((Number(b)||0)*100);
   const storeName = (id) => { const s = stores.find(x=>x.id===id); return s?(s.shortName||s.name):""; };
 
@@ -52103,7 +52138,7 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
                     <div className="text-[11px] text-slate-500">{tx.txnDate}{acct?` · ${acct.name}`:""}{tx.sourceRef?.startsWith("exp:")?" · expense":tx.sourceRef?.startsWith("eod:")?" · EOD takings":""}</div>
                   </div>
                   <div className="flex items-center gap-3 flex-shrink-0">
-                    <div className={`text-sm font-bold ${d.dir==="out"?"text-red-300":"text-emerald-300"}`}>{d.dir==="out"?"−":""}£{Math.abs(amt).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                    <div className={`text-sm font-bold ${d.dir==="out"?"text-red-300":"text-emerald-300"}`}>{d.dir==="out"?"−":""}{cur()}{Math.abs(amt).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
                     <button onClick={()=>cashHandlers.setReconciled?.(tx.id, !tx.reconciled)}
                       className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold ${tx.reconciled?"bg-emerald-600 text-white":"bg-slate-800 text-slate-300 hover:bg-slate-700"}`}>
                       {tx.reconciled?"✓ Reconciled":"Confirm"}
@@ -52599,7 +52634,7 @@ function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], c
   const incVat = (ex) => ex * (1 + VAT);
 
   const inRange = (dateStr) => dateStr >= iso(bounds.from) && dateStr <= iso(bounds.to);
-  const fmt = (n) => `${n < 0 ? "−" : ""}£${Math.abs(n).toLocaleString("en-GB", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
+  const fmt = (n) => `${n < 0 ? "−" : ""}${cur()}${Math.abs(n).toLocaleString("en-GB", { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
 
   // Build per-store P&L.
   const rows = useMemo(() => {
@@ -53226,7 +53261,7 @@ function BankView({ bankTransactions = [], bankAccounts = [], stores = [], store
     } catch (e) { /* non-fatal */ }
   };
 
-  const fmt = (n) => `${n < 0 ? "−" : ""}£${Math.abs(n).toFixed(2)}`;
+  const fmt = (n) => `${n < 0 ? "−" : ""}${cur()}${Math.abs(n).toFixed(2)}`;
   // When a specific store is selected, restrict to that store's bank accounts.
   const storeAccountIds = storeFilter === "all" ? null : new Set((bankAccounts || []).filter(a => a.storeId === storeFilter).map(a => a.id));
   const visibleAccounts = storeFilter === "all" ? bankAccounts : (bankAccounts || []).filter(a => a.storeId === storeFilter);
@@ -53353,7 +53388,7 @@ function BankView({ bankTransactions = [], bankAccounts = [], stores = [], store
                     <div className="text-sm text-slate-200 font-semibold truncate">{a.name}</div>
                     <div className="text-[11px] text-slate-500">{a.kind === "expense" ? "Petty cash" : "Takings"}{st ? ` · ${st.shortName || st.name}` : " · no store"}</div>
                   </div>
-                  <div className="text-sm font-bold text-emerald-300 flex-shrink-0">£{(Number(bal)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+                  <div className="text-sm font-bold text-emerald-300 flex-shrink-0">{cur()}{(Number(bal)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
                 </div>
               );
             })}
@@ -53529,15 +53564,15 @@ function BankView({ bankTransactions = [], bankAccounts = [], stores = [], store
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
               <div className="text-[10px] text-slate-500 uppercase tracking-widest">Money in</div>
-              <div className="text-xl font-black text-emerald-400 tabular-nums mt-1">£{totalIn.toFixed(2)}</div>
+              <div className="text-xl font-black text-emerald-400 tabular-nums mt-1">{cur()}{totalIn.toFixed(2)}</div>
             </div>
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
               <div className="text-[10px] text-slate-500 uppercase tracking-widest">Money out</div>
-              <div className="text-xl font-black text-red-400 tabular-nums mt-1">£{Math.abs(totalOut).toFixed(2)}</div>
+              <div className="text-xl font-black text-red-400 tabular-nums mt-1">{cur()}{Math.abs(totalOut).toFixed(2)}</div>
             </div>
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-3">
               <div className="text-[10px] text-slate-500 uppercase tracking-widest">Net</div>
-              <div className="text-xl font-black text-white tabular-nums mt-1">£{(totalIn+totalOut).toFixed(2)}</div>
+              <div className="text-xl font-black text-white tabular-nums mt-1">{cur()}{(totalIn+totalOut).toFixed(2)}</div>
             </div>
           </div>
 
@@ -57773,7 +57808,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
   const labourPctRating = (pct) => pct == null ? "" : pct <= labourPctTarget ? "green" : pct <= labourPctTarget + 5 ? "amber" : "red";
 
   const fmtHrs = (h) => h ? `${Math.floor(h)}h${h%1?` ${Math.round((h%1)*60)}m`:""}` : "0h";
-  const fmtMoney = (n) => "£" + (n||0).toFixed(2);
+  const fmtMoney = (n) => cur() + (n||0).toFixed(2);
 
   // ── Coverage matrix ────────────────────────────────────────────────────────
   const coverageMatrix = useMemo(() => {
@@ -58599,7 +58634,7 @@ function ScheduleView({ brands, stores, visibleStoreIds, opsTeam, users = [], sc
             <>
               <div className={`text-xl font-black mt-1 ${
                 splhRating === "green" ? "text-emerald-400" : splhRating === "amber" ? "text-amber-400" : "text-red-400"
-              }`}>£{splh.toFixed(1)}</div>
+              }`}>{cur()}{splh.toFixed(1)}</div>
               <div className="text-xs text-slate-500 mt-0.5">sales / £1 labour</div>
             </>
           ) : (
@@ -59268,7 +59303,7 @@ function SalesForecastModal({ brand, store, weekDays, weekDayStrs, onSave, onClo
                 {d.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short"})}
               </div>
               <div className="flex-1 flex items-center gap-2">
-                <span className="text-slate-500 text-sm">£</span>
+                <span className="text-slate-500 text-sm">{cur()}</span>
                 <input type="number" step="0.01" value={forecasts[dStr]}
                   onChange={e=>setForecasts(f=>({...f,[dStr]:e.target.value}))}
                   placeholder="0.00" className={inputCls}/>
@@ -59278,7 +59313,7 @@ function SalesForecastModal({ brand, store, weekDays, weekDayStrs, onSave, onClo
         })}
         <div className="flex items-center justify-between pt-3 border-t border-slate-800/60">
           <span className="text-sm font-semibold text-slate-700">Week total</span>
-          <span className="text-lg font-black text-emerald-400">£{total.toFixed(2)}</span>
+          <span className="text-lg font-black text-emerald-400">{cur()}{total.toFixed(2)}</span>
         </div>
         <div className="pt-3 border-t border-slate-800/60">
           <label className="text-xs font-semibold text-slate-500 block mb-1">Labour cost target (% of sales)</label>
@@ -60947,7 +60982,7 @@ function PayPeriodDetail({
             </div>
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
               <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-widest">Gross pay</div>
-              <div className="text-2xl font-bold text-emerald-400 tabular-nums">£{summary.pay.toFixed(2)}</div>
+              <div className="text-2xl font-bold text-emerald-400 tabular-nums">{cur()}{summary.pay.toFixed(2)}</div>
             </div>
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
               <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-widest">Punches</div>
@@ -60955,7 +60990,7 @@ function PayPeriodDetail({
             </div>
             <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
               <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-widest">Avg £/hr</div>
-              <div className="text-2xl font-bold text-white tabular-nums">£{summary.hours > 0 ? (summary.pay / summary.hours).toFixed(2) : "0.00"}</div>
+              <div className="text-2xl font-bold text-white tabular-nums">{cur()}{summary.hours > 0 ? (summary.pay / summary.hours).toFixed(2) : "0.00"}</div>
             </div>
           </div>
           <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-x-auto dist-table">
@@ -60970,7 +61005,7 @@ function PayPeriodDetail({
                     <td className="px-4 text-right tabular-nums text-slate-300">{s.headcount}</td>
                     <td className="px-4 text-right tabular-nums text-slate-300">{s.punches}</td>
                     <td className="px-4 text-right tabular-nums text-slate-300">{s.hours.toFixed(1)}</td>
-                    <td className="px-4 text-right tabular-nums text-emerald-400 font-semibold">£{s.pay.toFixed(2)}</td>
+                    <td className="px-4 text-right tabular-nums text-emerald-400 font-semibold">{cur()}{s.pay.toFixed(2)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -61015,8 +61050,8 @@ function PayPeriodDetail({
                       {e.breakEnforced > 0 && <span className="ml-1.5 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300" title="Shifts where the statutory minimum was applied because too little break was punched">{e.breakEnforced} auto</span>}
                       {e.breakPaid > 0 && <span className="ml-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-sky-500/20 text-sky-300" title="Breaks marked paid — not deducted">{e.breakPaid} paid</span>}
                     </td>
-                    <td className={`px-4 text-right tabular-nums ${e.hours > 0 && e.pay / e.hours < 1 ? "text-red-400" : "text-slate-400"}`}>£{e.hours > 0 ? (e.pay / e.hours).toFixed(2) : "0.00"}</td>
-                    <td className="px-4 text-right tabular-nums text-emerald-400 font-semibold">£{e.pay.toFixed(2)}</td>
+                    <td className={`px-4 text-right tabular-nums ${e.hours > 0 && e.pay / e.hours < 1 ? "text-red-400" : "text-slate-400"}`}>{cur()}{e.hours > 0 ? (e.pay / e.hours).toFixed(2) : "0.00"}</td>
+                    <td className="px-4 text-right tabular-nums text-emerald-400 font-semibold">{cur()}{e.pay.toFixed(2)}</td>
                     <td className="px-4 text-right">
                       <div className="flex items-center justify-end gap-1">
                         {e.open > 0 && <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-500/20 text-red-300" title="Still clocked in">{e.open} open</span>}
@@ -62471,7 +62506,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
         </div>
         <div className="bg-slate-900 border border-slate-800/60 rounded-xl px-3 py-2.5">
           <div className="text-[10px] text-slate-500 font-semibold uppercase tracking-widest">Total pay</div>
-          <div className="text-lg font-black text-emerald-400 mt-0.5 tabular-nums">£{totalPay.toFixed(2)}</div>
+          <div className="text-lg font-black text-emerald-400 mt-0.5 tabular-nums">{cur()}{totalPay.toFixed(2)}</div>
           <div className="text-[10px] text-slate-500">incl. approved OT</div>
         </div>
         <div className={`bg-slate-900 border rounded-xl px-3 py-2.5 ${pendingApproval > 0 ? "border-amber-500/30" : "border-slate-800/60"}`}>
@@ -62965,8 +63000,8 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                     <div className="text-[10px] text-slate-500">{s.role}{s.isSalaried ? " · Salaried" : ""}</div>
                   </div>
                   <div className="text-right flex-shrink-0">
-                    <div className="text-base font-black text-emerald-400 tabular-nums">£{(s.totalPay||0).toFixed(2)}</div>
-                    {s.heldPay>0 && <div className="text-[10px] text-red-400 font-semibold tabular-nums" title="Pay for unapproved overtime — added once approved">+£{s.heldPay.toFixed(2)} held</div>}
+                    <div className="text-base font-black text-emerald-400 tabular-nums">{cur()}{(s.totalPay||0).toFixed(2)}</div>
+                    {s.heldPay>0 && <div className="text-[10px] text-red-400 font-semibold tabular-nums" title="Pay for unapproved overtime — added once approved">+{cur()}{s.heldPay.toFixed(2)} held</div>}
                     <div className="text-[10px] text-slate-500">{s.days} day{s.days===1?"":"s"}</div>
                   </div>
                 </div>
@@ -62991,7 +63026,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
               <span className="text-white text-sm">Week total</span>
               <div className="flex items-center gap-3">
                 <span className="text-white tabular-nums text-sm">{fmtDur(totalHours)}</span>
-                <span className="text-emerald-400 tabular-nums">£{totalPay.toFixed(2)}</span>
+                <span className="text-emerald-400 tabular-nums">{cur()}{totalPay.toFixed(2)}</span>
               </div>
             </div>
           </div>
@@ -63028,10 +63063,10 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                     {s.heldOtHours>0 && <span className="block text-[10px] text-red-400 font-semibold" title="Awaiting approval — not paid">+{fmtDur(s.heldOtHours)} held</span>}
                   </td>
                   <td className="px-3 py-2 text-right font-bold text-white tabular-nums">{fmtDur(s.totalHours)}</td>
-                  <td className="px-3 py-2 text-right text-slate-400 tabular-nums hidden md:table-cell">{s.isSalaried ? <span className="text-[10px] text-indigo-300">Salaried</span> : `£${(s.hourlyRate||0).toFixed(2)}`}</td>
+                  <td className="px-3 py-2 text-right text-slate-400 tabular-nums hidden md:table-cell">{s.isSalaried ? <span className="text-[10px] text-indigo-300">Salaried</span> : `${cur()}${(s.hourlyRate||0).toFixed(2)}`}</td>
                   <td className="px-3 py-2 text-right font-bold text-emerald-400 tabular-nums">
-                    £{(s.totalPay||0).toFixed(2)}
-                    {s.heldPay>0 && <span className="block text-[10px] text-red-400 font-semibold" title="Unapproved OT pay, held">+£{s.heldPay.toFixed(2)}</span>}
+                    {cur()}{(s.totalPay||0).toFixed(2)}
+                    {s.heldPay>0 && <span className="block text-[10px] text-red-400 font-semibold" title="Unapproved OT pay, held">+{cur()}{s.heldPay.toFixed(2)}</span>}
                   </td>
                 </tr>
               ))}
@@ -63044,7 +63079,7 @@ function TimeAttendanceView({ brands, stores, visibleStoreIds, opsTeam, schedule
                 <td className="px-3 py-2.5 text-right text-white tabular-nums hidden md:table-cell"></td>
                 <td className="px-3 py-2.5 text-right text-white tabular-nums">{fmtDur(totalHours)}</td>
                 <td className="px-3 py-2.5 hidden md:table-cell"></td>
-                <td className="px-3 py-2.5 text-right text-emerald-400 text-base tabular-nums">£{totalPay.toFixed(2)}</td>
+                <td className="px-3 py-2.5 text-right text-emerald-400 text-base tabular-nums">{cur()}{totalPay.toFixed(2)}</td>
               </tr>
             </tfoot>
           </table>
@@ -63271,7 +63306,7 @@ function PayBreakdown({ r, member }) {
 
   const fmtT = (iso) => iso ? new Date(iso).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"}) : "—";
   const fmtMin = (mins) => { const m = Math.round(Math.abs(mins)); const h = Math.floor(m/60); return h > 0 ? `${h}h ${String(m%60).padStart(2,"0")}m` : `${m}m`; };
-  const money = (n) => "£" + (Math.round((n || 0) * 100) / 100).toFixed(2);
+  const money = (n) => cur() + (Math.round((n || 0) * 100) / 100).toFixed(2);
   const sameTime = (a, b) => a && b && new Date(a).getTime() === new Date(b).getTime();
 
   // Schedule window (overnight-aware, same construction as the grace logic).
@@ -63806,7 +63841,7 @@ function AddManualHoursModal({ brands, stores = [], opsTeam, currentUser, onSave
         {hoursWorked !== null && (
           <div className="text-xs text-slate-600 px-1">
             Hours: <span className="text-white font-bold">{fmtHM(hoursWorked)}</span>
-            {member?.hourlyRate > 0 && <span className="ml-3">Pay: <span className="text-emerald-400 font-bold">£{(hoursWorked*member.hourlyRate).toFixed(2)}</span></span>}
+            {member?.hourlyRate > 0 && <span className="ml-3">Pay: <span className="text-emerald-400 font-bold">{cur()}{(hoursWorked*member.hourlyRate).toFixed(2)}</span></span>}
           </div>
         )}
         <div><label className={labelCls}>Notes</label>
@@ -63833,7 +63868,7 @@ function LoanApprovalsView({ currentUser, opsTeam = [] }) {
   const [declineModal, setDeclineModal] = useState(null);
   const [declineReason, setDeclineReason] = useState("");
 
-  const money = (n) => `£${(Number(n)||0).toFixed(2)}`;
+  const money = (n) => `${cur()}${(Number(n)||0).toFixed(2)}`;
   const empName = (id) => { const m = opsTeam.find(x=>x.id===id); return m ? `${m.firstName} ${m.lastName}`.trim() : "Employee"; };
   const empBrand = (id) => { const m = opsTeam.find(x=>x.id===id); return m?.brandId || null; };
 
@@ -64020,7 +64055,7 @@ function MyLoansView({ currentUser, opsTeam = [] }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  const money = (n) => `£${(Number(n)||0).toFixed(2)}`;
+  const money = (n) => `${cur()}${(Number(n)||0).toFixed(2)}`;
   const load = useCallback(async () => {
     setLoading(true);
     const [r, p, l] = await Promise.all([
@@ -64622,7 +64657,7 @@ function FleetFuelView({ currentUser }) {
           <div className="text-xs text-slate-500">Fuel-card control — driver logs, odometer trail, automatic flags</div>
         </div>
         <div className="flex items-center gap-2 text-xs">
-          <div className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300">This month: <b className="text-white">£{monthSpend.toFixed(2)}</b></div>
+          <div className="px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-300">This month: <b className="text-white">{cur()}{monthSpend.toFixed(2)}</b></div>
           <div className={`px-3 py-1.5 rounded-xl border ${flaggedCount ? "bg-amber-950/40 border-amber-700/50 text-amber-300" : "bg-slate-900 border-slate-800 text-slate-400"}`}>{flaggedCount} flagged</div>
         </div>
       </div>
@@ -64663,7 +64698,7 @@ function FleetFuelView({ currentUser }) {
                       <span><b className="text-slate-200">{Math.round(u.miles).toLocaleString()}</b> mi</span>
                       {u.litres != null && <span>{Math.round(u.litres)} L</span>}
                       {mpg != null && <span className={mpg < 20 ? "text-amber-400" : "text-emerald-400"}><b>{mpg.toFixed(1)}</b> mpg</span>}
-                      {ppm != null && <span>£{ppm.toFixed(2)}/mi</span>}
+                      {ppm != null && <span>{cur()}{ppm.toFixed(2)}/mi</span>}
                     </span>
                   </div>
                 );
@@ -64726,7 +64761,7 @@ function FleetFuelView({ currentUser }) {
                     <div className="min-w-0">
                       <div className="text-sm font-bold text-white">
                         <span style={{ fontFamily: "monospace" }}>{v?.reg || "?"}</span>
-                        {t.status === "complete" && <span className="font-normal text-slate-300"> · {t.litres}L · £{(t.amount || 0).toFixed(2)}</span>}
+                        {t.status === "complete" && <span className="font-normal text-slate-300"> · {t.litres}L · {cur()}{(t.amount || 0).toFixed(2)}</span>}
                         {t.status === "pending" && <span className="text-amber-400 text-xs font-semibold"> · in progress</span>}
                         {t.status === "expired" && <span className="text-red-400 text-xs font-semibold"> · never completed</span>}
                       </div>
@@ -64911,7 +64946,7 @@ function LogFuelModal({ driverId, driverName, onClose }) {
           <div className="text-center py-6 space-y-3">
             <div className="text-4xl">✅</div>
             <div className="text-base font-bold text-white">Fuel logged</div>
-            <div className="text-xs text-slate-400">{vehicle?.reg} · {litres}L · £{amount}</div>
+            <div className="text-xs text-slate-400">{vehicle?.reg} · {litres}L · {cur()}{amount}</div>
           </div>
           <button onClick={onClose} className="w-full py-3 rounded-2xl bg-slate-800 text-white text-sm font-bold">Done</button>
         </>)}
@@ -66578,7 +66613,7 @@ function PunchEditModal({ punch, memberName, storeName, onClose, onSave, onDelet
                 <div><div className="text-[10px] text-slate-500">Break</div><div className={`text-xs font-bold tabular-nums ${preview.breakEnforced ? "text-amber-400" : "text-slate-300"}`}>{preview.deducted}m</div></div>
                 <div><div className="text-[10px] text-slate-500">Payable</div><div className="text-xs font-bold text-emerald-300 tabular-nums">{fmtHrs(preview.netH)}</div></div>
               </div>
-              {rate > 0 && <div className="mt-1.5 text-[11px] text-slate-300 text-right">≈ £{preview.gross.toFixed(2)} @ £{rate.toFixed(2)}/hr</div>}
+              {rate > 0 && <div className="mt-1.5 text-[11px] text-slate-300 text-right">≈ {cur()}{preview.gross.toFixed(2)} @ {cur()}{rate.toFixed(2)}/hr</div>}
               {preview.breakEnforced && <div className="mt-1.5 text-[11px] text-amber-400">⏸ Minimum {preview.reqMin}m break auto-applied{preview.punched > 0 ? ` (only ${preview.punched}m was punched)` : " (no break punched)"}.</div>}
               {!preview.breakEnforced && preview.punched > 0 && <div className="mt-1.5 text-[11px] text-slate-500">{preview.punched}m break punched (meets the minimum).</div>}
               {preview.overnight && <div className="mt-1.5 text-[11px] text-sky-300">⏱ Overnight shift — clock-out is on the next day.</div>}
@@ -66745,7 +66780,7 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
     return { series, cur, prev, prevLabel:"prev day" };
   }, [labourView, dayStr, storeSel, punchRecords, schedules, opsTeam]);
 
-  const fmtMoney = (n) => `£${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:0,maximumFractionDigits:0})}`;
+  const fmtMoney = (n) => `${cur()}${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:0,maximumFractionDigits:0})}`;
 
   // ── Store → Department → Time labour breakdown (for the selected day) ────────
   const labourBreakdown = useMemo(() => {
@@ -67051,7 +67086,7 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
             <ComposedChart data={labour.series} margin={{ top:5, right:5, left:-10, bottom:0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1e293b"/>
               <XAxis dataKey="label" tick={{ fontSize:10, fill:"#64748b" }} interval="preserveStartEnd"/>
-              <YAxis tick={{ fontSize:10, fill:"#64748b" }} tickFormatter={v=>`£${v}`}/>
+              <YAxis tick={{ fontSize:10, fill:"#64748b" }} tickFormatter={v=>`${cur()}${v}`}/>
               <Tooltip content={<ChartTooltip/>}/>
               <Bar dataKey="actual" name="Actual labour" fill="#844429" radius={[4,4,0,0]}/>
               {labourView!=="hourly" && <Line dataKey="scheduled" name="Scheduled labour" stroke="#C9854F" strokeWidth={2} dot={false}/>}
@@ -67780,7 +67815,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: DASHSCOPE 2026-09-11a");
+      console.log("CB build: UAE 2026-09-11b (currency, tz chart, channels, dashscope)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -68473,6 +68508,12 @@ export default function App() {
     return "UK";
   })();
   setActiveRegion(activeRegion);
+  // CURRENCY 2026-09-11a: currency follows the brand in scope
+  setActiveCurrency((() => {
+    if (regionalScope) { for (const id of regionalScope.brandIds) { const c = (brandsAll.find(b => b.id === id) || {}).currency; if (c) return c; } }
+    if (selectedEntityBrand && selectedEntityBrand !== "finance") return (brandsAll.find(b => b.id === selectedEntityBrand) || {}).currency || "GBP";
+    return "GBP";
+  })());
   // One line in the console per change, so a "still sees everything" report can
   // be diagnosed without guessing: is the regional fence on, which role/scope
   // resolved, how many brands survived.
