@@ -33405,10 +33405,17 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
   // Some features (COGS, Prime Cost, Net Margin) only work for ONE store. This
   // is the single selected id, or null when "all"/multiple are selected.
   const singleStoreId = useMemo(() => (selectedIds && selectedIds.length === 1) ? selectedIds[0] : null, [selectedIds]);
-  const scopedStores = useMemo(
-    () => selectedIds === null ? allStores : allStores.filter(s => selectedIds.includes(s.id)),
-    [allStores, selectedIds]
-  );
+  // DASHSCOPE 2026-09-11a: a selection that names no visible store (e.g. seven UK
+  // ids remembered while viewing the UAE entity) must not zero the dashboard —
+  // fall back to every visible store instead.
+  const scopedStores = useMemo(() => {
+    if (selectedIds === null) return allStores;
+    const hit = allStores.filter(s => selectedIds.includes(s.id));
+    return hit.length ? hit : allStores;
+  }, [allStores, selectedIds]);
+  useEffect(() => {
+    if (selectedIds && allStores.length && !allStores.some(s => selectedIds.includes(s.id))) setStoreId("all");
+  }, [selectedIds, allStores]);
   const scopedStoreIds = useMemo(() => new Set(scopedStores.map(s => s.id)), [scopedStores]);
   const brandOfStore = useMemo(() => { const m={}; allStores.forEach(s=>{m[s.id]=s.brandId;}); return m; }, [allStores]);
 
@@ -67773,7 +67780,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: REGION 2026-09-10d");
+      console.log("CB build: DASHSCOPE 2026-09-11a");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -68466,6 +68473,15 @@ export default function App() {
     return "UK";
   })();
   setActiveRegion(activeRegion);
+  // One line in the console per change, so a "still sees everything" report can
+  // be diagnosed without guessing: is the regional fence on, which role/scope
+  // resolved, how many brands survived.
+  useEffect(() => {
+    if (!currentUser) return;
+    console.log("CB scope:", { user: currentUser.email, builtIn: currentUser.role, matrixRole: currentUserRole.matrixRole,
+      roleScope: currentUserRole.scope, regional: !!regionalScope, region: activeRegion,
+      brands: brands.map(b => b.id), stores: stores.length, opsMember: !!(opsTeamAll || []).find(m => m.id === (currentUser.opsTeamMemberId || currentUser.id)) });
+  }, [currentUser?.id, currentUserRole.matrixRole, currentUserRole.scope, !!regionalScope, activeRegion, brands.length, stores.length]); // eslint-disable-line react-hooks/exhaustive-deps
   const opsTeam = useMemo(() => !regionalScope ? opsTeamAll
     : opsTeamAll.filter(m => regionalScope.brandIds.has(m.brandId) || (m.storeIds || []).some(id => regionalScope.storeIds.has(id))),
     [opsTeamAll, regionalScope]);
