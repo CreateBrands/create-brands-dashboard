@@ -1,5 +1,5 @@
 // petpooja-sync — pulls Dubai sales from the Petpooja billing portal into flipdish_sales.
-// PETPOOJA 2026-09-11g — status column (PAID / CANCELLED / REFUNDED)
+// PETPOOJA 2026-09-11h — trading day rolls at 04:00 Dubai
 //
 // How it works (discovered from the portal's own network traffic, like the RMS sync):
 //   1. POST https://billing.petpooja.com/  header_changed_rest_id=<id>   -> selects the outlet for the session
@@ -22,6 +22,13 @@ const BASE = "https://billing.petpooja.com";
 const BRAND_ID = "chocoberry-uae";
 const CURRENCY = "AED";
 const TZ_OFFSET = "+04:00"; // Asia/Dubai, no DST
+// Trading day rolls over at this hour (Dubai time): bills before it belong to the previous day,
+// which is how Petpooja's own daily summaries count them.
+const DAY_CLOSE_HOUR = 4;
+function businessDateOf(isoDubai: string): string {
+  const [d, t] = isoDubai.split("T"); const h = parseInt(t.slice(0, 2), 10);
+  return h < DAY_CLOSE_HOUR ? addDays(d, -1) : d;
+}
 
 // Petpooja restaurant id -> dashboard store
 const OUTLETS: Record<string, { storeId: string; name: string }> = {
@@ -231,7 +238,7 @@ function buildSales(restId: string, bills: Row[], lines: Row[]) {
       property_name: outlet.name,
       channel: channelOf(b),
       sale_time: when,
-      business_date: when.slice(0, 10),
+      business_date: businessDateOf(when),
       amount_subtotal: num(pick(b, "My Amount (Rs.)", "My Amount")),
       amount_discount: num(pick(b, "Discount (Rs.)", "Discount")),
       amount_tax: num(pick(b, "Total Tax (Rs.)", "Total Tax")),
@@ -264,7 +271,7 @@ Deno.serve(async (req) => {
   const sb = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
   let body: any = {}; try { body = await req.json(); } catch { /* no body */ }
   const today = dubaiToday();
-  const from = body.fromDate || addDays(today, -1);
+  const from = body.fromDate || addDays(today, -2);
   const to = body.toDate || today;
   const dry = !!body.dry;
 
