@@ -1,5 +1,5 @@
 // petpooja-sync — pulls Dubai sales from the Petpooja billing portal into flipdish_sales.
-// PETPOOJA 2026-09-11h — trading day rolls at 04:00 Dubai
+// PETPOOJA 2026-09-11j — channel = platform name (Talabat/Deliveroo/Keeta/... or POS)
 //
 // How it works (discovered from the portal's own network traffic, like the RMS sync):
 //   1. POST https://billing.petpooja.com/  header_changed_rest_id=<id>   -> selects the outlet for the session
@@ -177,16 +177,26 @@ function pick(row: Row, ...cands: string[]): any {
   return undefined;
 }
 
+// Channel = the sales source, named the way the UK rows name theirs (POS, UberEats, Deliveroo...),
+// so the dashboard's revenue breakdown splits Dubai by platform with no reporting changes.
+const PLATFORMS: [RegExp, string][] = [
+  [/talabat/i, "Talabat"], [/deliveroo/i, "Deliveroo"], [/keeta/i, "Keeta"], [/noon/i, "Noon"],
+  [/careem/i, "Careem"], [/zomato/i, "Zomato"], [/smiles/i, "Smiles"], [/instashop/i, "InstaShop"],
+  [/uber/i, "UberEats"],
+];
+function platformOf(b: Row): string | null {
+  const t = [pick(b, "Area"), pick(b, "sub_order_type"), pick(b, "Order Type"), pick(b, "Payment Description")]
+    .map(x => String(x ?? "")).join(" | ");
+  for (const [re, name] of PLATFORMS) if (re.test(t)) return name;
+  return null;
+}
 function channelOf(b: Row): string {
+  const p = platformOf(b);
+  if (p) return p;
   const t = [pick(b, "Order Type"), pick(b, "Area"), pick(b, "sub_order_type"), pick(b, "Payment Type")]
     .map(x => String(x ?? "").toLowerCase()).join(" | ");
-  if (/talabat|deliveroo|noon|careem|zomato|swiggy|smiles|instashop|online order|web|app\b/.test(t)) return "online";
-  return "pos";
-}
-function platformOf(b: Row): string | null {
-  const t = [pick(b, "Area"), pick(b, "sub_order_type")].map(x => String(x ?? "")).join(" ");
-  const m = t.match(/talabat|deliveroo|noon|careem|zomato|swiggy|smiles|instashop/i);
-  return m ? m[0] : null;
+  if (/online order|web|\bapp\b/.test(t)) return "Online";
+  return "POS";
 }
 
 function buildSales(restId: string, bills: Row[], lines: Row[]) {
