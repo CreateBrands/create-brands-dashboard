@@ -4147,6 +4147,32 @@ export async function addEmployeeCertification({
   return data ? dbCertificationToApp(data) : dbCertificationToApp(row);
 }
 
+// EXPIRY 2026-09-14a — chain-wide expiry roll-up for the Team view. Returns
+// every live certification/document record (visa, health card, GHP, food
+// hygiene…) for the given members that has already expired or expires within
+// `horizonDays`. Cheap: one indexed range query, no per-member fan-out.
+export async function fetchExpiringCertifications(employeeIds, horizonDays = 90) {
+  const ids = (employeeIds || []).filter(Boolean);
+  if (!ids.length) return [];
+  const horizon = new Date(); horizon.setDate(horizon.getDate() + horizonDays);
+  const until = horizon.toISOString().slice(0, 10);
+  const out = [];
+  // .in() with hundreds of ids is fine for PostgREST but keep chunks modest.
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data, error } = await supabase
+      .from("employee_certifications")
+      .select("*")
+      .in("employee_id", ids.slice(i, i + 200))
+      .is("archived_at", null)
+      .not("expires_date", "is", null)
+      .lte("expires_date", until)
+      .order("expires_date", { ascending: true });
+    if (error) throw error;
+    out.push(...(data || []).map(dbCertificationToApp));
+  }
+  return out;
+}
+
 // Partial update — only fields explicitly in `patch` are written. Used for
 // editing typos (per Q5=b). Same RLS-tolerant pattern as updateOpsTeamMember.
 export async function updateEmployeeCertification(id, patch) {
@@ -7909,23 +7935,27 @@ export async function clearStoreItemOverride(storeId, itemId) {
 }
 
 // scope: 'store' | 'ck'
+// UAEINV 2026-09-15a — these four wrote through the raw client, so an item
+// added/edited/deleted from the UAE inventory screen was stamped region 'UK'
+// (default) and vanished from the UAE list, and a wipe-import would have
+// cleared BOTH regions' catalogues. rfrom() region-stamps and region-filters.
 export async function addInventoryItem(scope, patch) {
   const table = scope === "ck" ? "cogs_ck_items" : "cogs_store_items";
   const body = _invBody(patch, scope);
   if (!body.name) body.name = "New item";
-  const { data, error } = await supabase.from(table).insert(body).select().single();
+  const { data, error } = await rfrom(table).insert(body).select().single();
   if (error) throw error;
   return _invMap(data);
 }
 export async function updateInventoryItem(scope, id, patch) {
   const table = scope === "ck" ? "cogs_ck_items" : "cogs_store_items";
   const body = _invBody(patch, scope); body.updated_at = new Date().toISOString();
-  const { error } = await supabase.from(table).update(body).eq("id", id);
+  const { error } = await rfrom(table).update(body).eq("id", id);
   if (error) throw error;
 }
 export async function deleteInventoryItem(scope, id) {
   const table = scope === "ck" ? "cogs_ck_items" : "cogs_store_items";
-  const { error } = await supabase.from(table).delete().eq("id", id);
+  const { error } = await rfrom(table).delete().eq("id", id);
   if (error) throw error;
 }
 
@@ -7934,7 +7964,7 @@ export async function deleteInventoryItem(scope, id) {
 export async function bulkAddInventory(scope, rows, wipe = false) {
   const table = scope === "ck" ? "cogs_ck_items" : "cogs_store_items";
   if (wipe) {
-    const { error: delErr } = await supabase.from(table).delete().neq("id", 0);
+    const { error: delErr } = await rfrom(table).delete().neq("id", 0);
     if (delErr) throw delErr;
   }
   const bodies = rows.map(r => {
@@ -7946,7 +7976,7 @@ export async function bulkAddInventory(scope, rows, wipe = false) {
   let inserted = 0;
   for (let i = 0; i < bodies.length; i += 500) {
     const chunk = bodies.slice(i, i + 500);
-    const { error } = await supabase.from(table).insert(chunk);
+    const { error } = await rfrom(table).insert(chunk);
     if (error) throw error;
     inserted += chunk.length;
   }
