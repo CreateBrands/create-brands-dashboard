@@ -67948,7 +67948,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: UAE 2026-09-11d (tz analytics, currency stragglers, DSR pax/channels/sub-brands)");
+      console.log("CB build: REGIONAL 2026-09-16a (finance lists fenced)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -68004,7 +68004,7 @@ export default function App() {
   const [payPeriods, setPayPeriods] = useState([]);
   const [payPeriodLocations, setPayPeriodLocations] = useState([]);
   const [paySchedule, setPaySchedule] = useState(null);
-  const [bankTransactions, setBankTransactions] = useState([]);
+  const [bankTransactionsAll, setBankTransactions] = useState([]);
   const importBankTxns = useCallback(async (rows) => {
     const res = await insertBankTransactions(rows);
     const fresh = await fetchBankTransactions();
@@ -68038,7 +68038,7 @@ export default function App() {
   const [entitiesAll, setEntities] = useState([]);
   const [cashSources, setCashSources] = useState([]);
   const [cashExpenseTypes, setCashExpenseTypes] = useState([]);
-  const [cashLedger, setCashLedger] = useState([]);
+  const [cashLedgerAll, setCashLedger] = useState([]);
   const reloadCash = useCallback(async () => {
     try {
       const [accs, srcs, exps, led, ents] = await Promise.all([fetchCashAccounts(), fetchCashSources(), fetchCashExpenseTypes(), fetchCashLedger(), fetchEntities().catch(()=>[])]);
@@ -68052,7 +68052,7 @@ export default function App() {
   useEffect(() => { (async () => { try { const s = await fetchAppSettings(); setPettyTarget(Number(s?.petty_cash_target) || 0); } catch(e){} })(); }, []);
 
   // ── Expense claims (submit → approve → reconcile vs cash/bank) ──────────────
-  const [expenseClaims, setExpenseClaims] = useState([]);
+  const [expenseClaimsAll, setExpenseClaims] = useState([]);
   const [expTypeAccounts, setExpTypeAccounts] = useState({}); // {typeId:[{accountKind,accountId}]}
   const [memberExpAccounts, setMemberExpAccounts] = useState({}); // {memberId:[...]}
   const [expExcludedStores, setExpExcludedStores] = useState([]); // [storeId]
@@ -68668,6 +68668,30 @@ export default function App() {
     : bankAccountsAll.filter(a => regionalScope.brandIds.has(a.entityId) || regionalScope.storeIds.has(a.storeId)), [bankAccountsAll, regionalScope]);
   const cashAccounts = useMemo(() => !regionalScope ? cashAccountsAll
     : cashAccountsAll.filter(a => regionalScope.brandIds.has(a.entityId) || regionalScope.storeIds.has(a.storeId)), [cashAccountsAll, regionalScope]);
+  // REGIONAL 2026-09-16a: the finance TRANSACTION lists follow the fence too —
+  // a claim/transaction is in scope if it belongs to a store in scope, an account in
+  // scope, or was submitted by someone in scope. Non-regional sessions unchanged.
+  const regionalAccountIds = useMemo(() => new Set([...bankAccounts.map(a => a.id), ...cashAccounts.map(a => a.id)]), [bankAccounts, cashAccounts]);
+  const regionalMemberIds = useMemo(() => new Set(opsTeam.map(m => m.id)), [opsTeam]);
+  const expenseClaims = useMemo(() => {
+    if (!regionalScope) return expenseClaimsAll;
+    const inScope = (c) => (c.storeId && regionalScope.storeIds.has(c.storeId))
+      || (c.cashAccountId && regionalAccountIds.has(c.cashAccountId))
+      || (c.submittedById && regionalMemberIds.has(c.submittedById))
+      || (c.paidAccountId && regionalAccountIds.has(c.paidAccountId));
+    const keep = new Set(expenseClaimsAll.filter(inScope).map(c => c.id));
+    // keep a split parent whenever one of its children is in scope, and vice versa
+    // split claims are grouped by the shared receipt image: keep the whole group if any part is in scope
+    const keptReceipts = new Set(expenseClaimsAll.filter(c => keep.has(c.id) && c.receiptUrl).map(c => c.receiptUrl));
+    expenseClaimsAll.forEach(c => { if (c.receiptUrl && keptReceipts.has(c.receiptUrl)) keep.add(c.id); });
+    return expenseClaimsAll.filter(c => keep.has(c.id));
+  }, [expenseClaimsAll, regionalScope, regionalAccountIds, regionalMemberIds]);
+  const bankTransactions = useMemo(() => !regionalScope ? bankTransactionsAll
+    : bankTransactionsAll.filter(t => regionalAccountIds.has(t.accountId) || (t.storeId && regionalScope.storeIds.has(t.storeId))),
+    [bankTransactionsAll, regionalScope, regionalAccountIds]);
+  const cashLedger = useMemo(() => !regionalScope ? cashLedgerAll
+    : cashLedgerAll.filter(t => regionalAccountIds.has(t.fromAccountId) || regionalAccountIds.has(t.toAccountId) || (t.storeId && regionalScope.storeIds.has(t.storeId))),
+    [cashLedgerAll, regionalScope, regionalAccountIds]);
 
   // Resolve the configured default scope for the current user into store ids.
   // The config can include store ids, facility stores, brand entities
