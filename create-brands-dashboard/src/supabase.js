@@ -18837,3 +18837,10 @@ export async function reorderPayrollList(items) {
   const { error } = await supabase.rpc("reorder_payroll_list", { p_items: items });
   if (error) throw error;
 }
+
+// DSR 2026-09-11a — daily sales report (UAE), computed in Postgres
+export async function fetchDailySalesReport(storeId, date) {
+  const { data, error } = await supabase.rpc("daily_sales_report", { p_store_id: storeId, p_date: date });
+  if (error) throw error;
+  return data;
+}
