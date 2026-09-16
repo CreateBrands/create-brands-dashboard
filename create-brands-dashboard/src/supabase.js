@@ -18837,4 +18837,3 @@ export async function reorderPayrollList(items) {
   const { error } = await supabase.rpc("reorder_payroll_list", { p_items: items });
   if (error) throw error;
 }
-C:\Users\conta\Downloads\supabase_append.js:export async function fetchDailySalesReport(storeId, date) {
