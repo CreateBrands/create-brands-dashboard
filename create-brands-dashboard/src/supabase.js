@@ -15356,8 +15356,20 @@ export async function agentPhrase({ system, prompt, fallback }) {
 // ── ORDERING ASSISTANT ──────────────────────────────────────────────────────
 // Deterministic demand forecast per item from a customer's order history, compared
 // to live stock, producing draft PO lines. All maths here in code; no LLM numbers.
+// ORDERBOT 2026-09-19a — rewritten after the 18 Sep incident: five confirmed
+// SOs of 122–147 lines / £15–21k each were created in 15 seconds by approving
+// Inbox suggestions. Three causes, all fixed here:
+//  1. the draft subtracted WAREHOUSE availability from the store's forecast and
+//     treated "not in the snapshot" as 0, so every item the store had ever
+//     ordered came out as a full-forecast shortfall;
+//  2. Math.ceil turned a one-off "2 units in 8 orders" into 1 per order, so
+//     one-offs never dropped out of the list;
+//  3. approval wrote the SO straight to `confirmed` (committing stock and
+//     printing a warehouse ticket) with no size check.
 export function forecastItemDemand(orderHistory, { lookbackOrders = 8 } = {}) {
-  // Simple, explainable baseline: average qty per recent order, per item.
+  // Average qty per recent order, per item. An item must appear in at least
+  // two of the recent orders (or the only order, when history is that short)
+  // and average at least half a unit to count as regular demand.
   const recent = (orderHistory || []).slice(0, lookbackOrders);
   const totals = new Map(); // itemId -> { sum, orders }
   recent.forEach(o => {
@@ -15368,38 +15380,57 @@ export function forecastItemDemand(orderHistory, { lookbackOrders = 8 } = {}) {
       totals.set(l.itemId, cur);
     });
   });
-  const out = new Map(); // itemId -> forecast qty (avg per order, rounded up)
-  totals.forEach((v, id) => { out.set(id, Math.ceil(v.sum / recent.length)); });
+  const minOrders = recent.length >= 2 ? 2 : 1;
+  const out = new Map(); // itemId -> forecast qty (avg per order, rounded)
+  totals.forEach((v, id) => {
+    if (v.orders < minOrders) return;
+    const avg = v.sum / recent.length;
+    const q = Math.round(avg);
+    if (q >= 1) out.set(id, q);
+  });
   return out; // Map itemId -> expected qty next order
 }
 
-// Build draft order lines: forecast demand minus what's already available.
+// Build draft order lines: forecast demand minus what the STORE already holds
+// (dist_item_store_stock.stock_in_hand, where a count exists). Warehouse stock
+// is irrelevant to what a store needs and is no longer consulted.
 export async function buildOrderingDraft({ customerId }) {
-  const [orders, stock, catalogue] = await Promise.all([
+  const [orders, catalogue, contact] = await Promise.all([
     fetchDistSalesOrders({ customerId }).catch(() => []),
-    fetchDistStockSnapshot().catch(() => []),
     fetchDistPortalCatalogue(customerId).catch(() => []),
+    supabase.from("dist_contacts").select("store_id").eq("id", customerId).maybeSingle().then(r => r.data).catch(() => null),
   ]);
-  const valid = (orders || []).filter(o => o.status !== "cancelled");
+  // Only real store orders inform the forecast — never the assistant's own
+  // output, or one bad suggestion feeds the next.
+  const valid = (orders || []).filter(o => o.status !== "cancelled" && !/Ordering Assistant/i.test(o.note || ""));
   const demand = forecastItemDemand(valid);
-  const stockById = new Map((stock || []).map(s => [s.id, s]));
+  const storeStock = new Map();
+  if (contact?.store_id) {
+    const { data } = await supabase.from("dist_item_store_stock")
+      .select("item_id, stock_in_hand").eq("store_id", contact.store_id);
+    (data || []).forEach(r => { if (r.stock_in_hand != null) storeStock.set(r.item_id, Number(r.stock_in_hand) || 0); });
+  }
   const catById = new Map((catalogue || []).map(c => [c.id, c]));
   const lines = [];
   demand.forEach((qty, itemId) => {
-    const st = stockById.get(itemId);
-    const available = st ? Number(st.available) || 0 : 0;
-    const gap = Math.max(0, qty - available);          // only order the shortfall
+    const cat = catById.get(itemId);
+    if (!cat) return;                                   // not orderable by this store any more
+    const inHand = storeStock.has(itemId) ? storeStock.get(itemId) : null;
+    const gap = inHand == null ? qty : Math.max(0, qty - inHand);
     if (gap <= 0) return;
-    const cat = catById.get(itemId) || st || {};
     lines.push({
-      itemId, name: cat.name || st?.name || itemId, forecast: qty, available,
-      qty: gap, unitPrice: Number(cat.price != null ? cat.price : st?.sellRate) || 0,
-      taxRateId: cat.taxRateId || st?.taxRateId || null,
+      itemId, name: cat.name || itemId, forecast: qty, available: inHand == null ? "?" : inHand,
+      qty: gap, unitPrice: Number(cat.price) || 0, taxRateId: cat.taxRateId || null,
     });
   });
   lines.sort((a, b) => b.qty - a.qty);
   const estValue = lines.reduce((s, l) => s + l.qty * l.unitPrice, 0);
-  return { customerId, lines, estValue, basisOrders: valid.length };
+  // Sanity signal for the Inbox card: how this compares with the store's own
+  // recent order values.
+  const recentValues = valid.slice(0, 8).map(o => (o.lines || []).reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0)).filter(v => v > 0);
+  const typicalValue = recentValues.length ? recentValues.reduce((a, b) => a + b, 0) / recentValues.length : 0;
+  const oversized = typicalValue > 0 && estValue > typicalValue * 2;
+  return { customerId, lines, estValue, basisOrders: valid.length, typicalValue, oversized };
 }
 
 // Run the Ordering Assistant for a customer: build draft, phrase a note, post to Inbox.
@@ -15415,7 +15446,7 @@ export async function runOrderingAssistant({ customerId, customerName, createdBy
   });
   return createAgentTask({
     agent: "ordering", kind: "draft_order", customerId,
-    title: `Suggested order: ${customerName || "store"} — ${draft.lines.length} items, ${agentGbp(draft.estValue)}`,
+    title: `${draft.oversized ? "⚠ Unusually large — " : ""}Suggested order: ${customerName || "store"} — ${draft.lines.length} items, ${agentGbp(draft.estValue)}${draft.typicalValue ? ` (store usually ~${agentGbp(draft.typicalValue)})` : ""}`,
     body, severity: "action", payload: { lines: draft.lines, estValue: draft.estValue, basisOrders: draft.basisOrders },
     savings: null, createdBy: createdBy || "agent",
   });
@@ -15428,9 +15459,13 @@ export async function approveOrderingTask(task, { reviewedBy } = {}) {
     discount: 0, discountType: "percent",
   })).filter(l => l.itemId && l.qty > 0);
   if (!lines.length) throw new Error("This draft has no orderable lines.");
+  // Approving a suggestion now lands it as PENDING APPROVAL in the Dist Sales
+  // Orders screen — someone still has to open it, see the lines, and confirm.
+  // It commits no stock and prints no ticket until then.
   const soId = await createDistSalesOrder({
-    customerId: task.customerId, status: "confirmed", orderDate: new Date().toISOString().slice(0, 10),
-    vatMode: "exclusive", createdBy: reviewedBy || "agent", note: "Created from Ordering Assistant suggestion",
+    customerId: task.customerId, status: "pending_approval", orderDate: new Date().toISOString().slice(0, 10),
+    vatMode: "exclusive", createdBy: reviewedBy || "agent", placedBy: reviewedBy ? `${reviewedBy} (via Ordering Assistant)` : "Ordering Assistant",
+    note: "Created from Ordering Assistant suggestion — review lines before confirming",
   }, lines);
   await updateAgentTaskStatus(task.id, "approved", { reviewedBy, resultRef: soId });
   return soId;
@@ -18836,11 +18871,4 @@ export async function deletePayrollSeparator(id) {
 export async function reorderPayrollList(items) {
   const { error } = await supabase.rpc("reorder_payroll_list", { p_items: items });
   if (error) throw error;
-}
-
-// DSR 2026-09-11a — daily sales report (UAE), computed in Postgres
-export async function fetchDailySalesReport(storeId, date) {
-  const { data, error } = await supabase.rpc("daily_sales_report", { p_store_id: storeId, p_date: date });
-  if (error) throw error;
-  return data;
 }
