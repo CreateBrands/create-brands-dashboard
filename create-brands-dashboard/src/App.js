@@ -163,7 +163,7 @@ import {
   fetchDistTaxRates, fetchDistContacts, upsertDistContact,
   fetchDistItems, upsertDistItem, deleteDistItem, previewDeleteInactiveDistItems, bulkDeleteInactiveDistItems, fetchStoreItemTags, setStoreItemTag, fetchStoreItemStock, saveStoreItemStock, computeStoreItemUsage, computeStoreItemConsumption, computeStoreItemConsumptionV2, fetchDistBatches, createDistBatch,
   PACKORDER_STAGES, PACKSHIP_STAGES, fetchPackagingOrders, fetchPackagingOrderDetail, upsertPackagingOrder, deletePackagingOrder,
-  upsertPackagingLine, deletePackagingLine, upsertPackagingShipment, deletePackagingShipment, receivePackagingShipment,
+  upsertPackagingLine, deletePackagingLine, upsertPackagingShipment, deletePackagingShipment, receivePackagingShipment, unreceivePackagingShipment,
   addPackagingPayment, deletePackagingPayment, computePackLineStatus, fetchPackagingDashboard,
   fetchDistMovements, addDistMovement, seedDistOpeningStock, computeDistOnHandBefore,
   computeDistOnHand, computeDistBatchOnHand, fetchDistStockSnapshot,
@@ -14480,7 +14480,10 @@ function PackagingOrderDetail({ orderId, currentUser, onBack }) {
   return (
     <div className="space-y-4">
       {toast && <div className={`fixed bottom-6 right-6 z-[60] px-5 py-3 rounded-2xl text-sm font-semibold shadow-2xl ${toast.t==="error"?"bg-red-600":"bg-emerald-600"} text-white`}>{toast.m}</div>}
-      <button onClick={onBack} className="text-xs text-slate-400 hover:text-white flex items-center gap-1"><ChevronLeft size={14}/> All packaging orders</button>
+      <div className="flex items-center justify-between gap-2">
+        <button onClick={onBack} className="text-xs text-slate-400 hover:text-white flex items-center gap-1"><ChevronLeft size={14}/> All packaging orders</button>
+        <button onClick={async()=>{ if(!window.confirm("Delete this whole packaging order — lines, shipments and payments? Any received stock is reversed out of inventory first. This cannot be undone.")) return; try { await deletePackagingOrder(orderId); onBack?.(); } catch(e){ flash(e.message,"error"); } }} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-500 hover:text-red-400 text-xs font-semibold flex items-center gap-1"><Trash2 size={12}/> Delete order</button>
+      </div>
 
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
         <div className="flex items-start gap-3">
@@ -14579,7 +14582,9 @@ function PackagingOrderDetail({ orderId, currentUser, onBack }) {
                 <div className="text-[10px] text-slate-600 mt-1">{sh.shippedDate?`shipped ${sh.shippedDate}`:""}{sh.etaDate?` · ETA ${sh.etaDate}`:""}{sh.receivedDate?` · received ${sh.receivedDate}`:""}</div>
                 <div className="flex gap-2 mt-2.5">
                   {sh.stage!=="received" && <button onClick={async()=>{ if(!window.confirm("Mark this shipment received? This adds its quantities to distribution inventory.")) return; try { const r = await receivePackagingShipment({ shipmentId: sh.id, receivedBy: currentUser?.name }); flash(`Received — ${r.posted.length} item line(s) added to inventory`); load(); } catch(e){ flash(e.message,"error"); } }} className="flex-1 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold">✓ Mark received (adds to inventory)</button>}
+                  {sh.stage==="received" && <button onClick={async()=>{ if(!window.confirm("Undo this receipt? Its quantities will be taken back out of distribution inventory and the shipment goes back to 'At Destination'.")) return; try { const r = await unreceivePackagingShipment({ shipmentId: sh.id, by: currentUser?.name }); flash(`Receipt undone — ${r.reversed} movement${r.reversed===1?"":"s"} reversed`); load(); } catch(e){ flash(e.message,"error"); } }} className="px-3 py-1.5 rounded-lg bg-amber-600/20 border border-amber-600/40 text-amber-300 text-xs font-semibold hover:bg-amber-600/30">Undo receipt</button>}
                   <button onClick={()=>setShipModal(sh)} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700">Edit</button>
+                  <button onClick={async()=>{ if(!window.confirm(sh.stage==="received" ? "Delete this shipment? Its received stock will be reversed out of inventory first." : "Delete this shipment?")) return; try { await deletePackagingShipment(sh.id); flash("Shipment deleted"); load(); } catch(e){ flash(e.message,"error"); } }} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-500 hover:text-red-400 text-xs font-semibold">Delete</button>
                 </div>
               </div>
             );
@@ -68725,7 +68730,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: PRICEWATCH 2026-09-20b (Price Watch in Warehouse reports) + SALESITEM 2026-09-20a");
+      console.log("CB build: PACKUNDO 2026-09-20a (packaging undo/delete) + PRICEWATCH 20b + SALESITEM 20a");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:

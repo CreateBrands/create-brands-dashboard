@@ -16450,6 +16450,9 @@ export async function upsertPackagingOrder(order) {
   return mapPackOrder(data);
 }
 export async function deletePackagingOrder(orderId) {
+  // PACKUNDO 2026-09-20a: received shipments give their stock back first.
+  const { data: ships } = await supabase.from("packaging_shipments").select("id, stage").eq("order_id", orderId);
+  for (const sh of (ships || []).filter(x => x.stage === "received")) await unreceivePackagingShipment({ shipmentId: sh.id });
   // Cascade children first (no FK cascade assumed).
   await supabase.from("packaging_payments").delete().eq("order_id", orderId);
   await supabase.from("packaging_shipments").delete().eq("order_id", orderId);
@@ -16486,6 +16489,9 @@ export async function upsertPackagingShipment(ship) {
   return mapPackShipment(data);
 }
 export async function deletePackagingShipment(id) {
+  // PACKUNDO 2026-09-20a: a received shipment gives its stock back before it goes.
+  const { data: sh } = await supabase.from("packaging_shipments").select("stage").eq("id", id).maybeSingle();
+  if (sh && sh.stage === "received") await unreceivePackagingShipment({ shipmentId: id });
   const { error } = await supabase.from("packaging_shipments").delete().eq("id", id);
   if (error) throw error;
 }
@@ -16527,6 +16533,29 @@ export async function receivePackagingShipment({ shipmentId, receivedBy }) {
     .eq("id", shipmentId).select().single();
   if (error) throw error;
   return { shipment: mapPackShipment(data), posted };
+}
+
+// PACKUNDO 2026-09-20a: undo a received shipment — one receipt_reversal per
+// receipt movement it posted (idempotent by ref), then put the shipment back
+// to its last in-transit stage so it can be received again or edited/deleted.
+export async function unreceivePackagingShipment({ shipmentId, by, backTo = "at_destination" }) {
+  const { data: recs } = await supabase.from("dist_stock_movements").select("*")
+    .eq("source_kind", "packaging_order").like("source_ref", `packorder:${shipmentId}:%`);
+  let reversed = 0;
+  for (const r of recs || []) {
+    const qty = Number(r.qty) || 0;
+    if (qty <= 0) continue;
+    const mv = await addDistMovement({
+      itemId: r.item_id, batchId: r.batch_id, qty: -qty, type: "receipt_reversal",
+      sourceKind: "packaging_reversal", sourceRef: `packorderREV:${shipmentId}:${r.id}`, createdBy: by || "System",
+    });
+    if (mv) reversed++;
+  }
+  const { data, error } = await supabase.from("packaging_shipments")
+    .update({ stage: backTo, received_date: null, received_at: null })
+    .eq("id", shipmentId).select().single();
+  if (error) throw error;
+  return { shipment: mapPackShipment(data), reversed };
 }
 
 export async function addPackagingPayment(pay) {
