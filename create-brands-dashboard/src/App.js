@@ -14736,6 +14736,7 @@ function DistReportsView() {
     { key: "creditors", label: "Aged Creditors" },
     { key: "pnl", label: "P&L" },
     { key: "reorder", label: "Reorder" },
+    { key: "sales-items", label: "Sales by Item" },   // SALESITEM 2026-09-20a
   ];
   return (
     <div className="space-y-4">
@@ -14748,6 +14749,7 @@ function DistReportsView() {
       {tab === "creditors" && <DistAgedReport kind="creditors"/>}
       {tab === "pnl" && <DistPnLReport/>}
       {tab === "reorder" && <DistReorderReport/>}
+      {tab === "sales-items" && <DistSalesByItemReport/>}
     </div>
   );
 }
@@ -14850,6 +14852,176 @@ async function runStockLedgerTest({ itemA, itemB, customerId, keep = false, purg
   }
   console.table(results);
   return { results, created };
+}
+
+// ─── SALESITEM 2026-09-20a: Warehouse → Reports → Sales by Item ─────────────
+// Units of each warehouse item sold, grouped by store (customer). Sources:
+// sales orders at confirmed or later (drafts, pending and cancelled excluded)
+// PLUS standalone invoices that have no order behind them — both are ways the
+// team records a sale, so counting only one would under-report.
+function DistSalesByItemReport() {
+  const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  const [from, setFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 30); return isoDay(d); });
+  const [to, setTo] = useState(() => isoDay(new Date()));
+  const [orders, setOrders] = useState([]);
+  const [invoices, setInvoices] = useState([]);
+  const [items, setItems] = useState([]);
+  const [customers, setCustomers] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [customerF, setCustomerF] = useState("");
+  const [categoryF, setCategoryF] = useState("");
+  const [typeF, setTypeF] = useState("");           // "" | warehouse | fresh | ck
+  const [statusMin, setStatusMin] = useState("confirmed"); // confirmed | dispatched | invoiced
+  const [includeInvoices, setIncludeInvoices] = useState(true);
+  const [search, setSearch] = useState("");
+  const [view, setView] = useState("pivot");         // pivot | list
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true); setErr("");
+      try {
+        const [so, inv, it, cu] = await Promise.all([
+          fetchDistSalesOrders({}), fetchDistInvoices({}), fetchDistItems({ includeInactive: true }), fetchDistContacts({ kind: "customer" }),
+        ]);
+        if (!alive) return;
+        setOrders(so || []); setInvoices(inv || []); setItems(it || []); setCustomers(cu || []);
+      } catch (e) { if (alive) setErr(e?.message || String(e)); }
+      if (alive) setLoading(false);
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  const STAGE = { draft: 0, pending_approval: 1, confirmed: 2, picking: 3, picked: 3, dispatched: 4, invoiced: 5, paid: 6 };
+  const itemById = useMemo(() => new Map(items.map(i => [i.id, i])), [items]);
+  const custName = (id) => { const c = customers.find(x => x.id === id); return c ? (c.displayName || c.companyName || id) : (id || "(no customer)"); };
+  const categories = useMemo(() => [...new Set(items.map(i => i.category).filter(Boolean))].sort(), [items]);
+
+  // One flat list of sale lines inside the window, then everything else is derived.
+  const lines = useMemo(() => {
+    const out = [];
+    const minStage = STAGE[statusMin] ?? 2;
+    orders.forEach(o => {
+      if (!o.orderDate || o.orderDate < from || o.orderDate > to) return;
+      if (o.status === "cancelled" || (STAGE[o.status] ?? -1) < minStage) return;
+      (o.lines || []).forEach(l => { if (l.itemId && l.qty > 0) out.push({ itemId: l.itemId, customerId: o.customerId, qty: l.qty, unitPrice: l.unitPrice || 0, date: o.orderDate, doc: o.soNumber, kind: "order" }); });
+    });
+    if (includeInvoices) invoices.forEach(i => {
+      if (i.soId) return;   // already counted through its order
+      if (!i.invoiceDate || i.invoiceDate < from || i.invoiceDate > to || i.posted === false) return;
+      (i.lines || []).forEach(l => { if (l.itemId && l.qty > 0) out.push({ itemId: l.itemId, customerId: i.customerId, qty: l.qty, unitPrice: l.unitPrice || 0, date: i.invoiceDate, doc: i.invoiceNumber, kind: "invoice" }); });
+    });
+    const q = search.trim().toLowerCase();
+    return out.filter(l => {
+      const it = itemById.get(l.itemId);
+      if (customerF && l.customerId !== customerF) return false;
+      if (categoryF && (it?.category || "") !== categoryF) return false;
+      if (typeF && (it?.itemType || "warehouse") !== typeF) return false;
+      if (q && !`${it?.sku || ""} ${it?.name || l.itemId}`.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [orders, invoices, from, to, statusMin, includeInvoices, customerF, categoryF, typeF, search, itemById]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Pivot: item rows × customer columns.
+  const pivot = useMemo(() => {
+    const cols = new Map(); const rows = new Map();
+    lines.forEach(l => {
+      cols.set(l.customerId || "", (cols.get(l.customerId || "") || 0) + l.qty);
+      const r = rows.get(l.itemId) || { itemId: l.itemId, total: 0, revenue: 0, orders: 0, last: "", by: {} };
+      r.total += l.qty; r.revenue += l.qty * l.unitPrice; r.orders += 1;
+      if (l.date > r.last) r.last = l.date;
+      r.by[l.customerId || ""] = (r.by[l.customerId || ""] || 0) + l.qty;
+      rows.set(l.itemId, r);
+    });
+    const colList = [...cols.entries()].sort((a, b) => b[1] - a[1]).map(([id]) => id);
+    const rowList = [...rows.values()].sort((a, b) => b.total - a.total);
+    return { colList, rowList, totalUnits: rowList.reduce((a, r) => a + r.total, 0), totalRevenue: rowList.reduce((a, r) => a + r.revenue, 0) };
+  }, [lines]);
+
+  const label = (id) => { const it = itemById.get(id); return it ? `${it.sku ? it.sku + " · " : ""}${it.name}` : id; };
+  const fmtQ = (n) => (Number(n) || 0).toLocaleString("en-GB", { maximumFractionDigits: 2 });
+  const exportCsv = () => {
+    const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const out = [];
+    if (view === "pivot") {
+      out.push(["Item", ...pivot.colList.map(custName), "Total units", "Revenue", "Lines", "Last sold"].map(esc).join(","));
+      pivot.rowList.forEach(r => out.push([label(r.itemId), ...pivot.colList.map(c => r.by[c] || 0), r.total, r.revenue.toFixed(2), r.orders, r.last].map(esc).join(",")));
+    } else {
+      out.push(["Date","Document","Type","Store","Item","Qty","Unit price","Line value"].map(esc).join(","));
+      lines.slice().sort((a, b) => b.date.localeCompare(a.date)).forEach(l => out.push([l.date, l.doc, l.kind, custName(l.customerId), label(l.itemId), l.qty, l.unitPrice, (l.qty * l.unitPrice).toFixed(2)].map(esc).join(",")));
+    }
+    const blob = new Blob([out.join("\n")], { type: "text/csv" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `sales_by_item_${from}_to_${to}.csv`; a.click();
+  };
+  const inputCls = "px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white";
+  return (
+    <DistReportShell loading={loading} err={err}>
+      <div className="space-y-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <input type="date" value={from} onChange={e => setFrom(e.target.value)} className={inputCls}/>
+          <span className="text-xs text-slate-500">to</span>
+          <input type="date" value={to} onChange={e => setTo(e.target.value)} className={inputCls}/>
+          <select value={customerF} onChange={e => setCustomerF(e.target.value)} className={inputCls + " max-w-[220px]"}><option value="">All stores</option>{customers.filter(c => c.active !== false).sort((a, b) => custName(a.id).localeCompare(custName(b.id))).map(c => <option key={c.id} value={c.id}>{custName(c.id)}</option>)}</select>
+          <select value={categoryF} onChange={e => setCategoryF(e.target.value)} className={inputCls}><option value="">All categories</option>{categories.map(c => <option key={c} value={c}>{c}</option>)}</select>
+          <select value={typeF} onChange={e => setTypeF(e.target.value)} className={inputCls}><option value="">All item types</option><option value="warehouse">Warehouse stock</option><option value="fresh">Fresh produce</option><option value="ck">Central Kitchen</option></select>
+          <select value={statusMin} onChange={e => setStatusMin(e.target.value)} className={inputCls}><option value="confirmed">Orders: confirmed or later</option><option value="dispatched">Orders: dispatched or later</option><option value="invoiced">Orders: invoiced only</option></select>
+          <label className="flex items-center gap-1.5 text-xs text-slate-300"><input type="checkbox" checked={includeInvoices} onChange={e => setIncludeInvoices(e.target.checked)}/> Include standalone invoices</label>
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search item…" className={inputCls + " w-44"}/>
+          <div className="flex rounded-lg overflow-hidden border border-slate-700">
+            {[["pivot","By store"],["list","Line by line"]].map(([k, l]) => <button key={k} onClick={() => setView(k)} className={`px-3 py-2 text-xs font-semibold ${view === k ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400"}`}>{l}</button>)}
+          </div>
+          <button onClick={exportCsv} disabled={!lines.length} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 disabled:opacity-50">Export CSV</button>
+        </div>
+        <div className="flex gap-3 flex-wrap">
+          <div className="rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Items sold</div><div className="text-2xl font-bold text-white">{pivot.rowList.length}</div></div>
+          <div className="rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Units</div><div className="text-2xl font-bold text-white">{fmtQ(pivot.totalUnits)}</div></div>
+          <div className="rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Revenue (ex VAT)</div><div className="text-2xl font-bold text-emerald-400">{gbp(pivot.totalRevenue)}</div></div>
+          <div className="rounded-2xl border border-slate-800 bg-slate-900 px-4 py-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Stores</div><div className="text-2xl font-bold text-white">{pivot.colList.length}</div></div>
+        </div>
+        {lines.length === 0 ? <div className="text-sm text-slate-600 py-8 text-center bg-slate-900 border border-slate-800 rounded-2xl">No sales in this window with these filters.</div> : view === "pivot" ? (
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-x-auto">
+            <table className="text-xs min-w-full">
+              <thead className="text-slate-500 uppercase tracking-wide text-[10px]"><tr className="border-b border-slate-800">
+                <th className="text-left px-3 py-2 sticky left-0 bg-slate-900 z-10 min-w-[220px]">Item</th>
+                {pivot.colList.map(c => <th key={c} className="text-right px-3 py-2 whitespace-nowrap">{custName(c)}</th>)}
+                <th className="text-right px-3 py-2 whitespace-nowrap bg-slate-800/60">Total</th><th className="text-right px-3 py-2 whitespace-nowrap">Revenue</th><th className="text-right px-3 py-2 whitespace-nowrap">Last sold</th>
+              </tr></thead>
+              <tbody>
+                {pivot.rowList.map(r => (
+                  <tr key={r.itemId} className="border-b border-slate-800/60 hover:bg-slate-800/40">
+                    <td className="px-3 py-2 text-slate-200 sticky left-0 bg-slate-900 z-10">{label(r.itemId)}</td>
+                    {pivot.colList.map(c => <td key={c} className={`px-3 py-2 text-right ${r.by[c] ? "text-white" : "text-slate-700"}`}>{r.by[c] ? fmtQ(r.by[c]) : "·"}</td>)}
+                    <td className="px-3 py-2 text-right font-bold text-white bg-slate-800/40">{fmtQ(r.total)}</td>
+                    <td className="px-3 py-2 text-right text-emerald-400">{gbp(r.revenue)}</td>
+                    <td className="px-3 py-2 text-right text-slate-500 whitespace-nowrap">{r.last}</td>
+                  </tr>
+                ))}
+                <tr className="bg-slate-800/40 font-bold"><td className="px-3 py-2 text-slate-300 sticky left-0 bg-slate-800 z-10">All items</td>{pivot.colList.map(c => <td key={c} className="px-3 py-2 text-right text-white">{fmtQ(pivot.rowList.reduce((a, r) => a + (r.by[c] || 0), 0))}</td>)}<td className="px-3 py-2 text-right text-white">{fmtQ(pivot.totalUnits)}</td><td className="px-3 py-2 text-right text-emerald-400">{gbp(pivot.totalRevenue)}</td><td/></tr>
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead className="text-slate-500 uppercase tracking-wide text-[10px]"><tr className="border-b border-slate-800"><th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Document</th><th className="text-left px-3 py-2">Store</th><th className="text-left px-3 py-2">Item</th><th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Unit</th><th className="text-right px-3 py-2">Value</th></tr></thead>
+              <tbody>{lines.slice().sort((a, b) => b.date.localeCompare(a.date)).map((l, i) => (
+                <tr key={i} className="border-b border-slate-800/60 hover:bg-slate-800/40">
+                  <td className="px-3 py-2 text-slate-400 whitespace-nowrap">{l.date}</td>
+                  <td className="px-3 py-2 text-slate-400 whitespace-nowrap"><span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold mr-1 ${l.kind === "invoice" ? "bg-indigo-500/15 text-indigo-300" : "bg-teal-500/15 text-teal-300"}`}>{l.kind === "invoice" ? "Invoice" : "Order"}</span>{l.doc}</td>
+                  <td className="px-3 py-2 text-slate-300">{custName(l.customerId)}</td>
+                  <td className="px-3 py-2 text-slate-200">{label(l.itemId)}</td>
+                  <td className="px-3 py-2 text-right text-white font-semibold">{fmtQ(l.qty)}</td>
+                  <td className="px-3 py-2 text-right text-slate-400">{gbp(l.unitPrice)}</td>
+                  <td className="px-3 py-2 text-right text-emerald-400">{gbp(l.qty * l.unitPrice)}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </DistReportShell>
+  );
 }
 
 // ─── STOCK 2026-09-20a: Warehouse → Stock Movements ─────────────────────────
@@ -68551,7 +68723,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: PRICEWATCH 2026-09-20a (Reports → Price Watch)");
+      console.log("CB build: SALESITEM 2026-09-20a (Warehouse → Reports → Sales by Item)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
