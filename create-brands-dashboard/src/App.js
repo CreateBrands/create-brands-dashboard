@@ -155,7 +155,7 @@ import {
   fetchStockCounts, fetchStockCount, createStockCount, setStockCountLine, finaliseStockCount, deleteStockCount, fetchStoreCountVariance,
   fetchPurchases, addPurchase, deletePurchase, computeActualCogs,
   fetchInventoryForStore, setStoreItemOverride, clearStoreItemOverride,
-  searchStoreInventory, detectInvoicePriceChanges, fetchPriceChanges, applyPriceChange, dismissPriceChange,
+  searchStoreInventory, detectInvoicePriceChanges, fetchPriceChanges, applyPriceChange, dismissPriceChange, fetchIngredientPriceHistory, fetchInvoiceRefsForLines,
   runBatchMatchInvoiceLines, fetchStoreItemBrief, receiptLineBaseQty, receiptLineUnitCost,
   receiptLineNeedsPackSize, parsedPackBaseQty, fetchAliasRow, setAliasPackSize,
   ensureClaimInvoice, linkClaimToInvoice,
@@ -29565,6 +29565,7 @@ function ReportsView({ stores, brands, opsTeam, currentUser, visibleStoreIds = [
     { key: "scans",      label: "Review Scans",       feat: "feat.reports.scans" },
   ].filter(t => canFeature(t.feat));
   // Compliance + Audit Trail folded in as report tabs (were their own nav group).
+  TABS.push({ key: "pricewatch", label: "Price Watch" });   // PRICEWATCH 2026-09-20a
   TABS.push({ key: "compliance", label: "Compliance" });
   TABS.push({ key: "audit",      label: "Audit Trail" });
   const [tab, setTab] = useState(TABS[0]?.key || "timesheets");
@@ -29582,8 +29583,192 @@ function ReportsView({ stores, brands, opsTeam, currentUser, visibleStoreIds = [
       {tab === "weekly"  && canFeature("feat.reports.weekly") && <WeeklyReportsView/>}
       {tab === "reviews" && <GoogleReviewsView stores={stores} currentUser={currentUser}/>}
       {tab === "scans"   && <ReviewScansView stores={stores} opsTeam={opsTeam}/>}
+      {tab === "pricewatch" && <PriceWatchReport stores={stores}/>}
       {tab === "compliance" && <ComplianceView brands={brands} stores={stores} visibleStoreIds={visibleStoreIds} assignments={assignments} auditTrail={auditTrail} checklistStates={checklistStates}/>}
       {tab === "audit"   && <AuditTrailView brands={brands} stores={stores} visibleStoreIds={visibleStoreIds} auditTrail={auditTrail} onClear={onClearAudit}/>}
+    </div>
+  );
+}
+
+// ─── PRICEWATCH 2026-09-20a: Reports → Price Watch ──────────────────────────
+// Every purchase price seen — scanner invoices (per-supplier history recorded
+// on approval) and Distribution bills — compared BOTH ways: against the same
+// supplier's previous price for that item, and against the item's standing
+// cost (store item cost per base unit / warehouse SKU purchase rate).
+function PriceWatchReport({ stores = [] }) {
+  const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  const [from, setFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 90); return isoDay(d); });
+  const [to, setTo] = useState(() => isoDay(new Date()));
+  const [source, setSource] = useState("all");        // all | invoice | bill
+  const [supplierF, setSupplierF] = useState("");
+  const [search, setSearch] = useState("");
+  const [threshold, setThreshold] = useState(2);       // % — rows below this are "unchanged"
+  const [changedOnly, setChangedOnly] = useState(true);
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+
+  const load = async () => {
+    setLoading(true); setErr("");
+    try {
+      // Look back a further year so "previous price" has something to compare
+      // against even for the first purchase inside the window.
+      const lookback = (() => { const d = new Date(from + "T00:00:00"); d.setFullYear(d.getFullYear() - 1); return isoDay(d); })();
+      const [hist, inv, bills, vendors, distItems] = await Promise.all([
+        fetchIngredientPriceHistory({ from: lookback }).catch(() => []),
+        fetchInventory().catch(() => ({ store: [] })),
+        fetchDistBills({}).catch(() => []),
+        fetchDistContacts({ kind: "vendor" }).catch(() => []),
+        fetchDistItems({ includeInactive: true }).catch(() => []),
+      ]);
+      const refs = await fetchInvoiceRefsForLines(hist.map(h => h.invoiceLineId)).catch(() => new Map());
+      const storeItem = new Map((inv.store || []).map(i => [String(i.id), i]));
+      const vendorName = new Map(vendors.map(v => [v.id, v.displayName || v.companyName || v.id]));
+      const distItem = new Map(distItems.map(i => [i.id, i]));
+      const storeName = (id) => { const s = stores.find(x => x.id === id); return s ? (s.shortName || s.name) : (id || ""); };
+
+      const out = [];
+      // — scanner invoices: unit = per base unit (price / pack qty in base units)
+      const byKeyInv = new Map();
+      hist.filter(h => h.packQtyBase > 0).forEach(h => {
+        const key = `${h.supplier.trim().toLowerCase()}|${h.ingredientId}`;
+        const list = byKeyInv.get(key) || []; list.push(h); byKeyInv.set(key, list);
+      });
+      byKeyInv.forEach(list => {
+        list.sort((a, b) => (a.effectiveFrom || "").localeCompare(b.effectiveFrom || "") || (a.id || "").localeCompare(b.id || ""));
+        let prev = null;
+        list.forEach(h => {
+          const unit = h.priceExVat / h.packQtyBase;
+          const it = storeItem.get(h.ingredientId);
+          const ref = refs.get(h.invoiceLineId) || {};
+          out.push({
+            id: `inv:${h.id}`, date: h.effectiveFrom, source: "invoice", docRef: ref.invoice_number || "", storeId: ref.entity || null,
+            store: storeName(ref.entity), supplier: h.supplier || ref.supplier_name || "", item: it ? it.name : `#${h.ingredientId}`,
+            packDesc: h.packDesc, unitLabel: it?.baseUnit ? `per ${it.baseUnit}` : "per unit",
+            price: unit, packPrice: h.priceExVat, prevPrice: prev ? prev.priceExVat / prev.packQtyBase : null, prevDate: prev ? prev.effectiveFrom : null,
+            standing: it && it.costPerBaseUnit != null ? Number(it.costPerBaseUnit) : null,
+          });
+          prev = h;
+        });
+      });
+      // — Distribution bills: unit = the bill line's unit price
+      const byKeyBill = new Map();
+      bills.filter(b => b.posted !== false && b.billDate).forEach(b => (b.lines || []).forEach(l => {
+        if (!l.itemId || !(l.qty > 0)) return;
+        const key = `${b.vendorId || ""}|${l.itemId}`;
+        const list = byKeyBill.get(key) || []; list.push({ bill: b, line: l }); byKeyBill.set(key, list);
+      }));
+      byKeyBill.forEach(list => {
+        list.sort((a, b) => (a.bill.billDate || "").localeCompare(b.bill.billDate || "") || (a.bill.createdAt || "").localeCompare(b.bill.createdAt || ""));
+        let prev = null;
+        list.forEach(({ bill, line }) => {
+          const it = distItem.get(line.itemId);
+          out.push({
+            id: `bill:${line.id}`, date: bill.billDate, source: "bill", docRef: bill.billNumber, storeId: null, store: "Warehouse",
+            supplier: vendorName.get(bill.vendorId) || "(no vendor)", item: it ? `${it.sku ? it.sku + " · " : ""}${it.name}` : line.itemId,
+            packDesc: line.description || "", unitLabel: "per unit",
+            price: line.unitPrice, packPrice: line.unitPrice, prevPrice: prev ? prev.line.unitPrice : null, prevDate: prev ? prev.bill.billDate : null,
+            standing: it && it.purchaseRate != null ? Number(it.purchaseRate) : null,
+          });
+          prev = { bill, line };
+        });
+      });
+      setRows(out);
+    } catch (e) { setErr(e?.message || String(e)); }
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, [from]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const pct = (now, base) => (base != null && base > 0 && now != null) ? ((now - base) / base) * 100 : null;
+  const enriched = useMemo(() => rows.map(r => ({ ...r, dPrev: pct(r.price, r.prevPrice), dStanding: pct(r.price, r.standing) })), [rows]);
+  const suppliers = useMemo(() => [...new Set(enriched.map(r => r.supplier).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [enriched]);
+  const q = search.trim().toLowerCase();
+  const visible = enriched.filter(r => {
+    if (r.date < from || r.date > to) return false;
+    if (source !== "all" && r.source !== source) return false;
+    if (supplierF && r.supplier !== supplierF) return false;
+    if (q && !`${r.item} ${r.supplier} ${r.docRef} ${r.packDesc}`.toLowerCase().includes(q)) return false;
+    if (changedOnly) {
+      const moved = (v) => v != null && Math.abs(v) >= threshold;
+      if (!moved(r.dPrev) && !moved(r.dStanding)) return false;
+    }
+    return true;
+  }).sort((a, b) => (b.date || "").localeCompare(a.date || "") || Math.abs(b.dPrev ?? b.dStanding ?? 0) - Math.abs(a.dPrev ?? a.dStanding ?? 0));
+
+  const up = visible.filter(r => (r.dPrev ?? r.dStanding ?? 0) >= threshold).length;
+  const down = visible.filter(r => (r.dPrev ?? r.dStanding ?? 0) <= -threshold).length;
+  const money = (n) => n == null ? "—" : `${ccySym()}${Number(n).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 4 })}`;
+  const band = (v) => {
+    if (v == null) return { cls: "text-slate-600", txt: "—" };
+    const a = Math.abs(v);
+    const cls = a < threshold ? "text-slate-500" : a < 5 ? (v > 0 ? "text-amber-400" : "text-emerald-400") : (v > 0 ? "text-rose-400 font-bold" : "text-emerald-400 font-bold");
+    return { cls, txt: `${v > 0 ? "+" : ""}${v.toFixed(1)}%` };
+  };
+  const fmtD = (d) => { try { return new Date(d + "T00:00:00").toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "2-digit" }); } catch { return d || ""; } };
+
+  const exportCsv = () => {
+    const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const lines = [["Date","Source","Document","Store","Supplier","Item","Pack / description","Unit","Price","Previous (same supplier)","Previous date","Δ vs previous %","Standing cost","Δ vs standing %"].map(esc).join(",")];
+    visible.forEach(r => lines.push([r.date, r.source, r.docRef, r.store, r.supplier, r.item, r.packDesc, r.unitLabel, r.price, r.prevPrice ?? "", r.prevDate ?? "", r.dPrev == null ? "" : r.dPrev.toFixed(2), r.standing ?? "", r.dStanding == null ? "" : r.dStanding.toFixed(2)].map(esc).join(",")));
+    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `price_watch_${from}_to_${to}.csv`; a.click();
+  };
+  const inputCls = "px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white";
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-lg font-bold text-white flex items-center gap-2"><TrendingUp size={18} className="text-indigo-400"/> Price watch</h2>
+        <p className="text-xs text-slate-500">Every purchase price from scanned supplier invoices and warehouse bills, compared with the same supplier's previous price and with the item's standing cost. Amber = 2–5% move, red = more than 5% up, green = cheaper.</p>
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        <input type="date" value={from} onChange={e => setFrom(e.target.value)} className={inputCls}/>
+        <span className="text-xs text-slate-500">to</span>
+        <input type="date" value={to} onChange={e => setTo(e.target.value)} className={inputCls}/>
+        <select value={source} onChange={e => setSource(e.target.value)} className={inputCls}>
+          <option value="all">Invoices + bills</option><option value="invoice">Supplier invoices (stores)</option><option value="bill">Warehouse bills</option>
+        </select>
+        <select value={supplierF} onChange={e => setSupplierF(e.target.value)} className={inputCls + " max-w-[220px]"}>
+          <option value="">All suppliers</option>
+          {suppliers.map(sn => <option key={sn} value={sn}>{sn}</option>)}
+        </select>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search item / supplier / doc…" className={inputCls + " w-52"}/>
+        <label className="flex items-center gap-1.5 text-xs text-slate-300">Threshold <input type="number" min={0} step={0.5} value={threshold} onChange={e => setThreshold(Number(e.target.value) || 0)} className={inputCls + " w-16"}/>%</label>
+        <label className="flex items-center gap-1.5 text-xs text-slate-300"><input type="checkbox" checked={changedOnly} onChange={e => setChangedOnly(e.target.checked)}/> Changed only</label>
+        <button onClick={load} className="px-3 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700">Refresh</button>
+        <button onClick={exportCsv} disabled={!visible.length} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 disabled:opacity-50">Export CSV</button>
+      </div>
+      <div className="grid grid-cols-3 gap-3">
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Prices shown</div><div className="text-lg font-bold text-white">{visible.length}</div></div>
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Gone up</div><div className="text-lg font-bold text-rose-400">{up}</div></div>
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Gone down</div><div className="text-lg font-bold text-emerald-400">{down}</div></div>
+      </div>
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      {loading ? <div className="text-sm text-slate-500 py-10 text-center">Loading…</div> : (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="text-slate-500 uppercase tracking-wide text-[10px]"><tr className="border-b border-slate-800">
+              <th className="text-left px-3 py-2">Date</th><th className="text-left px-3 py-2">Document</th><th className="text-left px-3 py-2">Supplier</th><th className="text-left px-3 py-2">Item</th>
+              <th className="text-right px-3 py-2">Price</th><th className="text-right px-3 py-2">Previous</th><th className="text-right px-3 py-2">Δ prev</th><th className="text-right px-3 py-2">Standing</th><th className="text-right px-3 py-2">Δ standing</th>
+            </tr></thead>
+            <tbody>
+              {visible.length === 0 && <tr><td colSpan={9} className="px-3 py-8 text-center text-slate-600">{rows.length === 0 ? "No purchase prices recorded yet — approved supplier invoices and posted warehouse bills will appear here." : "Nothing matches these filters."}</td></tr>}
+              {visible.map(r => { const bp = band(r.dPrev), bs = band(r.dStanding); return (
+                <tr key={r.id} className="border-b border-slate-800/60 hover:bg-slate-800/40">
+                  <td className="px-3 py-2 text-slate-400 whitespace-nowrap">{fmtD(r.date)}</td>
+                  <td className="px-3 py-2 text-slate-400 whitespace-nowrap"><span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold mr-1 ${r.source === "bill" ? "bg-indigo-500/15 text-indigo-300" : "bg-teal-500/15 text-teal-300"}`}>{r.source === "bill" ? "Bill" : "Invoice"}</span>{r.docRef}{r.store && r.source === "invoice" ? <span className="text-slate-600"> · {r.store}</span> : null}</td>
+                  <td className="px-3 py-2 text-slate-300">{r.supplier}</td>
+                  <td className="px-3 py-2 text-slate-200">{r.item}{r.packDesc && <div className="text-[10px] text-slate-500 truncate max-w-[260px]">{r.packDesc}</div>}</td>
+                  <td className="px-3 py-2 text-right text-white font-semibold whitespace-nowrap">{money(r.price)}<div className="text-[10px] text-slate-500 font-normal">{r.unitLabel}</div></td>
+                  <td className="px-3 py-2 text-right text-slate-400 whitespace-nowrap">{money(r.prevPrice)}{r.prevDate && <div className="text-[10px] text-slate-600">{fmtD(r.prevDate)}</div>}</td>
+                  <td className={`px-3 py-2 text-right whitespace-nowrap ${bp.cls}`}>{bp.txt}</td>
+                  <td className="px-3 py-2 text-right text-slate-400 whitespace-nowrap">{money(r.standing)}</td>
+                  <td className={`px-3 py-2 text-right whitespace-nowrap ${bs.cls}`}>{bs.txt}</td>
+                </tr>
+              ); })}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -68366,7 +68551,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: CARDS 2026-09-20a (company cards on expense claims)");
+      console.log("CB build: PRICEWATCH 2026-09-20a (Reports → Price Watch)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:

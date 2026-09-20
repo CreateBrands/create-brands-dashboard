@@ -8915,6 +8915,37 @@ export async function dismissPriceChange(id, userId) {
     .update({ status: "dismissed", resolved_at: new Date().toISOString(), resolved_by: userId || null }).eq("id", id);
   if (error) throw error;
 }
+// PRICEWATCH 2026-09-20a — the per-supplier price history the scanner has
+// been recording on approval (ingredient_prices). One row per invoice line.
+export async function fetchIngredientPriceHistory({ from } = {}) {
+  let q = supabase.from("ingredient_prices").select("*").order("effective_from", { ascending: true });
+  if (from) q = q.gte("effective_from", from);
+  const { data, error } = await q;
+  if (error) throw error;
+  return (data || []).map(r => ({
+    id: r.id, ingredientId: String(r.ingredient_id), supplier: r.supplier_name || "", packDesc: r.pack_desc || "",
+    packQtyBase: Number(r.pack_qty_base) || 0, priceExVat: Number(r.price_ex_vat) || 0,
+    effectiveFrom: r.effective_from, source: r.source || "invoice", invoiceLineId: r.invoice_line_id || null,
+  }));
+}
+// PRICEWATCH 2026-09-20a — which invoice each history row came from.
+export async function fetchInvoiceRefsForLines(lineIds = []) {
+  const out = new Map();
+  const ids = [...new Set((lineIds || []).filter(Boolean))];
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data } = await supabase.from("invoice_lines").select("id, invoice_id").in("id", ids.slice(i, i + 200));
+    (data || []).forEach(l => out.set(l.id, l.invoice_id));
+  }
+  const invIds = [...new Set([...out.values()].filter(Boolean))];
+  const inv = new Map();
+  for (let i = 0; i < invIds.length; i += 200) {
+    const { data } = await supabase.from("invoices").select("id, invoice_number, entity, supplier_name").in("id", invIds.slice(i, i + 200));
+    (data || []).forEach(x => inv.set(x.id, x));
+  }
+  const res = new Map();
+  out.forEach((invoiceId, lineId) => res.set(lineId, inv.get(invoiceId) || { id: invoiceId }));
+  return res;
+}
 // ===== end INVOICE_PRICE_SYNC_V1 =====
 
 // ============================================================================
