@@ -14737,6 +14737,7 @@ function DistReportsView() {
     { key: "pnl", label: "P&L" },
     { key: "reorder", label: "Reorder" },
     { key: "sales-items", label: "Sales by Item" },   // SALESITEM 2026-09-20a
+    { key: "pricewatch", label: "Price Watch" },      // PRICEWATCH 2026-09-20b
   ];
   return (
     <div className="space-y-4">
@@ -14750,6 +14751,7 @@ function DistReportsView() {
       {tab === "pnl" && <DistPnLReport/>}
       {tab === "reorder" && <DistReorderReport/>}
       {tab === "sales-items" && <DistSalesByItemReport/>}
+      {tab === "pricewatch" && <PriceWatchReport defaultSource="bill"/>}
     </div>
   );
 }
@@ -29767,11 +29769,11 @@ function ReportsView({ stores, brands, opsTeam, currentUser, visibleStoreIds = [
 // on approval) and Distribution bills — compared BOTH ways: against the same
 // supplier's previous price for that item, and against the item's standing
 // cost (store item cost per base unit / warehouse SKU purchase rate).
-function PriceWatchReport({ stores = [] }) {
+function PriceWatchReport({ stores = [], defaultSource = "all" }) {
   const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
   const [from, setFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 90); return isoDay(d); });
   const [to, setTo] = useState(() => isoDay(new Date()));
-  const [source, setSource] = useState("all");        // all | invoice | bill
+  const [source, setSource] = useState(defaultSource); // all | invoice | bill
   const [supplierF, setSupplierF] = useState("");
   const [search, setSearch] = useState("");
   const [threshold, setThreshold] = useState(2);       // % — rows below this are "unchanged"
@@ -68723,7 +68725,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: SALESITEM 2026-09-20a (Warehouse → Reports → Sales by Item)");
+      console.log("CB build: PRICEWATCH 2026-09-20b (Price Watch in Warehouse reports) + SALESITEM 2026-09-20a");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
