@@ -13385,6 +13385,35 @@ export async function deleteDistBill(billId) {
       } catch (e) { /* best-effort */ }
     }
   }
+  // STOCK 2026-09-20b: a bill that received stock on posting gives it back on
+  // delete — one receipt_reversal per receipt movement (idempotent by ref),
+  // plus the reversing Dr GRNI / Cr Stock journal at the batch landed cost.
+  try {
+    const { data: recs } = await supabase.from("dist_stock_movements").select("*")
+      .eq("source_kind", "bill").like("source_ref", `distbill:${billId}:%`);
+    let stockValue = 0;
+    for (const r of recs || []) {
+      const qty = Number(r.qty) || 0;
+      if (qty <= 0) continue;
+      await addDistMovement({
+        itemId: r.item_id, batchId: r.batch_id, qty: -qty, type: "receipt_reversal",
+        sourceKind: "bill_reversal", sourceRef: `distbillREV:${billId}:${r.id}`,
+      });
+      const { data: b } = await supabase.from("dist_batches").select("landed_cost").eq("id", r.batch_id).maybeSingle();
+      stockValue += qty * (Number(b?.landed_cost) || 0);
+    }
+    if (stockValue > 0) {
+      const [stockAcc, grniAcc] = await Promise.all([
+        resolveAccountForEntity(DIST_ENTITY, "1200"), resolveAccountForEntity(DIST_ENTITY, "2050"),
+      ]);
+      if (stockAcc && grniAcc) {
+        await postJournalEntry({ entityId: DIST_ENTITY, entryDate: new Date().toISOString().slice(0, 10),
+          memo: `Stock reversal of bill ${head.bill_number}`, sourceKind: "dist_bill_receipt_reversal",
+          sourceRef: `distbillrecvREV:${billId}`,
+          lines: [{ accountId: grniAcc, amount: +stockValue.toFixed(2) }, { accountId: stockAcc, amount: -(+stockValue.toFixed(2)) }] });
+      }
+    }
+  } catch (e) { console.error("bill stock reversal failed:", e?.message || e); }
   await supabase.from("dist_bill_lines").delete().eq("bill_id", billId);
   const { error } = await supabase.from("dist_bills").delete().eq("id", billId);
   if (error) throw error;
