@@ -26912,10 +26912,17 @@ function InvoiceLineRow({ line, domain, onChanged, vendor = "" }) {
   );
 }
 
-function InvoicesView({ currentUser, categories = [], storeFilter = "all", entityFilter = "all", entities = [] }) {
-  const [invoices, setInvoices] = useState([]);
-  const [stores, setStores] = useState([]);
-  const [entity, setEntity] = useState("kitchen");
+function InvoicesView({ currentUser, categories = [], storeFilter = "all", entityFilter = "all", entities = [], allowedStoreIds = null }) {
+  // REGIONAL 2026-09-20a: allowedStoreIds (array) fences BOTH the list and the
+  // upload picker to those stores — a UAE session sees only UAE invoices and
+  // cannot scan against Central Kitchen or a UK store. null = no fence.
+  const [invoicesRaw, setInvoices] = useState([]);
+  const [storesRaw, setStores] = useState([]);
+  const allowedSet = useMemo(() => allowedStoreIds ? new Set(allowedStoreIds) : null, [allowedStoreIds]);
+  const invoices = useMemo(() => allowedSet ? invoicesRaw.filter(i => allowedSet.has(i.entity)) : invoicesRaw, [invoicesRaw, allowedSet]);
+  const stores = useMemo(() => allowedSet ? storesRaw.filter(s => allowedSet.has(s.id)) : storesRaw, [storesRaw, allowedSet]);
+  const [entity, setEntity] = useState(() => (allowedStoreIds && allowedStoreIds.length) ? allowedStoreIds[0] : "kitchen");
+  useEffect(() => { if (allowedSet && !allowedSet.has(entity)) setEntity(allowedStoreIds[0] || ""); }, [allowedSet]); // eslint-disable-line react-hooks/exhaustive-deps
   const [uploading, setUploading] = useState(false);
   const [selected, setSelected] = useState(null);
   const [lines, setLines] = useState([]);
@@ -27117,7 +27124,7 @@ function InvoicesView({ currentUser, categories = [], storeFilter = "all", entit
         <div className="flex flex-wrap items-center gap-2">
           <select value={entity} onChange={(e) => setEntity(e.target.value)}
             className="px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-indigo-500">
-            <option value="kitchen">Central Kitchen</option>
+            {!allowedSet && <option value="kitchen">Central Kitchen</option>}
             {stores.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
           <label className={`px-4 py-2 rounded-xl text-sm font-semibold text-white cursor-pointer ${uploading ? "bg-slate-700" : "bg-indigo-600 hover:bg-indigo-500"}`}>
@@ -29225,7 +29232,7 @@ function OnboardingBoard({ stores, opsTeam }) {
 // table and the styled ExcelJS export, so they can never drift apart.
 // Reports hub — tabs for the timesheet/sales report generator plus the
 // Google Reviews, Weekly Reports and Review Scans views (moved here from nav).
-function ReportsView({ stores, brands, opsTeam, currentUser, visibleStoreIds = [], assignments = [], auditTrail = [], onClearAudit, checklistStates = {} }) {
+function ReportsView({ stores, brands, opsTeam, currentUser, visibleStoreIds = [], assignments = [], auditTrail = [], onClearAudit, checklistStates = {}, fenced = false }) {
   const role = currentUser?.role;
   const { canFeature } = useAccess();
   const TABS = [
@@ -29248,7 +29255,7 @@ function ReportsView({ stores, brands, opsTeam, currentUser, visibleStoreIds = [
           </button>
         ))}
       </div>
-      {tab === "timesheets" && <TimesheetReportsView stores={stores} brands={brands} opsTeam={opsTeam} currentUser={currentUser}/>}
+      {tab === "timesheets" && <TimesheetReportsView stores={stores} brands={brands} opsTeam={opsTeam} currentUser={currentUser} fenced={fenced}/>}
       {tab === "weekly"  && canFeature("feat.reports.weekly") && <WeeklyReportsView/>}
       {tab === "reviews" && <GoogleReviewsView stores={stores} currentUser={currentUser}/>}
       {tab === "scans"   && <ReviewScansView stores={stores} opsTeam={opsTeam}/>}
@@ -29258,7 +29265,7 @@ function ReportsView({ stores, brands, opsTeam, currentUser, visibleStoreIds = [
   );
 }
 
-function TimesheetReportsView({ stores, brands, opsTeam, currentUser }) {
+function TimesheetReportsView({ stores, brands, opsTeam, currentUser, fenced = false }) {
   const isMgr = currentUser.role === "manager";
   const myStores = useMemo(
     () => (stores || []).filter(s => !s.archivedAt && (!isMgr || (currentUser.storeIds || []).includes(s.id))),
@@ -29311,11 +29318,11 @@ function TimesheetReportsView({ stores, brands, opsTeam, currentUser }) {
       .filter(m => {
         const sid = m.storeIds?.[0];
         if (storeSel !== "all") return tsInScope(sid);
-        if (isMgr) return myStoreIds.includes(sid);
+        if (isMgr || fenced) return myStoreIds.includes(sid);
         return true;
       })
       .sort((a, b) => (a.firstName || "").localeCompare(b.firstName || ""));
-  }, [opsTeam, storeSel, isMgr, myStoreIds]);
+  }, [opsTeam, storeSel, isMgr, myStoreIds, fenced]);
 
   const runReport = async () => {
     setLoading(true);
@@ -29340,10 +29347,12 @@ function TimesheetReportsView({ stores, brands, opsTeam, currentUser }) {
   };
 
   // Store/role scoping applied to every report's source rows.
+  // REGIONAL 2026-09-20a: `fenced` (regional session) — the report fetches
+  // chain-wide rows by date, so "All stores" must mean all stores IN SCOPE.
   const scoped = useMemo(() => {
     const inScope = (sid) => {
       if (storeSel !== "all") return tsInScope(sid);
-      if (isMgr) return myStoreIds.includes(sid);
+      if (isMgr || fenced) return myStoreIds.includes(sid);
       return true;
     };
     return {
@@ -29355,7 +29364,7 @@ function TimesheetReportsView({ stores, brands, opsTeam, currentUser }) {
       pay: payRows.filter(r => inScope(r.storeId)),
       items: itemRows.filter(r => inScope(r.storeId)),
     };
-  }, [punches, schedules, labourRows, aggRows, accRows, payRows, itemRows, storeSel, isMgr, myStoreIds]);
+  }, [punches, schedules, labourRows, aggRows, accRows, payRows, itemRows, storeSel, isMgr, myStoreIds, fenced]);
 
   // ── Formatting helpers ──
   const fmtT = (ts) => ts ? new Date(ts).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "—";
@@ -67734,8 +67743,21 @@ function AnnouncementGate({ currentUser, opsTeam = [] }) {
 }
 
 // ─── Announcements admin (owner/HQ) ──────────────────────────────────────────
-function AnnouncementsAdmin({ currentUser, opsTeam = [], stores = [], storeRoles = [] }) {
-  const [list, setList] = useState([]);
+function AnnouncementsAdmin({ currentUser, opsTeam = [], stores = [], storeRoles = [], allowedStoreIds = null }) {
+  const [listRaw, setList] = useState([]);
+  // REGIONAL 2026-09-20a: a regional session only sees announcements aimed at
+  // its own region — targeted at one of its stores, at one of its people, or
+  // posted by someone in the region. UK company-wide posts stay out.
+  const list = useMemo(() => {
+    if (!allowedStoreIds) return listRaw;
+    const storeSet = new Set(allowedStoreIds);
+    const people = new Set(opsTeam.map(m => m.id));
+    if (currentUser?.id) people.add(currentUser.id);
+    if (currentUser?.opsTeamMemberId) people.add(currentUser.opsTeamMemberId);
+    return listRaw.filter(a => (a.storeIds || []).some(id => storeSet.has(id))
+      || (a.memberIds || []).some(id => people.has(id))
+      || (a.createdBy && currentUser?.name && a.createdBy === currentUser.name));
+  }, [listRaw, allowedStoreIds, opsTeam, currentUser?.id, currentUser?.opsTeamMemberId]);
   const [loading, setLoading] = useState(true);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -67861,15 +67883,15 @@ export default function App() {
   const [deliveries,      setDeliveries]     = useState([]);
   const [checklistStates, setChecklistStates]= useState({});
   const [auditTrail,      setAuditTrail]     = useState([]);
-  const [hdTickets,       setHdTickets]      = useState([]);
-  const [messages,        setMessages]       = useState([]);
+  const [hdTicketsAll,    setHdTickets]      = useState([]);   // REGIONAL 2026-09-20a: fenced below
+  const [messagesAll,     setMessages]       = useState([]);   // REGIONAL 2026-09-20a: fenced below
   const [availability,    setAvailability]   = useState([]);
   const [busyPeriods,     setBusyPeriods]    = useState([]);
-  const [schedules,       setSchedules]      = useState([]);
+  const [schedulesAll,    setSchedules]      = useState([]);   // REGIONAL 2026-09-20a: fenced below
   const [shiftPresets,    setShiftPresets]   = useState([]);
-  const [punchRecords,    setPunchRecords]   = useState([]);
+  const [punchRecordsAll, setPunchRecords]   = useState([]);   // REGIONAL 2026-09-20a: fenced below
   // Hiring / Onboarding (slice 1)
-  const [applications,    setApplications]   = useState([]);
+  const [applicationsAll, setApplications]   = useState([]);   // REGIONAL 2026-09-20a: fenced below
   const [advertisedRoles, setAdvertisedRoles] = useState([]);
   const [storesAll,         setStores]            = useState([]);
   const [storeDepartments,  setStoreDepartments]  = useState([]);
@@ -67948,7 +67970,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: REGIONAL 2026-09-16a (finance lists fenced)");
+      console.log("CB build: REGIONAL 2026-09-20a (people/comms/invoices fenced, chain+agent hidden)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -68001,8 +68023,8 @@ export default function App() {
   const [whosWorkingOpen, setWhosWorkingOpen] = useState(false);   // "Who's working" popup
   const [moreOpen, setMoreOpen] = useState(false);                 // mobile "More" sheet
   const [appSettings, setAppSettings] = useState({});
-  const [payPeriods, setPayPeriods] = useState([]);
-  const [payPeriodLocations, setPayPeriodLocations] = useState([]);
+  const [payPeriodsAll, setPayPeriods] = useState([]);                 // REGIONAL 2026-09-20a: fenced below
+  const [payPeriodLocationsAll, setPayPeriodLocations] = useState([]); // REGIONAL 2026-09-20a: fenced below
   const [paySchedule, setPaySchedule] = useState(null);
   const [bankTransactionsAll, setBankTransactions] = useState([]);
   const importBankTxns = useCallback(async (rows) => {
@@ -68102,24 +68124,24 @@ export default function App() {
   //       7shifts-style flow closes a site's timesheet.
   const isPunchLocked = useCallback((punch) => {
     if (!punch?.date) return false;
-    if (payPeriods.some(pp => pp.status === "approved"
+    if (payPeriodsAll.some(pp => pp.status === "approved"
       && (!pp.storeId || pp.storeId === punch.storeId)
       && punch.date >= pp.periodStart && punch.date <= pp.periodEnd)) return true;
-    return payPeriodLocations.some(loc => {
+    return payPeriodLocationsAll.some(loc => {
       if (loc.storeId !== punch.storeId) return false;
-      const pp = payPeriods.find(x => x.id === loc.payPeriodId);
+      const pp = payPeriodsAll.find(x => x.id === loc.payPeriodId);
       return !!pp && punch.date >= pp.periodStart && punch.date <= pp.periodEnd;
     });
-  }, [payPeriods, payPeriodLocations]);
+  }, [payPeriodsAll, payPeriodLocationsAll]);
   const updatePunchRec = useCallback(async rec => {
     if (isPunchLocked(rec)) throw new Error("This punch is in an approved (locked) pay period. Re-open the period to edit it.");
     const s = await upsertPunchRecord(rec); setPunchRecords(ps => ps.map(p => p.id === s.id ? s : p));
   }, [isPunchLocked]);
   const delPunchRec    = useCallback(async id => {
-    const rec = punchRecords.find(p => p.id === id);
+    const rec = punchRecordsAll.find(p => p.id === id);
     if (rec && isPunchLocked(rec)) throw new Error("This punch is in an approved (locked) pay period. Re-open the period to delete it.");
     await deletePunchRecord(id); setPunchRecords(ps => ps.filter(p => p.id !== id));
-  }, [isPunchLocked, punchRecords]);
+  }, [isPunchLocked, punchRecordsAll]);
   const saveOtRules = useCallback(async (rules) => {
     await Promise.all([
       upsertAppSetting("ot_weekly_threshold", rules.weeklyThreshold),
@@ -68617,14 +68639,23 @@ export default function App() {
   // by narrowing the lists every view receives, so the ~50 isHqOrAbove()
   // bypasses below can only ever reach that region. Non-regional sessions get
   // the full lists unchanged. Session/login healing above uses the *All lists.
+  // REGIONAL 2026-09-20a: the fence no longer depends solely on the custom
+  // role's scope flag. A login whose brands (directly, or via its stores) are
+  // ALL non-UK regions is fenced to those brands automatically — so a UAE
+  // owner/hq login without the regional role can never see the UK estate.
+  // Logins with no brands/stores at all (the real HQ owner) are untouched.
   const regionalScope = useMemo(() => {
-    if (!currentUser || currentUserRole.scope !== "regional") return null;
+    if (!currentUser) return null;
     const storeIds = new Set(currentUser.storeIds || []);
     const brandIds = new Set(currentUser.brandIds || []);
     // a store on the login also brings its brand into scope
     (storesAll || []).forEach(s => { if (storeIds.has(s.id) && s.brandId) brandIds.add(s.brandId); });
-    return { storeIds, brandIds };
-  }, [currentUser, currentUserRole.scope, storesAll]);
+    if (currentUserRole.scope === "regional") return { storeIds, brandIds };
+    if (brandIds.size === 0) return null;
+    const regionOf = (id) => ((brandsAll || []).find(b => b.id === id) || {}).region || "UK";
+    const allForeign = [...brandIds].every(id => regionOf(id) !== "UK");
+    return allForeign ? { storeIds, brandIds } : null;
+  }, [currentUser, currentUserRole.scope, storesAll, brandsAll]);
   const stores = useMemo(() => !regionalScope ? storesAll
     : storesAll.filter(s => regionalScope.storeIds.has(s.id) || regionalScope.brandIds.has(s.brandId)),
     [storesAll, regionalScope]);
@@ -68692,6 +68723,47 @@ export default function App() {
   const cashLedger = useMemo(() => !regionalScope ? cashLedgerAll
     : cashLedgerAll.filter(t => regionalAccountIds.has(t.fromAccountId) || regionalAccountIds.has(t.toAccountId) || (t.storeId && regionalScope.storeIds.has(t.storeId))),
     [cashLedgerAll, regionalScope, regionalAccountIds]);
+  // REGIONAL 2026-09-20a: the PEOPLE / COMMS lists follow the fence too. Help
+  // desk tickets, chats, rotas, punches, applications and pay periods are all
+  // loaded chain-wide, so a regional session used to see every UK store's
+  // rows in Help Desk, Chat, Who's Working, Pay Periods, Hiring and T&A.
+  // In scope = belongs to a brand/store in scope, or to a person in scope.
+  const regionalPersonIds = useMemo(() => {
+    if (!regionalScope) return null;
+    const ids = new Set(opsTeam.map(m => m.id));
+    users.forEach(u => ids.add(u.id));
+    if (currentUser?.id) ids.add(currentUser.id);
+    if (currentUser?.opsTeamMemberId) ids.add(currentUser.opsTeamMemberId);
+    return ids;
+  }, [regionalScope, opsTeam, users, currentUser?.id, currentUser?.opsTeamMemberId]);
+  const regionalStoreIdList = useMemo(() => regionalScope ? stores.filter(s => !s.archivedAt).map(s => s.id) : null, [regionalScope, stores]);
+  const inRegionRow = useCallback((r) => !regionalScope
+    || (r.brandId && regionalScope.brandIds.has(r.brandId))
+    || (r.storeId && regionalScope.storeIds.has(r.storeId)), [regionalScope]);
+  const hdTickets = useMemo(() => !regionalScope ? hdTicketsAll
+    : hdTicketsAll.filter(t => inRegionRow(t) || (t.createdById && regionalPersonIds.has(t.createdById))),
+    [hdTicketsAll, regionalScope, inRegionRow, regionalPersonIds]);
+  const messages = useMemo(() => !regionalScope ? messagesAll
+    : messagesAll.filter(m => inRegionRow(m)
+      || (m.toBrandId && regionalScope.brandIds.has(m.toBrandId))
+      || (m.toStoreId && regionalScope.storeIds.has(m.toStoreId))
+      || (m.fromId && regionalPersonIds.has(m.fromId))
+      || (m.toPersonId && regionalPersonIds.has(m.toPersonId))),
+    [messagesAll, regionalScope, inRegionRow, regionalPersonIds]);
+  const schedules = useMemo(() => !regionalScope ? schedulesAll
+    : schedulesAll.filter(s => inRegionRow(s) || (s.employeeId && regionalPersonIds.has(s.employeeId))),
+    [schedulesAll, regionalScope, inRegionRow, regionalPersonIds]);
+  const punchRecords = useMemo(() => !regionalScope ? punchRecordsAll
+    : punchRecordsAll.filter(p => inRegionRow(p) || (p.employeeId && regionalPersonIds.has(p.employeeId))),
+    [punchRecordsAll, regionalScope, inRegionRow, regionalPersonIds]);
+  const applications = useMemo(() => !regionalScope ? applicationsAll
+    : applicationsAll.filter(a => inRegionRow(a)), [applicationsAll, regionalScope, inRegionRow]);
+  // pay periods: a store-specific period follows its store; chain-wide periods
+  // (no storeId) are the shared calendar and stay visible.
+  const payPeriods = useMemo(() => !regionalScope ? payPeriodsAll
+    : payPeriodsAll.filter(pp => !pp.storeId || regionalScope.storeIds.has(pp.storeId)), [payPeriodsAll, regionalScope]);
+  const payPeriodLocations = useMemo(() => !regionalScope ? payPeriodLocationsAll
+    : payPeriodLocationsAll.filter(l => !l.storeId || regionalScope.storeIds.has(l.storeId)), [payPeriodLocationsAll, regionalScope]);
 
   // Resolve the configured default scope for the current user into store ids.
   // The config can include store ids, facility stores, brand entities
@@ -69659,7 +69731,7 @@ export default function App() {
     { group: "OVERVIEW", items: [
       { key: "dashboard",   label: "Dashboard",     icon: BarChart2, children: [
         { key: "dashboard:overview", view: "dashboard", tab: "overview", label: "Dashboard", icon: LayoutDashboard },
-        { key: "dashboard:chain", view: "dashboard", tab: "chain", label: "Chain Performance", icon: Globe, gateRole: ["owner","hq_staff"] },
+        { key: "dashboard:chain", view: "dashboard", tab: "chain", label: "Chain Performance", icon: Globe, gateRole: ["owner","hq_staff"], hideForRegional: true },
         { key: "dashboard:store-analytics", view: "dashboard", tab: "store-analytics", label: "Store Analytics", icon: BarChart2, gateView: "store-analytics" },
       ]},
       { key: "invoices", label: "Invoices", icon: FileText, roles: ["manager"] },
@@ -69678,7 +69750,7 @@ export default function App() {
         { key: "operations:store-docs",     view: "operations", tab: "store-docs",     label: "Documents",     icon: FolderOpen },
       ]},
       { key: "dist-order",     label: "Order Supplies", icon: ShoppingCart },
-      { key: "agent-inbox",    label: "Agent Inbox", icon: Sparkles, badge: agentPendingCount > 0 ? agentPendingCount.toString() : null },
+      { key: "agent-inbox",    label: "Agent Inbox", icon: Sparkles, badge: agentPendingCount > 0 ? agentPendingCount.toString() : null, hideForRegional: true },
       { key: "eod",            label: "EOD Report",      icon: FileText, hideForCK: true },
     ]},
     { group: "WAREHOUSE", items: [
@@ -69790,6 +69862,7 @@ export default function App() {
     .map(g => ({ ...g, items: g.items.filter(item =>
       canRoleSeeSection(currentUserRole.matrixRole, item) &&
       !(ckOnly && item.hideForCK) &&
+      !(regionalScope && item.hideForRegional) &&   // REGIONAL 2026-09-20a
       // Entity-scoped items (e.g. Central Kitchen) only appear when that entity
       // is the one currently entered (or is the user's sole entity).
       (!item.requiresEntity || navEntity === item.requiresEntity)
@@ -69801,6 +69874,7 @@ export default function App() {
       // Distribution sub-pages…) actually take effect after the nav restructure.
       (!c.gateRole || c.gateRole.includes(currentUser?.role)) &&
       (!c.gateView || canSeeView(c.gateView)) &&
+      !(regionalScope && c.hideForRegional) &&   // REGIONAL 2026-09-20a
       canRoleSeeChild(c, item)
     ) } : item) }))
     .filter(g => g.items.length > 0);
@@ -69976,7 +70050,7 @@ export default function App() {
             {distSearchOpen && <DistGlobalSearch onClose={() => setDistSearchOpen(false)}/>}
             {effectiveActiveView === "dashboard" && (() => {
               const isHqOrOwner = currentUser.role === "owner" || currentUser.role === "hq_staff";
-              const dashKeys = ["overview", ...(isHqOrOwner && !ckOnly ? ["chain"] : []), ...(canSeeView("store-analytics") && !ckOnly ? ["store-analytics"] : [])];
+              const dashKeys = ["overview", ...(isHqOrOwner && !ckOnly && !regionalScope ? ["chain"] : []), ...(canSeeView("store-analytics") && !ckOnly ? ["store-analytics"] : [])];
               const effDashTab = dashKeys.includes(dashTab) ? dashTab : "overview";
               return (
                 <div>
@@ -70014,7 +70088,7 @@ export default function App() {
               );
             })()}
             {effectiveActiveView === "dist-order" && <DistOrderPortalView currentUser={currentUser} onNavigate={setActiveView}/>}
-            {effectiveActiveView === "agent-inbox" && <AgentInboxView currentUser={currentUser} onNavigate={setActiveView}/>}
+            {effectiveActiveView === "agent-inbox" && !regionalScope && <AgentInboxView currentUser={currentUser} onNavigate={setActiveView}/>}
             {effectiveActiveView === "ops-compliance" && <ComplianceView brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds} assignments={assignments} auditTrail={auditTrail} checklistStates={checklistStates}/>}
             {effectiveActiveView === "ops-audit"      && <AuditTrailView brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds} auditTrail={auditTrail} onClear={handleClearAudit}/>}
             {effectiveActiveView === "employee-profile" && selectedEmployeeId && <EmployeeProfileView
@@ -70275,7 +70349,7 @@ export default function App() {
             {effectiveActiveView === "setup" && setupPanel === "salescats" && <SalesCategoryMapView/>}
             {effectiveActiveView === "setup" && setupPanel === "dist-order-builder" && currentUser.role === "owner" && <DistOrderBuilderView stores={stores}/>}
             {effectiveActiveView === "setup" && setupPanel === "access-control" && currentUser.role === "owner" && <AccessControlView navGroups={NAV_GROUPS_RAW} accessPerms={accessPerms} onReload={reloadAccessPerms} brands={brands} stores={stores} opsTeam={opsTeam} entityOverrides={entityOverrides} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} defaultStoreScope={defaultStoreScope} onSaveDefaultScope={async (role, scope) => { try { const next = await setDefaultStoreScopeForRole(role, scope); setDefaultStoreScope(next); } catch (e) { console.error(e); } }}/>}
-            {effectiveActiveView === "invoices" && canSeeView("invoices") && <InvoicesView currentUser={currentUser}/>}
+            {effectiveActiveView === "invoices" && canSeeView("invoices") && <InvoicesView currentUser={currentUser} allowedStoreIds={regionalStoreIdList}/>}
             {effectiveActiveView === "setup" && setupPanel === "cogs" && canSeeView("cogs") && <CogsView key={"cogs-" + (selectedEntityBrand || "all")} stores={visibleStores} canFeature={canFeature} initialTab={setupSubtab} initialSub={setupSubsub} hideTabs={true} currentUser={currentUser}/>}
             {effectiveActiveView === "central-kitchen" && (["owner","hq_staff"].includes(currentUser.role) || canAccessEntity("entity.central-kitchen")) && <CentralKitchenView stores={stores} currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "dist-dashboard" && <DistDashboard currentUser={currentUser}/>}
@@ -70303,7 +70377,7 @@ export default function App() {
             {effectiveActiveView === "expenses" && <ExpensesView claims={expenseClaims} cashAccounts={cashAccounts} bankAccounts={bankAccounts} expenseTypes={cashExpenseTypes} categories={categories} payees={expensePayees} bankTransactions={bankTransactions} stores={stores} opsTeam={opsTeam} currentUser={currentUser} effectiveRole={effectiveRole} canReconcile={["owner","hq_staff","manager"].includes(effectiveRole)} typeAccounts={expTypeAccounts} memberAccounts={memberExpAccounts} excludedStores={expExcludedStores} memberTypes={memberExpTypes} memberCategories={memberExpCategories} memberStores={memberExpStores} handlers={expenseHandlers}/>}
             {effectiveActiveView === "fresh-produce" && <DistTypedItemsView itemType="fresh" currentUser={currentUser}/>}
             {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && financeAvailable)) && financeAvailable && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} entities={entities} opsTeam={opsTeam} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} onAssignMemberRole={handleAssignMemberRole} accessPerms={accessPerms} onSetPerm={async (role, featKey, allowed) => { await setAccessPermission(role, featKey, allowed); reloadAccessPerms(); }} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
-            {effectiveActiveView === "reports" && canSeeView("reports") && <ReportsView stores={visibleStores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser} visibleStoreIds={scopedVisibleStoreIds} assignments={assignments} auditTrail={auditTrail} onClearAudit={handleClearAudit} checklistStates={checklistStates}/>}
+            {effectiveActiveView === "reports" && canSeeView("reports") && <ReportsView stores={visibleStores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser} visibleStoreIds={scopedVisibleStoreIds} assignments={assignments} auditTrail={auditTrail} onClearAudit={handleClearAudit} checklistStates={checklistStates} fenced={!!regionalScope}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}
               messages={messages} onSend={sendMessage} onMarkRead={handleMarkRead}
@@ -70318,7 +70392,7 @@ export default function App() {
               helpdeskLevel={helpdeskLevel()}
               initialTab={commsTab} hideTabs={true}
             />}
-            {effectiveActiveView === "announcements" && <AnnouncementsAdmin currentUser={currentUser} opsTeam={opsTeam} stores={stores} storeRoles={storeRoles} />}
+            {effectiveActiveView === "announcements" && <AnnouncementsAdmin currentUser={currentUser} opsTeam={opsTeam} stores={stores} storeRoles={storeRoles} allowedStoreIds={regionalStoreIdList} />}
             </DistDocLinkProvider>
           </main>
         </div>
