@@ -165,7 +165,7 @@ import {
   PACKORDER_STAGES, PACKSHIP_STAGES, fetchPackagingOrders, fetchPackagingOrderDetail, upsertPackagingOrder, deletePackagingOrder,
   upsertPackagingLine, deletePackagingLine, upsertPackagingShipment, deletePackagingShipment, receivePackagingShipment,
   addPackagingPayment, deletePackagingPayment, computePackLineStatus, fetchPackagingDashboard,
-  fetchDistMovements, addDistMovement, seedDistOpeningStock,
+  fetchDistMovements, addDistMovement, seedDistOpeningStock, computeDistOnHandBefore,
   computeDistOnHand, computeDistBatchOnHand, fetchDistStockSnapshot,
   fetchDistPurchaseOrders, createDistPurchaseOrder, setDistPurchaseOrderStatus,
   fetchDistGoodsReceipts, postDistGoodsReceipt,
@@ -14748,6 +14748,198 @@ function DistReportsView() {
       {tab === "creditors" && <DistAgedReport kind="creditors"/>}
       {tab === "pnl" && <DistPnLReport/>}
       {tab === "reorder" && <DistReorderReport/>}
+    </div>
+  );
+}
+
+// ─── STOCK 2026-09-20a: Warehouse → Stock Movements ─────────────────────────
+// Every ledger row in a date window, with an opening balance per item and a
+// running total, so the team can see stock actually moving (and where it goes
+// negative because a sale went out before its goods were received).
+const DIST_MOVE_TYPES = [
+  ["receipt", "Receipt"], ["issue", "Issue"], ["return", "Return"], ["receipt_reversal", "Receipt reversal"],
+  ["opening", "Opening"], ["adjustment", "Adjustment"], ["count_adjust", "Count"], ["transfer", "Transfer"],
+];
+const DIST_SOURCE_LABEL = { bill: "Bill", goods_receipt: "Goods In", dispatch: "Dispatch", dispatch_reversal: "Dispatch reversed", packaging_order: "Packaging", opening: "Opening", count: "Count" };
+function DistStockMovementsView() {
+  const isoDay = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  const [from, setFrom] = useState(() => { const d = new Date(); d.setDate(d.getDate() - 30); return isoDay(d); });
+  const [to, setTo] = useState(() => isoDay(new Date()));
+  const [items, setItems] = useState([]);
+  const [batches, setBatches] = useState(new Map());
+  const [moves, setMoves] = useState([]);
+  const [opening, setOpening] = useState(new Map());
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+  const [search, setSearch] = useState("");
+  const [typeF, setTypeF] = useState("all");
+  const [negOnly, setNegOnly] = useState(false);
+  const [itemF, setItemF] = useState("");
+
+  const load = async () => {
+    setLoading(true); setErr("");
+    try {
+      const [its, mv, op] = await Promise.all([
+        fetchDistItems({ includeInactive: true }).catch(() => []),
+        fetchDistMovements({ from, to }),
+        computeDistOnHandBefore(from),
+      ]);
+      setItems(its || []); setMoves(mv || []); setOpening(op || new Map());
+      // batch numbers for the rows on screen (one query, only the ids we need)
+      const ids = [...new Set((mv || []).map(m => m.batchId).filter(Boolean))];
+      const bm = new Map();
+      for (let i = 0; i < ids.length; i += 200) {
+        const { data } = await supabase.from("dist_batches").select("id, batch_no").in("id", ids.slice(i, i + 200));
+        (data || []).forEach(b => bm.set(b.id, b.batch_no || ""));
+      }
+      setBatches(bm);
+    } catch (e) { setErr(e?.message || String(e)); }
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, [from, to]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const itemById = useMemo(() => new Map(items.map(i => [i.id, i])), [items]);
+  const itemLabel = (id) => { const it = itemById.get(id); return it ? `${it.sku ? it.sku + " · " : ""}${it.name}` : id; };
+  const typeLabel = (t) => (DIST_MOVE_TYPES.find(x => x[0] === t) || [t, t])[1];
+  const sourceLabel = (m) => {
+    const k = DIST_SOURCE_LABEL[m.sourceKind] || m.sourceKind || "—";
+    const ref = (m.sourceRef || "").split(":")[1] || "";
+    return ref ? `${k} · ${ref.slice(-10)}` : k;
+  };
+
+  // Running balance per item, oldest first, seeded from the opening map.
+  const rows = useMemo(() => {
+    const asc = [...moves].sort((a, b) => new Date(a.movedAt) - new Date(b.movedAt));
+    const bal = new Map(opening);
+    return asc.map(m => {
+      const after = (bal.get(m.itemId) || 0) + m.qty;
+      bal.set(m.itemId, after);
+      return { ...m, balance: after, batchNo: batches.get(m.batchId) || "" };
+    }).reverse();
+  }, [moves, opening, batches]);
+
+  // Per-item closing summary for the window.
+  const summary = useMemo(() => {
+    const byItem = new Map();
+    rows.forEach(r => {
+      const s = byItem.get(r.itemId) || { itemId: r.itemId, opening: opening.get(r.itemId) || 0, in: 0, out: 0, closing: null };
+      if (r.qty > 0) s.in += r.qty; else s.out += -r.qty;
+      if (s.closing == null) s.closing = r.balance;   // rows are newest-first, so the first seen is the closing balance
+      byItem.set(r.itemId, s);
+    });
+    return [...byItem.values()].sort((a, b) => itemLabel(a.itemId).localeCompare(itemLabel(b.itemId)));
+  }, [rows, opening]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const q = search.trim().toLowerCase();
+  const visible = rows.filter(r => {
+    if (typeF !== "all" && r.type !== typeF) return false;
+    if (itemF && r.itemId !== itemF) return false;
+    if (negOnly && r.balance >= 0) return false;
+    if (q && !itemLabel(r.itemId).toLowerCase().includes(q) && !(r.batchNo || "").toLowerCase().includes(q) && !sourceLabel(r).toLowerCase().includes(q)) return false;
+    return true;
+  });
+  const negativeItems = summary.filter(s => s.closing != null && s.closing < 0);
+  const totIn = visible.reduce((a, r) => a + (r.qty > 0 ? r.qty : 0), 0);
+  const totOut = visible.reduce((a, r) => a + (r.qty < 0 ? -r.qty : 0), 0);
+  const fmtQ = (n) => (Number(n) || 0).toLocaleString("en-GB", { maximumFractionDigits: 3 });
+  const fmtWhen = (ts) => { try { return new Date(ts).toLocaleString("en-GB", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }); } catch { return ts; } };
+
+  const exportCsv = () => {
+    const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const lines = [["When","Item","Type","Qty","Balance after","Batch","Source","By"].map(esc).join(",")];
+    visible.forEach(r => lines.push([fmtWhen(r.movedAt), itemLabel(r.itemId), typeLabel(r.type), r.qty, r.balance, r.batchNo, sourceLabel(r), r.createdBy || ""].map(esc).join(",")));
+    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `stock_movements_${from}_to_${to}.csv`; a.click();
+  };
+
+  const inputCls = "px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white";
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-lg font-bold text-white flex items-center gap-2"><Activity size={18} className="text-indigo-400"/> Stock movements</h2>
+        <p className="text-xs text-slate-500">Every ledger entry — receipts from Bills and Goods In, issues from dispatches, counts and adjustments — with the running balance per item.</p>
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        <input type="date" value={from} onChange={e => setFrom(e.target.value)} className={inputCls}/>
+        <span className="text-xs text-slate-500">to</span>
+        <input type="date" value={to} onChange={e => setTo(e.target.value)} className={inputCls}/>
+        <select value={typeF} onChange={e => setTypeF(e.target.value)} className={inputCls}>
+          <option value="all">All types</option>
+          {DIST_MOVE_TYPES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+        </select>
+        <select value={itemF} onChange={e => setItemF(e.target.value)} className={inputCls + " max-w-[260px]"}>
+          <option value="">All items</option>
+          {[...new Set(moves.map(m => m.itemId))].map(id => <option key={id} value={id}>{itemLabel(id)}</option>)}
+        </select>
+        <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search item / batch / source…" className={inputCls + " w-56"}/>
+        <label className="flex items-center gap-1.5 text-xs text-slate-300"><input type="checkbox" checked={negOnly} onChange={e => setNegOnly(e.target.checked)}/> Negative balance only</label>
+        <button onClick={load} className="px-3 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700">Refresh</button>
+        <button onClick={exportCsv} disabled={!visible.length} className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 disabled:opacity-50">Export CSV</button>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Movements</div><div className="text-lg font-bold text-white">{visible.length}</div></div>
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Units in</div><div className="text-lg font-bold text-emerald-400">{fmtQ(totIn)}</div></div>
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Units out</div><div className="text-lg font-bold text-rose-400">{fmtQ(totOut)}</div></div>
+        <div className="bg-slate-900 border border-slate-800 rounded-xl p-3"><div className="text-[10px] uppercase tracking-wide text-slate-500">Items below zero</div><div className={`text-lg font-bold ${negativeItems.length ? "text-amber-400" : "text-white"}`}>{negativeItems.length}</div></div>
+      </div>
+
+      {negativeItems.length > 0 && (
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 text-xs text-amber-200">
+          <div className="font-semibold mb-1">Sold before received — enter the supplier bill (or a count) to bring these back above zero:</div>
+          <div className="flex flex-wrap gap-x-4 gap-y-1">{negativeItems.map(s => <span key={s.itemId}>{itemLabel(s.itemId)} <span className="font-bold">{fmtQ(s.closing)}</span></span>)}</div>
+        </div>
+      )}
+
+      {err && <div className="text-xs text-red-400">{err}</div>}
+      {loading ? <div className="text-sm text-slate-500 py-10 text-center">Loading…</div> : (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="text-slate-500 uppercase tracking-wide text-[10px]">
+              <tr className="border-b border-slate-800">
+                <th className="text-left px-3 py-2">When</th><th className="text-left px-3 py-2">Item</th><th className="text-left px-3 py-2">Type</th>
+                <th className="text-right px-3 py-2">Qty</th><th className="text-right px-3 py-2">Balance</th><th className="text-left px-3 py-2">Batch</th>
+                <th className="text-left px-3 py-2">Source</th><th className="text-left px-3 py-2">By</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.length === 0 && <tr><td colSpan={8} className="px-3 py-8 text-center text-slate-600">No movements in this window{moves.length === 0 ? " — bills and dispatches posted from now on will appear here." : "."}</td></tr>}
+              {visible.map(r => (
+                <tr key={r.id} className="border-b border-slate-800/60 hover:bg-slate-800/40">
+                  <td className="px-3 py-2 text-slate-400 whitespace-nowrap">{fmtWhen(r.movedAt)}</td>
+                  <td className="px-3 py-2 text-slate-200">{itemLabel(r.itemId)}</td>
+                  <td className="px-3 py-2"><span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${r.qty > 0 ? "bg-emerald-500/15 text-emerald-300" : "bg-rose-500/15 text-rose-300"}`}>{typeLabel(r.type)}</span></td>
+                  <td className={`px-3 py-2 text-right font-semibold ${r.qty > 0 ? "text-emerald-400" : "text-rose-400"}`}>{r.qty > 0 ? "+" : ""}{fmtQ(r.qty)}</td>
+                  <td className={`px-3 py-2 text-right font-bold ${r.balance < 0 ? "text-amber-400" : "text-white"}`}>{fmtQ(r.balance)}</td>
+                  <td className="px-3 py-2 text-slate-400">{r.batchNo}</td>
+                  <td className="px-3 py-2 text-slate-400">{sourceLabel(r)}</td>
+                  <td className="px-3 py-2 text-slate-500">{r.createdBy || ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {summary.length > 0 && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-x-auto">
+          <div className="px-3 py-2 text-[10px] uppercase tracking-wide text-slate-500 border-b border-slate-800">Per item — this window</div>
+          <table className="w-full text-xs">
+            <thead className="text-slate-500 uppercase tracking-wide text-[10px]"><tr className="border-b border-slate-800">
+              <th className="text-left px-3 py-2">Item</th><th className="text-right px-3 py-2">Opening</th><th className="text-right px-3 py-2">In</th><th className="text-right px-3 py-2">Out</th><th className="text-right px-3 py-2">Closing</th>
+            </tr></thead>
+            <tbody>{summary.map(s => (
+              <tr key={s.itemId} className="border-b border-slate-800/60">
+                <td className="px-3 py-1.5 text-slate-200">{itemLabel(s.itemId)}</td>
+                <td className="px-3 py-1.5 text-right text-slate-400">{fmtQ(s.opening)}</td>
+                <td className="px-3 py-1.5 text-right text-emerald-400">{fmtQ(s.in)}</td>
+                <td className="px-3 py-1.5 text-right text-rose-400">{fmtQ(s.out)}</td>
+                <td className={`px-3 py-1.5 text-right font-bold ${s.closing < 0 ? "text-amber-400" : "text-white"}`}>{fmtQ(s.closing)}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -49797,11 +49989,19 @@ function OpsTeamView({
   );
 }
 
-function SuppliersView({ stores = [], storeFilter = "all" }) {
-  const [invoices, setInvoices] = useState([]);
+function SuppliersView({ stores = [], storeFilter = "all", entityStoreIds = null }) {
+  const [invoicesRaw, setInvoices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [expanded, setExpanded] = useState(null);
   useEffect(() => { listInvoices().then(d => { setInvoices(d||[]); setLoading(false); }).catch(()=>setLoading(false)); }, []);
+  // REGIONAL 2026-09-20b: aged payables used to ignore the Entity/Scope
+  // pickers entirely. A chosen store narrows to that store; an entity (or a
+  // regional session) narrows to its stores. inv.entity is the store id.
+  const invoices = useMemo(() => {
+    if (storeFilter !== "all") return invoicesRaw.filter(i => i.entity === storeFilter);
+    if (Array.isArray(entityStoreIds)) { const set = new Set(entityStoreIds); return invoicesRaw.filter(i => set.has(i.entity)); }
+    return invoicesRaw;
+  }, [invoicesRaw, storeFilter, entityStoreIds]);
 
   const today = new Date();
   const daysOld = (d) => d ? Math.floor((today - new Date(d)) / 86400000) : 0;
@@ -49881,7 +50081,10 @@ function SuppliersView({ stores = [], storeFilter = "all" }) {
   );
 }
 
-function AccountsExportView({ stores = [], bankTransactions = [], categories = [], storeFilter = "all" }) {
+function AccountsExportView({ stores = [], bankTransactions = [], categories = [], storeFilter = "all", allowedStoreIds = null }) {
+  // REGIONAL 2026-09-20b: invoice exports for a regional session only carry
+  // that region's invoices (inv.entity = store id).
+  const fenceInv = (inv) => Array.isArray(allowedStoreIds) ? (inv || []).filter(i => allowedStoreIds.includes(i.entity)) : (inv || []);
   const [busy, setBusy] = useState("");
   const [from, setFrom] = useState(() => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-01`; });
   const [to, setTo] = useState(() => new Date().toISOString().split("T")[0]);
@@ -49909,7 +50112,7 @@ function AccountsExportView({ stores = [], bankTransactions = [], categories = [
   const exportInvoices = async () => {
     setBusy("inv");
     try {
-      const inv = await fetchInvoicesForAccounts({ from, to });
+      const inv = fenceInv(await fetchInvoicesForAccounts({ from, to }));
       const rows = [["Date","Supplier","Number","Category","Ex-VAT","VAT","Status","Payment"]];
       inv.forEach(i => rows.push([i.date, i.supplier, i.number, i.category, i.totalExVat, i.totalVat, i.status, i.paymentStatus]));
       downloadCsv(`invoices_${from}_to_${to}.csv`, rows);
@@ -49920,7 +50123,7 @@ function AccountsExportView({ stores = [], bankTransactions = [], categories = [
   const exportVatSummary = async () => {
     setBusy("vat");
     try {
-      const inv = await fetchInvoicesForAccounts({ from, to });
+      const inv = fenceInv(await fetchInvoicesForAccounts({ from, to }));
       const purchaseVat = inv.reduce((a,i)=>a+(Number(i.totalVat)||0),0);
       const purchaseNet = inv.reduce((a,i)=>a+(Number(i.totalExVat)||0),0);
       const rows = [
@@ -51734,12 +51937,20 @@ function AccountsHubView(props) {
     onSaveCategory, onDeleteCategory, onSaveRule, onDeleteRule,
     sharedFile, onConsumeSharedFile, initialTab,
     customRoles = [], onSaveRole, onArchiveRole, onAssignMemberRole, accessPerms = {}, onSetPerm,
-    cashAccounts = [], cashLedger = [], cashHandlers = {}, entities = [] } = props;
+    cashAccounts = [], cashLedger = [], cashHandlers = {}, entities = [], allowedStoreIds = null } = props;
   const [tab, setTab] = useState(initialTab || "pnl");
   const [storeFilter, setStoreFilter] = useState("all");
   const [entityFilter, setEntityFilter] = useState("all");
+  // REGIONAL 2026-09-20b: allowedStoreIds (array) = a regional session. Every
+  // tab that fetches its own rows (P&L EOD/invoices, Suppliers, Reconcile
+  // candidates, Export, Invoices) is fenced to these stores, "All entities"
+  // means all entities IN SCOPE, and Central Kitchen leaves the scope picker.
+  const fenced = Array.isArray(allowedStoreIds);
   // Stores belonging to the selected entity (entity id == store.brandId, 1:1).
   const entityStores = entityFilter === "all" ? stores : stores.filter(s => s.brandId === entityFilter);
+  // Store-id fence handed to the tabs: the chosen entity's stores, or (for a
+  // regional session) every store in scope when no entity is chosen.
+  const tabStoreIds = (entityFilter === "all" && !fenced) ? null : entityStores.map(s => s.id);
   // If the chosen store isn't in the selected entity, reset to "all".
   useEffect(() => { if (storeFilter !== "all" && storeFilter !== "kitchen" && !entityStores.some(s => s.id === storeFilter)) setStoreFilter("all"); }, [entityFilter]); // eslint-disable-line
   // If a Tide statement was shared in, jump straight to the Bank tab.
@@ -51781,7 +51992,7 @@ function AccountsHubView(props) {
           <span className="text-xs font-semibold text-slate-400 uppercase tracking-wide ml-2">Scope</span>
           <select value={storeFilter} onChange={e=>setStoreFilter(e.target.value)} className="px-3 py-2 bg-slate-900 border border-slate-700 rounded-lg text-sm text-white">
             <option value="all">{entityFilter === "all" ? "All stores (group)" : "All stores in entity"}</option>
-            {entityFilter === "all" && <option value="kitchen">Central Kitchen</option>}
+            {entityFilter === "all" && !fenced && <option value="kitchen">Central Kitchen</option>}
             {entityStores.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
           </select>
           <span className="text-[11px] text-slate-500">applies to all Finance tabs</span>
@@ -51791,17 +52002,17 @@ function AccountsHubView(props) {
       {effTab === "roles" && isAdmin && <FinanceRolesTab customRoles={customRoles} opsTeam={opsTeam} accessPerms={accessPerms} onSaveRole={onSaveRole} onArchiveRole={onArchiveRole} onAssignMemberRole={onAssignMemberRole} onSetPerm={onSetPerm}/>}
       {effTab === "ledger" && acctCanFeature("feat.accounts.ledger") && <LedgerView entities={entities} entityFilter={entityFilter} stores={stores}/>}
 
-      {effTab === "pnl" && <AccountsView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} storeFilter={storeFilter} entityFilter={entityFilter} entityStoreIds={entityFilter === "all" ? null : entityStores.map(s=>s.id)}/>}
+      {effTab === "pnl" && <AccountsView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} storeFilter={storeFilter} entityFilter={entityFilter} entityStoreIds={tabStoreIds} fenced={fenced}/>}
       {effTab === "bank" && <BankView bankTransactions={bankTransactions} bankAccounts={bankAccounts} stores={stores} storeFilter={storeFilter} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} categories={categories} categoryRules={categoryRules} onImport={onImport} onUpdateTxn={onUpdateTxn} onDeleteTxn={onDeleteTxn} onSaveAccount={onSaveAccount} onDeleteAccount={onDeleteAccount} onSaveCategory={onSaveCategory} onDeleteCategory={onDeleteCategory} onSaveRule={onSaveRule} onDeleteRule={onDeleteRule} sharedFile={sharedFile} onConsumeSharedFile={onConsumeSharedFile}/>}
-      {effTab === "invoices" && <InvoicesView currentUser={currentUser} categories={categories} storeFilter={storeFilter} entityFilter={entityFilter} entities={entities}/>}
-      {effTab === "suppliers" && <SuppliersView stores={stores} storeFilter={storeFilter}/>}
-      {effTab === "reconcile" && <ReconciliationView bankTransactions={bankTransactions} stores={stores} storeFilter={storeFilter} bankAccounts={bankAccounts} entityStoreIds={entityFilter === "all" ? null : entityStores.map(s=>s.id)} cashLedger={cashLedger} cashAccounts={cashAccounts} cashHandlers={cashHandlers} onUpdateTxn={onUpdateTxn} onInvoicePaid={props.onInvoicePaid}/>}
-      {effTab === "export" && <AccountsExportView stores={stores} bankTransactions={bankTransactions} categories={categories} storeFilter={storeFilter}/>}
+      {effTab === "invoices" && <InvoicesView currentUser={currentUser} categories={categories} storeFilter={storeFilter} entityFilter={entityFilter} entities={entities} allowedStoreIds={allowedStoreIds}/>}
+      {effTab === "suppliers" && <SuppliersView stores={stores} storeFilter={storeFilter} entityStoreIds={tabStoreIds}/>}
+      {effTab === "reconcile" && <ReconciliationView bankTransactions={bankTransactions} stores={stores} storeFilter={storeFilter} bankAccounts={bankAccounts} entityStoreIds={tabStoreIds} fenced={fenced} cashLedger={cashLedger} cashAccounts={cashAccounts} cashHandlers={cashHandlers} onUpdateTxn={onUpdateTxn} onInvoicePaid={props.onInvoicePaid}/>}
+      {effTab === "export" && <AccountsExportView stores={stores} bankTransactions={bankTransactions} categories={categories} storeFilter={storeFilter} allowedStoreIds={fenced ? tabStoreIds : null}/>}
     </div>
   );
 }
 
-function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = "all", bankAccounts = [], entityStoreIds = null, cashLedger = [], cashAccounts = [], cashHandlers = {}, onUpdateTxn, onInvoicePaid }) {
+function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = "all", bankAccounts = [], entityStoreIds = null, fenced = false, cashLedger = [], cashAccounts = [], cashHandlers = {}, onUpdateTxn, onInvoicePaid }) {
   const [mode, setMode] = useState("bank"); // bank | cash
   const [matches, setMatches] = useState([]);
   const [invoices, setInvoices] = useState([]);
@@ -51835,9 +52046,12 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
       fetchPayoutsForRecon({ from, to }).catch(()=>[]),
       fetchPayrollRunsForRecon({ from, to }).catch(()=>[]),
     ]);
-    setMatches(m||[]); setInvoices(inv||[]); setPayouts(po||[]); setPayruns(pr||[]);
+    // REGIONAL 2026-09-20b: a regional session only gets its own invoices as
+    // match candidates (inv.entity = store id).
+    const invScoped = (fenced && Array.isArray(entityStoreIds)) ? (inv||[]).filter(i => entityStoreIds.includes(i.entity)) : (inv||[]);
+    setMatches(m||[]); setInvoices(invScoped); setPayouts(po||[]); setPayruns(pr||[]);
     setLoading(false);
-  }, [bankTransactions]);
+  }, [bankTransactions, fenced, entityStoreIds]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { loadAll(); }, [loadAll]);
 
   const matchedTxnIds = useMemo(() => new Set(matches.map(m=>m.bankTxnId)), [matches]);
@@ -52691,8 +52905,10 @@ function ReconciliationView({ bankTransactions = [], stores = [], storeFilter = 
   );
 }
 
-function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], categories = [], storeFilter: storeFilterProp, entityFilter = "all", entityStoreIds = null }) {
+function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], categories = [], storeFilter: storeFilterProp, entityFilter = "all", entityStoreIds = null, fenced = false }) {
   // entityStoreIds (when set) limits everything to the selected entity's stores.
+  // REGIONAL 2026-09-20b: `fenced` (regional session) also drops supplier
+  // invoices that don't resolve to an in-scope store (Central Kitchen, UK).
   const entitySet = entityStoreIds ? new Set(entityStoreIds) : null;
   const inEntity = (sid) => !entitySet || entitySet.has(sid);
   const [period, setPeriod] = useState("month");   // month | week
@@ -52794,6 +53010,7 @@ function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], c
     // entityId; fall back to matching the free-text entity against a store.
     invoices.forEach(inv => {
       const match = stores.find(s => s.id === inv.entity || s.name === inv.entity || s.shortName === inv.entity);
+      if (fenced && (!match || !inEntity(match.id))) return;
       // Entity scope: use entityId directly if present, else the matched store's entity.
       if (entityFilter && entityFilter !== "all") {
         const invEntity = inv.entityId || (match ? match.brandId : null);
@@ -52811,7 +53028,7 @@ function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], c
       r.otherSpend += Math.abs(t.amount);
     });
     return Object.values(byStore);
-  }, [eod, invoices, bankTransactions, stores, entityStoreIds, entityFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [eod, invoices, bankTransactions, stores, entityStoreIds, entityFilter, fenced]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Apply VAT presentation. Revenue (gross) & otherSpend (gross) convert if ex.
   const present = (r) => {
@@ -52855,9 +53072,10 @@ function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], c
     });
     // Invoices are expenses — bucket by their category (default Stock / COGS).
     invoices.forEach(inv => {
-      if (storeFilter !== "all") {
+      if (storeFilter !== "all" || fenced) {
         const match = stores.find(s => s.id === inv.entity || s.name === inv.entity || s.shortName === inv.entity);
-        if (!match || match.id !== storeFilter) return;
+        if (!match) return;
+        if (storeFilter !== "all" ? match.id !== storeFilter : !inEntity(match.id)) return;
       }
       const name = inv.category || "Stock / COGS";
       exp[name] = (exp[name] || 0) + (Number(inv.totalExVat) || 0);
@@ -52865,7 +53083,7 @@ function AccountsView({ stores = [], bankTransactions = [], bankAccounts = [], c
     const toArr = (o) => Object.entries(o).map(([name, amount]) => ({ name, amount })).sort((a,b)=>b.amount-a.amount);
     const uncatCount = bankTransactions.filter(t => inRange(t.txnDate) && txnInStore(t) && !t.category).length + invoices.filter(i => !i.category).length;
     return { income: toArr(inc), expense: toArr(exp), uncatCount };
-  }, [bankTransactions, invoices, bounds.from, bounds.to, storeFilter, stores]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [bankTransactions, invoices, bounds.from, bounds.to, storeFilter, stores, fenced]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const storeName = (id) => { if (id === "unassigned") return "Unassigned"; const s = stores.find(x => x.id === id); return s ? (s.shortName || s.name) : id; };
   const shiftPeriod = (dir) => { const d = new Date(anchor); if (period === "month") d.setMonth(d.getMonth() + dir); else d.setDate(d.getDate() + dir*7); setAnchor(d); };
@@ -67970,7 +68188,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: REGIONAL 2026-09-20a (people/comms/invoices fenced, chain+agent hidden)");
+      console.log("CB build: STOCK 2026-09-20a (bill→receipt, unreceived batch, movements page) + REGIONAL 2026-09-20b");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -69775,6 +69993,7 @@ export default function App() {
       ]},
       { key: "fresh-produce", label: "Fresh Produce", icon: Truck, requiresEntity: "brand-distribution" },
       { key: "expenses", label: "Expenses", icon: Receipt, requiresEntity: "brand-distribution" },
+      { key: "dist-movements", label: "Stock Movements", icon: Activity, requiresEntity: "brand-distribution" },
       { key: "dist-reports", label: "Reports", icon: BarChart2, requiresEntity: "brand-distribution" },
       { key: "dist-fuel", label: "Fleet Fuel", icon: Truck, requiresEntity: "brand-distribution" },
     ]},
@@ -70369,6 +70588,7 @@ export default function App() {
             {effectiveActiveView === "dist-credit-notes" && <DistCreditNotesView currentUser={currentUser}/>}
             {effectiveActiveView === "dist-packaging" && <PackagingOrdersView currentUser={currentUser}/>}
             {effectiveActiveView === "dist-reports" && <DistReportsView/>}
+            {effectiveActiveView === "dist-movements" && <DistStockMovementsView/>}
             {effectiveActiveView === "dist-fuel" && <FleetFuelView currentUser={currentUser}/>}
             {effectiveActiveView === "setup" && setupPanel === "payslip-inbox" && ["owner","hq_staff"].includes(currentUser.role) && <PayslipInboxView currentUser={currentUser} opsTeam={opsTeam}/>}
             {effectiveActiveView === "cash-accounts" && financeAvailable && <CashAccountsView accounts={cashAccounts} sources={cashSources} expenseTypes={cashExpenseTypes} ledger={cashLedger} stores={stores} categories={categories} handlers={cashHandlers}/>}
@@ -70376,7 +70596,7 @@ export default function App() {
             {effectiveActiveView === "petty-cash" && financeAvailable && <PettyCashView accounts={cashAccounts} ledger={cashLedger} stores={stores} target={pettyTarget} handlers={pettyHandlers}/>}
             {effectiveActiveView === "expenses" && <ExpensesView claims={expenseClaims} cashAccounts={cashAccounts} bankAccounts={bankAccounts} expenseTypes={cashExpenseTypes} categories={categories} payees={expensePayees} bankTransactions={bankTransactions} stores={stores} opsTeam={opsTeam} currentUser={currentUser} effectiveRole={effectiveRole} canReconcile={["owner","hq_staff","manager"].includes(effectiveRole)} typeAccounts={expTypeAccounts} memberAccounts={memberExpAccounts} excludedStores={expExcludedStores} memberTypes={memberExpTypes} memberCategories={memberExpCategories} memberStores={memberExpStores} handlers={expenseHandlers}/>}
             {effectiveActiveView === "fresh-produce" && <DistTypedItemsView itemType="fresh" currentUser={currentUser}/>}
-            {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && financeAvailable)) && financeAvailable && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} entities={entities} opsTeam={opsTeam} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} onAssignMemberRole={handleAssignMemberRole} accessPerms={accessPerms} onSetPerm={async (role, featKey, allowed) => { await setAccessPermission(role, featKey, allowed); reloadAccessPerms(); }} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
+            {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && financeAvailable)) && financeAvailable && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} allowedStoreIds={regionalStoreIdList} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} entities={entities} opsTeam={opsTeam} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} onAssignMemberRole={handleAssignMemberRole} accessPerms={accessPerms} onSetPerm={async (role, featKey, allowed) => { await setAccessPermission(role, featKey, allowed); reloadAccessPerms(); }} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
             {effectiveActiveView === "reports" && canSeeView("reports") && <ReportsView stores={visibleStores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser} visibleStoreIds={scopedVisibleStoreIds} assignments={assignments} auditTrail={auditTrail} onClearAudit={handleClearAudit} checklistStates={checklistStates} fenced={!!regionalScope}/>}
             {effectiveActiveView === "comms" && <CommunicationView
               currentUser={currentUser} brands={visibleBrands} stores={stores} opsTeam={opsTeam} users={users}

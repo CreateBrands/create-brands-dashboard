@@ -12696,15 +12696,40 @@ export async function createDistBatch(b) {
   return data ? mapDistBatch(data) : null;
 }
 
+// STOCK 2026-09-20a: the per-item "unreceived" batch. A stocked line that
+// dispatches beyond what the batches hold used to move NOTHING (batch-level
+// tracking cannot go negative, so the shortfall was simply dropped). It now
+// issues against this batch instead, so item-level on-hand goes negative and
+// the gap is visible in Stock Movements until the goods are received.
+export async function getDistUnreceivedBatch(itemId, landedCost = 0) {
+  const batchNo = `UNRECEIVED-${itemId}`;
+  const { data } = await supabase.from("dist_batches").select("*").eq("item_id", itemId).eq("batch_no", batchNo).limit(1);
+  if (data && data.length) return mapDistBatch(data[0]);
+  return createDistBatch({ itemId, batchNo, landedCost: Number(landedCost) || 0, costMethod: "estimate", sourceKind: "unreceived" });
+}
+
 // ── Stock movements (append-only; the single source of truth) ───────────────
-export async function fetchDistMovements({ itemId, batchId, type } = {}) {
+export async function fetchDistMovements({ itemId, batchId, type, from, to, limit } = {}) {
   let q = supabase.from("dist_stock_movements").select("*").order("moved_at", { ascending: false });
   if (itemId) q = q.eq("item_id", itemId);
   if (batchId) q = q.eq("batch_id", batchId);
   if (type) q = Array.isArray(type) ? q.in("type", type) : q.eq("type", type);
+  if (from) q = q.gte("moved_at", `${from}T00:00:00`);
+  if (to) q = q.lte("moved_at", `${to}T23:59:59.999`);
+  if (limit) q = q.limit(limit);
   const { data, error } = await q;
   if (error) throw error;
   return (data || []).map(mapDistMovement);
+}
+
+// STOCK 2026-09-20a: on-hand per item as it stood BEFORE a date — the opening
+// balance the Stock Movements page needs to show a running total.
+export async function computeDistOnHandBefore(dateStr) {
+  const { data, error } = await supabase.from("dist_stock_movements").select("item_id, qty").lt("moved_at", `${dateStr}T00:00:00`);
+  if (error) throw error;
+  const m = new Map();
+  for (const r of data || []) m.set(r.item_id, (m.get(r.item_id) || 0) + (Number(r.qty) || 0));
+  return m;
 }
 
 // Insert a movement. source_ref makes it idempotent: if one already exists with
@@ -13118,16 +13143,57 @@ export async function postDistBill(bill, lines = []) {
     ? (subtotal > 0 ? Math.max(0, 1 - discVal / subtotal) : 1)
     : (1 - discVal / 100);
 
-  let net = 0, vat = 0;
+  // STOCK 2026-09-20a: a bill with catalogue lines and NO linked goods receipt
+  // now RECEIVES the stock itself (one batch per line, landed cost = the
+  // bill's net unit price). Before this, only Goods In posted receipts, so a
+  // team entering Bills alone never put anything into the ledger — and with no
+  // batches to draw from, dispatches went out unbatched and moved nothing
+  // either. Fresh / CK lines are non-stocked and are skipped as everywhere else.
+  const receiveHere = !head.grn_id && !bill.skipStock;
+  const allItems = receiveHere ? await fetchDistItems().catch(() => []) : [];
+  const typeById = new Map(allItems.map(i => [i.id, i.itemType || "warehouse"]));
+  let net = 0, vat = 0, stockValue = 0;
   for (const { l, pct, baseNet } of lineNets) {
     const lineNet = baseNet * factor;
     net += lineNet; vat += lineNet * pct / 100;
+    const lineId = distId("dbilll");
     await supabase.from("dist_bill_lines").insert({
-      id: distId("dbilll"), bill_id: id, item_id: l.itemId || null, description: l.description || null,
+      id: lineId, bill_id: id, item_id: l.itemId || null, description: l.description || null,
       qty: Number(l.qty) || 0, unit_price: Number(l.unitPrice) || 0, tax_rate_id: l.taxRateId || null, account_code: l.accountCode || null,
     });
+    const qty = Number(l.qty) || 0;
+    if (receiveHere && l.itemId && qty > 0 && (typeById.get(l.itemId) || "warehouse") === "warehouse") {
+      const unitNet = qty > 0 ? lineNet / qty : 0;
+      try {
+        const batch = await createDistBatch({
+          itemId: l.itemId, batchNo: head.bill_number, expiryDate: l.expiryDate || null,
+          landedCost: +unitNet.toFixed(4), costMethod: "vendor_bill", sourceKind: "vendor_bill",
+        });
+        await addDistMovement({
+          itemId: l.itemId, batchId: batch.id, qty, type: "receipt",
+          sourceKind: "bill", sourceRef: `distbill:${id}:${lineId}`, createdBy: bill.createdBy,
+        });
+        stockValue += lineNet;
+      } catch (e) { console.error("bill receipt failed:", l.itemId, e?.message || e); }
+    }
   }
   net = +net.toFixed(2); vat = +vat.toFixed(2); const gross = +(net + vat).toFixed(2);
+  // Journal for the received stock: Dr Stock 1200 / Cr GRNI 2050 — the same
+  // entry Goods In posts, so GRNI nets back to zero against the bill below.
+  if (stockValue > 0) {
+    const [stockAcc, grniAcc] = await Promise.all([
+      resolveAccountForEntity(DIST_ENTITY, "1200"), resolveAccountForEntity(DIST_ENTITY, "2050"),
+    ]);
+    if (stockAcc && grniAcc) {
+      try {
+        await postJournalEntry({
+          entityId: DIST_ENTITY, entryDate: billDate, memo: `Stock received on bill ${head.bill_number}`,
+          sourceKind: "dist_bill_receipt", sourceRef: `distbillrecv:${id}`, createdBy: bill.createdBy,
+          lines: [{ accountId: stockAcc, amount: +stockValue.toFixed(2) }, { accountId: grniAcc, amount: -(+stockValue.toFixed(2)) }],
+        });
+      } catch (e) { /* best-effort */ }
+    }
+  }
 
   // Journal: Dr GRNI 2050 (net) + Dr VAT 2100 (vat) / Cr Trade creditors 2000 (gross).
   if (gross > 0) {
@@ -14393,7 +14459,7 @@ export async function advanceDistOrderToDispatch(soId, createdBy, freshCosts = {
       // Batchless = nothing to draw down: fresh items by design, or a stocked
       // item dispatched beyond available batches (negative-stock override).
       // Either way: dispatch + invoice at full qty, no stock movement.
-      taxRateId: l.taxRateId || null, nonStock: isFresh || !l.batchId,
+      taxRateId: l.taxRateId || null, nonStock: isFresh,   // STOCK 2026-09-20a: batchless stocked lines now hit the UNRECEIVED batch
     };
   });
   if (!lines.length) throw new Error("This pick has no lines to dispatch.");
@@ -14469,20 +14535,38 @@ export async function postDistDispatch(dispatch, lines = []) {
   if (error) throw error;
 
   let cogsValue = 0;
-  for (const l of lines.filter(x => x.itemId && Number(x.qty) > 0 && (x.batchId || x.nonStock))) {
-    const nonStock = l.nonStock || !l.batchId;
+  // STOCK 2026-09-20a: a stocked line with no batch (nothing received yet) no
+  // longer vanishes from the ledger — it issues against the item's UNRECEIVED
+  // batch so on-hand goes negative and the gap shows. Only explicitly
+  // non-stocked lines (fresh / CK, nonStock: true) skip the ledger.
+  const stockedNoBatch = lines.filter(x => x.itemId && Number(x.qty) > 0 && !x.batchId && !x.nonStock);
+  let costById = new Map();
+  if (stockedNoBatch.length) {
+    const allItems = await fetchDistItems().catch(() => []);
+    costById = new Map(allItems.map(i => [i.id, Number(i.purchaseRate) || 0]));
+  }
+  for (const l of lines.filter(x => x.itemId && Number(x.qty) > 0)) {
+    const nonStock = !!l.nonStock;
+    let batchId = nonStock ? null : (l.batchId || null);
+    let landedCost = nonStock ? 0 : (Number(l.landedCost) || 0);
+    if (!nonStock && !batchId) {
+      try {
+        const fb = await getDistUnreceivedBatch(l.itemId, costById.get(l.itemId) || 0);
+        batchId = fb.id; landedCost = landedCost || Number(fb.landedCost) || 0;
+      } catch (e) { console.error("unreceived batch failed:", l.itemId, e?.message || e); }
+    }
     await supabase.from("dist_dispatch_lines").insert({
-      id: distId("ddispl"), dispatch_id: id, item_id: l.itemId, batch_id: nonStock ? null : l.batchId, qty: Number(l.qty) || 0,
-      landed_cost: nonStock ? 0 : (Number(l.landedCost) || 0), unit_price: Number(l.unitPrice) || 0, tax_rate_id: l.taxRateId || null,
+      id: distId("ddispl"), dispatch_id: id, item_id: l.itemId, batch_id: batchId, qty: Number(l.qty) || 0,
+      landed_cost: landedCost, unit_price: Number(l.unitPrice) || 0, tax_rate_id: l.taxRateId || null,
     });
     // Non-stocked (fresh produce / CK) lines: no stock movement, no stock-based
     // COGS — the driver sourced them to order; their cost is the purchase itself.
-    if (!nonStock) {
+    if (!nonStock && batchId) {
       await addDistMovement({
-        itemId: l.itemId, batchId: l.batchId, qty: -Math.abs(Number(l.qty) || 0), type: "issue",
-        sourceKind: "dispatch", sourceRef: `distdisp:${id}:${l.itemId}:${l.batchId}`, createdBy: dispatch.createdBy,
+        itemId: l.itemId, batchId, qty: -Math.abs(Number(l.qty) || 0), type: "issue",
+        sourceKind: "dispatch", sourceRef: `distdisp:${id}:${l.itemId}:${batchId}`, createdBy: dispatch.createdBy,
       });
-      cogsValue += (Number(l.qty) || 0) * (Number(l.landedCost) || 0);
+      cogsValue += (Number(l.qty) || 0) * landedCost;
     }
   }
 
