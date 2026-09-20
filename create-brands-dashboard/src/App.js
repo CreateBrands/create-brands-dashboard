@@ -14752,6 +14752,95 @@ function DistReportsView() {
   );
 }
 
+// ─── STOCK 2026-09-20c: console harness for the stock ledger ────────────────
+// Runs the same functions the screens call, asserts the ledger after each
+// step, prints a pass/fail table, and removes what it created. Nothing here
+// bypasses the app code — that is the point.
+async function runStockLedgerTest({ itemA, itemB, customerId, keep = false, purge = true } = {}) {
+  const results = [];
+  const step = (name, ok, detail) => { results.push({ step: name, result: ok ? "PASS" : "FAIL", detail: detail || "" }); (ok ? console.log : console.error)(`${ok ? "✔" : "✖"} ${name}`, detail || ""); };
+  const onHand = async (id) => (await computeDistOnHand(id)).get(id) || 0;
+  const movesFor = async (ref) => (await fetchDistMovements({})).filter(m => (m.sourceRef || "").includes(ref));
+  const created = { billId: null, soId: null, pickId: null, dispatchId: null };
+  const tag = `TEST-${Date.now().toString().slice(-6)}`;
+  try {
+    // ── pick items + a customer ──
+    const items = (await fetchDistItems()).filter(i => i.active && (i.itemType || "warehouse") === "warehouse" && !i.fulfilledBy);
+    if (items.length < 2) throw new Error("Need at least two active warehouse items.");
+    const A = items.find(i => i.id === itemA) || items[0];
+    const B = items.find(i => i.id === itemB && i.id !== A.id) || items.find(i => i.id !== A.id);
+    const customers = await fetchDistContacts({ kind: "customer" });
+    const cust = customers.find(c => c.id === customerId) || customers.find(c => c.active && c.storeId) || customers[0];
+    if (!cust) throw new Error("No customer found.");
+    console.log(`Items: A = ${A.name} (${A.id}), B = ${B.name} (${B.id}); customer = ${cust.displayName}; tag ${tag}`);
+    const a0 = await onHand(A.id), b0 = await onHand(B.id);
+    console.log(`Opening on-hand: A ${a0}, B ${b0}`);
+
+    // ── 1. bill receives stock ──
+    created.billId = await postDistBill({ billNumber: `${tag}-BILL`, vendorId: null, billDate: new Date().toISOString().slice(0, 10), note: "cbStockTest", createdBy: "cbStockTest" },
+      [{ itemId: A.id, qty: 2, unitPrice: 1.5, description: "cbStockTest" }]);
+    const a1 = await onHand(A.id);
+    const recs = await movesFor(`distbill:${created.billId}`);
+    step("1 bill posts a receipt", recs.length === 1 && recs[0].type === "receipt" && recs[0].qty === 2, `movements=${recs.length} onHand A ${a0} → ${a1}`);
+    step("1b on-hand rose by 2", Math.abs(a1 - a0 - 2) < 1e-6, `${a0} → ${a1}`);
+
+    // ── 2. SO for A (stock available) + B (nothing received) ──
+    created.soId = await createDistSalesOrder({ soNumber: `${tag}-SO`, customerId: cust.id, status: "confirmed", note: "cbStockTest", createdBy: "cbStockTest" },
+      [{ itemId: A.id, qty: 1, unitPrice: 2 }, { itemId: B.id, qty: 1, unitPrice: 2 }]);
+    const pick = await advanceDistOrderToPick(created.soId, "cbStockTest");
+    created.pickId = pick?.id || (await fetchDistPicks({})).find(p => p.soId === created.soId)?.id || null;
+    step("2 order picked", !!created.pickId, `pick ${created.pickId}`);
+    await advanceDistOrderToDispatch(created.soId, "cbStockTest");
+    const disp = (await fetchDistDispatches({})).find(d => d.soId === created.soId);
+    created.dispatchId = disp?.id || null;
+    step("3 order dispatched", !!created.dispatchId, `dispatch ${created.dispatchId}`);
+    const issues = await movesFor(`distdisp:${created.dispatchId}`);
+    const issueA = issues.find(m => m.itemId === A.id), issueB = issues.find(m => m.itemId === B.id);
+    const a2 = await onHand(A.id), b2 = await onHand(B.id);
+    step("3a A issued from the bill batch", !!issueA && issueA.qty === -1 && issueA.batchId === recs[0]?.batchId, `onHand A ${a1} → ${a2}`);
+    let bBatchNo = "";
+    if (issueB) { const { data } = await supabase.from("dist_batches").select("batch_no").eq("id", issueB.batchId).maybeSingle(); bBatchNo = data?.batch_no || ""; }
+    step("3b B issued against UNRECEIVED batch", !!issueB && issueB.qty === -1 && bBatchNo === `UNRECEIVED-${B.id}`, `batch "${bBatchNo}" onHand B ${b0} → ${b2}`);
+    step("3c B on-hand went down by 1", Math.abs(b2 - b0 + 1) < 1e-6, `${b0} → ${b2}`);
+
+    if (keep) { console.warn("keep:true — test documents left in place:", created); console.table(results); return { results, created }; }
+
+    // ── 4. clean up in dependency order, checking the ledger comes back ──
+    await deleteDistDispatch(created.dispatchId); created.dispatchId = null;
+    const a3 = await onHand(A.id), b3 = await onHand(B.id);
+    step("4 dispatch delete returned stock", Math.abs(a3 - a1) < 1e-6 && Math.abs(b3 - b0) < 1e-6, `A ${a2} → ${a3}, B ${b2} → ${b3}`);
+    if (created.pickId) { await deleteDistPick(created.pickId).catch(e => console.warn("pick delete:", e.message)); created.pickId = null; }
+    await deleteDistSalesOrder(created.soId); created.soId = null;
+    await deleteDistBill(created.billId);
+    const a4 = await onHand(A.id);
+    step("5 bill delete reversed the receipt", Math.abs(a4 - a0) < 1e-6, `A ${a3} → ${a4} (opening ${a0})`);
+    created.billId = null;
+
+    if (purge) {
+      // remove the net-zero test rows + the batches they created so the ledger stays clean
+      const all = await fetchDistMovements({});
+      const mine = all.filter(m => (m.createdBy === "cbStockTest") || (m.sourceRef || "").includes(tag) || m.sourceKind === "bill_reversal" && all.some(x => x.id === (m.sourceRef || "").split(":").pop() && x.createdBy === "cbStockTest"));
+      const ids = new Set(mine.map(m => m.id));
+      // reversal / return rows reference the same batches — pull them in too
+      const batchIds = new Set(mine.map(m => m.batchId).filter(Boolean));
+      all.forEach(m => { if (batchIds.has(m.batchId) && Math.abs(new Date(m.movedAt) - Date.now()) < 15 * 60000) ids.add(m.id); });
+      if (ids.size) await supabase.from("dist_stock_movements").delete().in("id", [...ids]);
+      const testBatches = [...batchIds].filter(Boolean);
+      if (testBatches.length) {
+        const { data: bs } = await supabase.from("dist_batches").select("id, batch_no").in("id", testBatches);
+        const del = (bs || []).filter(b => b.batch_no === `${tag}-BILL`).map(b => b.id);   // keep UNRECEIVED-<item>: reusable, now at zero
+        if (del.length) await supabase.from("dist_batches").delete().in("id", del);
+      }
+      step("6 purge", true, `${ids.size} ledger rows removed; UNRECEIVED batch kept at zero`);
+    }
+  } catch (e) {
+    step("ABORTED", false, e?.message || String(e));
+    console.warn("Left behind (delete by hand if needed):", created);
+  }
+  console.table(results);
+  return { results, created };
+}
+
 // ─── STOCK 2026-09-20a: Warehouse → Stock Movements ─────────────────────────
 // Every ledger row in a date window, with an opening balance per item and a
 // running total, so the team can see stock actually moving (and where it goes
@@ -68188,7 +68277,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: STOCK 2026-09-20a (bill→receipt, unreceived batch, movements page) + REGIONAL 2026-09-20b");
+      console.log("CB build: STOCK 2026-09-20c (cbStockTest harness)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -68196,6 +68285,13 @@ export default function App() {
       //   await cbBatchMatch()                   -> writes
       window.cbBatchMatch = (opts) => runBatchMatchInvoiceLines(opts || {});
       console.log("CB: run  await cbBatchMatch({dryRun:true})  to preview receipt matching");
+      // STOCK 2026-09-20c: end-to-end ledger test through the REAL code paths.
+      //   await cbStockTest()                         -> bill -> SO -> pick -> dispatch -> verify -> clean up
+      //   await cbStockTest({ keep: true })           -> leave the test documents in place to inspect
+      //   await cbStockTest({ purge: false })         -> clean up documents but keep the (net-zero) ledger rows
+      //   await cbStockTest({ itemA, itemB, customerId }) -> choose the items / customer yourself
+      window.cbStockTest = (opts) => runStockLedgerTest(opts || {});
+      console.log("CB: run  await cbStockTest()  to test the stock ledger end to end");
     } catch {}
   }, []);
   const [pendingConvert, setPendingConvert] = useState(null); // {target, source} for lifecycle conversions
