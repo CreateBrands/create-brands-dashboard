@@ -14761,7 +14761,7 @@ async function runStockLedgerTest({ itemA, itemB, customerId, keep = false, purg
   const step = (name, ok, detail) => { results.push({ step: name, result: ok ? "PASS" : "FAIL", detail: detail || "" }); (ok ? console.log : console.error)(`${ok ? "✔" : "✖"} ${name}`, detail || ""); };
   const onHand = async (id) => (await computeDistOnHand(id)).get(id) || 0;
   const movesFor = async (ref) => (await fetchDistMovements({})).filter(m => (m.sourceRef || "").includes(ref));
-  const created = { billId: null, soId: null, pickId: null, dispatchId: null };
+  const created = { billId: null, soId: null, pickId: null, dispatchId: null, invoiceId: null };
   const tag = `TEST-${Date.now().toString().slice(-6)}`;
   try {
     // ── pick items + a customer ──
@@ -14816,6 +14816,17 @@ async function runStockLedgerTest({ itemA, itemB, customerId, keep = false, purg
     step("5 bill delete reversed the receipt", Math.abs(a4 - a0) < 1e-6, `A ${a3} → ${a4} (opening ${a0})`);
     created.billId = null;
 
+    // ── 6. standalone invoice (no order) issues stock, delete returns it ──
+    const invId = await postDistInvoice({ invoiceNumber: `${tag}-INV`, customerId: cust.id, note: "cbStockTest", createdBy: "cbStockTest", vatMode: "exclusive" },
+      [{ itemId: B.id, qty: 1, unitPrice: 2 }]);
+    created.invoiceId = invId;
+    const invIss = await movesFor(`distinv:${invId}`);
+    const b5 = await onHand(B.id);
+    step("6 standalone invoice issued stock", invIss.length >= 1 && invIss.every(m => m.type === "issue") && Math.abs(b5 - b0 + 1) < 1e-6, `movements=${invIss.length} onHand B ${b0} → ${b5}`);
+    await deleteDistInvoice(invId); created.invoiceId = null;
+    const b6 = await onHand(B.id);
+    step("6b invoice delete returned stock", Math.abs(b6 - b0) < 1e-6, `B ${b5} → ${b6}`);
+
     if (purge) {
       // remove the net-zero test rows + the batches they created so the ledger stays clean
       const all = await fetchDistMovements({});
@@ -14831,7 +14842,7 @@ async function runStockLedgerTest({ itemA, itemB, customerId, keep = false, purg
         const del = (bs || []).filter(b => b.batch_no === `${tag}-BILL`).map(b => b.id);   // keep UNRECEIVED-<item>: reusable, now at zero
         if (del.length) await supabase.from("dist_batches").delete().in("id", del);
       }
-      step("6 purge", true, `${ids.size} ledger rows removed; UNRECEIVED batch kept at zero`);
+      step("7 purge", true, `${ids.size} ledger rows removed; UNRECEIVED batch kept at zero`);
     }
   } catch (e) {
     step("ABORTED", false, e?.message || String(e));
@@ -68277,7 +68288,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: STOCK 2026-09-20c (cbStockTest harness)");
+      console.log("CB build: STOCK 2026-09-20d (standalone invoices move stock)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -68285,7 +68296,7 @@ export default function App() {
       //   await cbBatchMatch()                   -> writes
       window.cbBatchMatch = (opts) => runBatchMatchInvoiceLines(opts || {});
       console.log("CB: run  await cbBatchMatch({dryRun:true})  to preview receipt matching");
-      // STOCK 2026-09-20c: end-to-end ledger test through the REAL code paths.
+      // STOCK 2026-09-20c/d: end-to-end ledger test through the REAL code paths.
       //   await cbStockTest()                         -> bill -> SO -> pick -> dispatch -> verify -> clean up
       //   await cbStockTest({ keep: true })           -> leave the test documents in place to inspect
       //   await cbStockTest({ purge: false })         -> clean up documents but keep the (net-zero) ledger rows

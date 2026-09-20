@@ -13385,7 +13385,7 @@ export async function deleteDistBill(billId) {
       } catch (e) { /* best-effort */ }
     }
   }
-  // STOCK 2026-09-20b: a bill that received stock on posting gives it back on
+  // STOCK 2026-09-20b (marker: STOCK 2026-09-20d): a bill that received stock on posting gives it back on
   // delete — one receipt_reversal per receipt movement (idempotent by ref),
   // plus the reversing Dr GRNI / Cr Stock journal at the batch landed cost.
   try {
@@ -14755,6 +14755,45 @@ export async function postDistInvoice(inv, lines = []) {
       discount_type: l.discountType || "percent", tax_rate_id: l.taxRateId || null, account_code: l.accountCode || null,
     });
   }
+  // STOCK 2026-09-20d: a STANDALONE invoice (no dispatch behind it) is the
+  // only record that stock left, so it issues the stock itself: FEFO across
+  // the item's batches, any shortfall against the UNRECEIVED batch, and the
+  // COGS journal at landed cost. Invoices raised from a dispatch skip this —
+  // the dispatch already moved the stock. Fresh / CK lines are non-stocked.
+  if (!head.dispatch_id && !inv.skipStock) {
+    try {
+      const allItems = await fetchDistItems().catch(() => []);
+      const info = new Map(allItems.map(i => [i.id, i]));
+      let cogsValue = 0;
+      for (const l of valid) {
+        const qty = Number(l.qty) || 0;
+        const it = l.itemId ? info.get(l.itemId) : null;
+        if (!it || qty <= 0 || (it.itemType || "warehouse") !== "warehouse") continue;
+        const alloc = await suggestDistFefo(l.itemId, qty).catch(() => []);
+        let got = 0;
+        for (const a of alloc) {
+          await addDistMovement({ itemId: l.itemId, batchId: a.batchId, qty: -a.qty, type: "issue",
+            sourceKind: "invoice", sourceRef: `distinv:${id}:${l.itemId}:${a.batchId}`, createdBy: inv.createdBy });
+          cogsValue += a.qty * (Number(a.landedCost) || 0); got += a.qty;
+        }
+        if (got + 0.0005 < qty) {
+          const fb = await getDistUnreceivedBatch(l.itemId, Number(it.purchaseRate) || 0);
+          const rest = +(qty - got).toFixed(3);
+          await addDistMovement({ itemId: l.itemId, batchId: fb.id, qty: -rest, type: "issue",
+            sourceKind: "invoice", sourceRef: `distinv:${id}:${l.itemId}:${fb.id}`, createdBy: inv.createdBy });
+          cogsValue += rest * (Number(fb.landedCost) || 0);
+        }
+      }
+      if (cogsValue > 0) {
+        const [cogs, stock] = await Promise.all([resolveAccountForEntity(DIST_ENTITY, "5000"), resolveAccountForEntity(DIST_ENTITY, "1200")]);
+        if (cogs && stock) await postJournalEntry({
+          entityId: DIST_ENTITY, entryDate: invoiceDate, memo: `COGS on invoice ${head.invoice_number}`,
+          sourceKind: "dist_invoice_cogs", sourceRef: `distinvcogs:${id}`, createdBy: inv.createdBy,
+          lines: [{ accountId: cogs, amount: +cogsValue.toFixed(2) }, { accountId: stock, amount: -(+cogsValue.toFixed(2)) }],
+        });
+      }
+    } catch (e) { console.error("invoice stock issue failed:", e?.message || e); }
+  }
   const { net, vat } = await distDocNetVat({ lines: valid, vatMode: inv.vatMode, discountValue: inv.discountPercent, discountType: inv.discountType });
   const shipping = Number(inv.shippingCharge) || 0;
   const gross = +(net + vat + shipping).toFixed(2);
@@ -14783,12 +14822,12 @@ export async function postDistInvoice(inv, lines = []) {
   await advanceSoStatus(inv.soId, "invoiced");
   if (inv.soId) await logSoEvent(inv.soId, "invoiced", { actor: inv.createdBy || null, note: `Invoice ${head.invoice_number} raised`, payload: { invoiceId: id, invoiceNumber: head.invoice_number, total: gross } });
   try {
-    const { data: cust2 } = head.customer_id ? await supabase.from("dist_contacts").select("display_name, company").eq("id", head.customer_id).single() : { data: null };
+    const { data: cust2 } = head.customer_id ? await supabase.from("dist_contacts").select("display_name, company_name").eq("id", head.customer_id).single() : { data: null };
     const { data: items2 } = await supabase.from("dist_items").select("id, name, category");
     const nb = new Map((items2 || []).map(x => [x.id, x]));
     await supabase.from("ck_label_jobs").insert({ status: "queued", kind: "doc", payload: {
       title: "INVOICE", subtitle: head.invoice_number,
-      meta: [`Bill to: ${cust2?.display_name || cust2?.company || ""}`, `Date: ${head.invoice_date}`, `Due: ${head.due_date || ""}`],
+      meta: [`Bill to: ${cust2?.display_name || cust2?.company_name || ""}`, `Date: ${head.invoice_date}`, `Due: ${head.due_date || ""}`],
       lines: (lines || []).map(l => ({ name: nb.get(l.itemId)?.name || l.description || l.itemId, category: nb.get(l.itemId)?.category || "", qty: l.qty, unitPrice: l.unitPrice, amount: (Number(l.qty) || 0) * (Number(l.unitPrice) || 0) })),
       totals: [{ label: "TOTAL (ex VAT - see A4)", value: (lines || []).reduce((a, l) => a + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0), strong: true }],
       footer: "Create Brands Distribution",
@@ -14825,6 +14864,30 @@ export async function deleteDistInvoice(invoiceId) {
         });
       } catch (e) { /* best-effort */ }
     }
+  }
+  // STOCK 2026-09-20d: give back what a standalone invoice issued — one
+  // return per issue movement (idempotent by ref) + reversing COGS journal.
+  if (!head.dispatch_id) {
+    try {
+      const { data: iss } = await supabase.from("dist_stock_movements").select("*")
+        .eq("source_kind", "invoice").like("source_ref", `distinv:${invoiceId}:%`);
+      let cogsValue = 0;
+      for (const r of iss || []) {
+        const qty = Math.abs(Number(r.qty) || 0);
+        if (!qty) continue;
+        await addDistMovement({ itemId: r.item_id, batchId: r.batch_id, qty, type: "return",
+          sourceKind: "invoice_reversal", sourceRef: `distinvREV:${invoiceId}:${r.id}` });
+        const { data: b } = await supabase.from("dist_batches").select("landed_cost").eq("id", r.batch_id).maybeSingle();
+        cogsValue += qty * (Number(b?.landed_cost) || 0);
+      }
+      if (cogsValue > 0) {
+        const [cogs, stock] = await Promise.all([resolveAccountForEntity(DIST_ENTITY, "5000"), resolveAccountForEntity(DIST_ENTITY, "1200")]);
+        if (cogs && stock) await postJournalEntry({ entityId: DIST_ENTITY, entryDate: new Date().toISOString().slice(0, 10),
+          memo: `COGS reversal of invoice ${head.invoice_number}`, sourceKind: "dist_invoice_cogs_reversal",
+          sourceRef: `distinvcogsREV:${invoiceId}`,
+          lines: [{ accountId: stock, amount: +cogsValue.toFixed(2) }, { accountId: cogs, amount: -(+cogsValue.toFixed(2)) }] });
+      }
+    } catch (e) { console.error("invoice stock reversal failed:", e?.message || e); }
   }
   await supabase.from("dist_invoice_lines").delete().eq("invoice_id", invoiceId);
   const { error } = await supabase.from("dist_invoices").delete().eq("id", invoiceId);
@@ -16745,7 +16808,7 @@ export async function autoPrintSoTicket(soId) {
     const { data: so } = await supabase.from("dist_sales_orders").select("*, dist_sales_order_lines(*)").eq("id", soId).single();
     if (!so) return;
     const [{ data: cust }, { data: items }] = await Promise.all([
-      so.customer_id ? supabase.from("dist_contacts").select("display_name, company").eq("id", so.customer_id).single() : Promise.resolve({ data: null }),
+      so.customer_id ? supabase.from("dist_contacts").select("display_name, company_name").eq("id", so.customer_id).single() : Promise.resolve({ data: null }),
       supabase.from("dist_items").select("id, name, category"),
     ]);
     const itemInfo = new Map((items || []).map(i => [i.id, i]));
@@ -16760,7 +16823,7 @@ export async function autoPrintSoTicket(soId) {
     const net = lines.reduce((a, l) => a + l.amount, 0);
     await supabase.from("ck_label_jobs").insert({ status: "queued", kind: "doc", payload: sanitiseDocPayload({
       title: "SALES ORDER", subtitle: so.so_number,
-      meta: [`Customer: ${cust?.display_name || cust?.company || ""}`, `Date: ${so.order_date || ""}`, `Status: CONFIRMED`],
+      meta: [`Customer: ${cust?.display_name || cust?.company_name || ""}`, `Date: ${so.order_date || ""}`, `Status: CONFIRMED`],
       lines, totals: [{ label: "Net (ex VAT/ship)", value: net, strong: true }],
       note: so.note || "", footer: "Create Brands Distribution",
     }), created_by: "auto" });
