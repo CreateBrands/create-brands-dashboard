@@ -10485,8 +10485,37 @@ const mapExpenseClaim = (e) => ({
   reconcileType: e.reconcile_type || null, cashAccountId: e.cash_account_id || null, cashLedgerId: e.cash_ledger_id || null,
   paidAccountKind: e.paid_account_kind || null, paidAccountId: e.paid_account_id || null,
   bankTxnId: e.bank_txn_id || null, reconciledBy: e.reconciled_by || null, reconciledAt: e.reconciled_at || null,
+  cardId: e.card_id || null,   // CARDS 2026-09-20a: which company card paid (last 4 lives on company_cards)
   createdAt: e.created_at, updatedAt: e.updated_at,
 });
+
+// ── CARDS 2026-09-20a: company cards — last 4 digits + holder, never the number ──
+const mapCompanyCard = (c) => ({
+  id: c.id, last4: c.last4 || "", label: c.label || "", holderMemberId: c.holder_member_id || null,
+  bankAccountId: c.bank_account_id || null, entityId: c.entity_id || null, active: c.active !== false, createdAt: c.created_at,
+});
+export async function fetchCompanyCards() {
+  const { data, error } = await supabase.from("company_cards").select("*").order("created_at", { ascending: true });
+  if (error) throw error;
+  return (data || []).map(mapCompanyCard);
+}
+export async function upsertCompanyCard(card) {
+  const last4 = String(card.last4 || "").replace(/\D/g, "").slice(-4);
+  if (last4.length !== 4) throw new Error("Enter the last 4 digits of the card.");
+  const row = {
+    last4, label: (card.label || "").trim() || null, holder_member_id: card.holderMemberId || null,
+    bank_account_id: card.bankAccountId || null, entity_id: card.entityId || null, active: card.active !== false,
+  };
+  if (card.id) row.id = card.id;
+  const { data, error } = await supabase.from("company_cards").upsert(row).select().maybeSingle();
+  if (error) throw error;
+  return data ? mapCompanyCard(data) : null;
+}
+export async function setCompanyCardActive(id, active) {
+  const { error } = await supabase.from("company_cards").update({ active: !!active }).eq("id", id);
+  if (error) throw error;
+  return true;
+}
 
 export async function fetchExpenseClaims({ status } = {}) {
   let q = supabase.from("expense_claims").select("*").order("expense_date", { ascending: false }).order("created_at", { ascending: false });
@@ -10947,6 +10976,7 @@ export async function submitExpenseClaim(claim) {
     paid_account_id: claim.paidAccountId || null,
     cash_account_id: claim.paidAccountKind === "cash" ? (claim.paidAccountId || null) : (claim.cashAccountId || null),
     status: "submitted", submitted_by: claim.submittedBy || null, submitted_by_id: claim.submittedById || null,
+    card_id: claim.cardId || null,   // CARDS 2026-09-20a
     updated_at: new Date().toISOString(),
   };
   if (claim.id) row.id = claim.id;

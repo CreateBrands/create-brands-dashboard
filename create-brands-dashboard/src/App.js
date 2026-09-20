@@ -26,7 +26,7 @@ import {
   fetchExpensePayees, upsertExpensePayee, archiveExpensePayee, uploadExpenseReceipt,
   fetchExpenseClaims, submitExpenseClaim, approveExpenseClaim, rejectExpenseClaim,
   reconcileExpenseCash, reconcileExpenseBank, unreconcileExpenseClaim, deleteExpenseClaim,
-  fetchExpenseTypeAccounts, setExpenseTypeAccounts, fetchMemberExpenseAccounts, setMemberExpenseAccounts,
+  fetchExpenseTypeAccounts, setExpenseTypeAccounts, fetchMemberExpenseAccounts, setMemberExpenseAccounts, fetchCompanyCards, upsertCompanyCard, setCompanyCardActive,
   fetchExpenseExcludedStores, setExpenseStoreExcluded,
   fetchMemberExpenseTypes, setMemberExpenseTypes,
   fetchMemberExpenseCategories, setMemberExpenseCategories,
@@ -222,7 +222,7 @@ import {
   ChevronLeft, TrendingUp, TrendingDown, AlertTriangle, CheckCircle, ArrowUpRight,
   Plus, Trash2, Edit, Pencil, Eye, EyeOff, Download, Upload, RotateCcw, Copy, LayoutGrid, List,
   DollarSign, BarChart2, Users, Settings, LayoutDashboard, ClipboardList, BookOpen,
-  Star, Wrench, Check, Info, Shield, Activity, Target, Zap,
+  Star, Wrench, Check, Info, Shield, Activity, Target, Zap, CreditCard,
   AlertCircle, Clock, CheckSquare, XCircle, Filter, FileSpreadsheet,
   ChevronDown, RefreshCw, MessageSquare, Tag, MapPin, Calendar, Camera, Sparkles, Scale,
   Thermometer, Truck, Clipboard, ShieldCheck, ScrollText, ListChecks, Hash, UserCheck, CalendarDays,
@@ -24878,11 +24878,33 @@ function ExpenseDetailOverlay({ claim, onClose, editable = false, onSaved }) {
   );
 }
 
-function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [], myClaims = [], onSubmit, onSubmitMany, accountOptions = [], payees = [], currentUser }) {
+// ─── CARDS 2026-09-20a: company-card helpers (last 4 + holder, never the number) ─
+function cardText(card, opsTeam = []) {
+  if (!card) return "";
+  const m = (opsTeam || []).find(x => x.id === card.holderMemberId);
+  const holder = m ? `${m.firstName || ""} ${m.lastName || ""}`.trim() : "";
+  return [`•••• ${card.last4}`, card.label, holder].filter(Boolean).join(" · ");
+}
+// Cards a person may pick when submitting: their own; owner/HQ see every active card.
+function cardsFor(cards = [], memberId, unrestricted = false) {
+  return (cards || []).filter(c => c.active && (unrestricted || (memberId && c.holderMemberId === memberId)));
+}
+function CardChip({ card, opsTeam }) {
+  if (!card) return null;
+  return <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-indigo-500/15 border border-indigo-600/40 text-indigo-300 font-semibold whitespace-nowrap"><CreditCard size={10} className="inline -mt-0.5 mr-1"/>{cardText(card, opsTeam)}</span>;
+}
+function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [], myClaims = [], onSubmit, onSubmitMany, accountOptions = [], payees = [], currentUser, companyCards = [], opsTeam = [] }) {
   const money = (n) => `${ccySym()}${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
   const ec = "w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white focus:border-indigo-500 focus:outline-none";
   const [mode, setMode] = useState("new"); // new | split | mine
-  const [form, setForm] = useState({ vendor:"", expenseTypeId:"", categoryId:"", storeId:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), reference:"", description:"", accountKey:"" });
+  const [form, setForm] = useState({ vendor:"", expenseTypeId:"", categoryId:"", storeId:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), reference:"", description:"", accountKey:"", cardId:"" });
+  // CARDS 2026-09-20a: the cards this person holds. Picking one also selects
+  // the bank account it draws on (if that account is in their list).
+  const myCards = cardsFor(companyCards, currentUser?.opsTeamMemberId || currentUser?.id, isHqOrAbove(currentUser?.role));
+  const pickCard = (id) => {
+    const card = myCards.find(c => c.id === id);
+    setForm(f => ({ ...f, cardId: id, accountKey: (card?.bankAccountId && accountOptions.some(o => o.key === `bank:${card.bankAccountId}`)) ? `bank:${card.bankAccountId}` : f.accountKey }));
+  };
   const [busy, setBusy] = useState(false); const [err, setErr] = useState(""); const [ok, setOk] = useState("");
   const setF = (k,v) => setForm(f=>({ ...f, [k]: v }));
   // Receipt scan on the simple form: extract line items so the purchase is
@@ -24940,7 +24962,7 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
       const [paidKind, paidId] = (form.accountKey || "").split(":");
       const matchedPayee = (payees || []).find(p => (p.name || "").trim().toLowerCase() === (form.vendor || "").trim().toLowerCase());
       const submittedClaim = await onSubmit?.({ ...form, amount: Number(form.amount), receiptUrl, invoiceId: scanInvoiceId,
-        paidAccountKind: paidKind || null, paidAccountId: paidId || null,
+        paidAccountKind: paidKind || null, paidAccountId: paidId || null, cardId: form.cardId || null,
         payeeId: matchedPayee?.id || null,
         reference: form.reference || itemised });
       // If the purchase is for a store and we have line items, raise the
@@ -24952,7 +24974,7 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
           { vendor: form.vendor, ref: `${form.expenseDate}-${(form.vendor||"purchase").slice(0,20)}`, claimId: submittedClaim?.id || null }
         ); } catch (e2) { console.error("delivery create failed:", e2.message); }
       }
-      setForm({ vendor:"", expenseTypeId:"", categoryId:"", storeId:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), reference:"", description:"", accountKey:"" });
+      setForm({ vendor:"", expenseTypeId:"", categoryId:"", storeId:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), reference:"", description:"", accountKey:"", cardId:"" });
       setReceiptUrl(null); setScanLines([]); setScanInvoiceId(null);
       setOk(`Expense submitted${form.storeId && scanLines.length ? " — delivery raised for the store" : ""}.`); setMode("mine");
       setTimeout(()=>setOk(""), 4000);
@@ -25030,6 +25052,14 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
               {(payees || []).map(p => <option key={p.id} value={p.name}/>)}
             </datalist>
           </div>
+          {myCards.length > 0 && (
+            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Paid with card</label>
+              <select value={form.cardId} onChange={e=>pickCard(e.target.value)} className={ec}>
+                <option value="">— not a card / cash —</option>
+                {myCards.map(c => <option key={c.id} value={c.id}>{cardText(c, opsTeam)}</option>)}
+              </select>
+            </div>
+          )}
           {accountOptions.length > 0 && (
             <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Paid from</label>
               <select value={form.accountKey} onChange={e=>setF("accountKey",e.target.value)} className={ec}>
@@ -25061,6 +25091,7 @@ function EmployeeExpenseSubmit({ myTypes = [], myCategories = [], myStores = [],
                 <div className="min-w-0">
                   <div className="text-sm font-semibold text-white flex items-center gap-2 flex-wrap">{c.description} <StatusBadge s={c.status}/></div>
                   <div className="text-[11px] text-slate-500 mt-0.5">{c.expenseDate}{c.vendor?` · ${c.vendor}`:""}{c.expenseTypeId?` · ${typeName(c.expenseTypeId)}`:""}</div>
+                  {c.cardId && <div className="mt-1"><CardChip card={(companyCards||[]).find(x=>x.id===c.cardId)} opsTeam={opsTeam}/></div>}
                   {c.status==="rejected" && c.rejectedReason && <div className="text-[11px] text-red-400/80 mt-1">Reason: {c.rejectedReason}</div>}
                 </div>
                 <div className="flex-shrink-0 text-right">
@@ -25460,7 +25491,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
   schedules, punchRecords, onAmendPunch, onAddPunchComment,
   onEmpPunchIn, onEmpPunchOut,
   expenseClaims = [], expenseTypes = [], expenseCategories = [], cashAccounts = [], bankAccounts = [],
-  memberExpTypes = {}, memberExpCategories = {}, memberExpStores = {}, memberExpAccounts = {}, onSubmitExpense, onSubmitExpenseMany,
+  memberExpTypes = {}, memberExpCategories = {}, memberExpStores = {}, memberExpAccounts = {}, onSubmitExpense, onSubmitExpenseMany, companyCards = [],
   onLogout }) {
 
   // NONAME 2026-08-05k — brands[0] was only ever used to label the header and
@@ -26548,7 +26579,7 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
               myTypes={myExpTypes} myCategories={myExpCategories} myStores={myExpStores}
               myClaims={myExpClaims} onSubmit={onSubmitExpense}
               onSubmitMany={onSubmitExpenseMany} accountOptions={myExpAccountOptions}
-              payees={expensePayees} currentUser={currentUser}
+              payees={expensePayees} currentUser={currentUser} companyCards={companyCards} opsTeam={opsTeam}
             />
           )}
 
@@ -50271,9 +50302,17 @@ function AccountsExportView({ stores = [], bankTransactions = [], categories = [
   );
 }
 
-function ExpenseManage({ expenseTypes = [], categories = [], payees = [], cashAccounts = [], bankAccounts = [], stores = [], opsTeam = [], typeAccounts = {}, memberAccounts = {}, excludedStores = [], memberTypes = {}, memberCategories = {}, memberStores = {}, handlers = {}, money }) {
+function ExpenseManage({ expenseTypes = [], categories = [], payees = [], cashAccounts = [], bankAccounts = [], stores = [], opsTeam = [], typeAccounts = {}, memberAccounts = {}, excludedStores = [], memberTypes = {}, memberCategories = {}, memberStores = {}, handlers = {}, money, companyCards = [] }) {
   const ec = "px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white";
-  const [section, setSection] = useState("categories"); // categories | payees | people
+  const [section, setSection] = useState("categories"); // categories | payees | people | cards
+  // CARDS 2026-09-20a
+  const [cardForm, setCardForm] = useState(null); // { id?, last4, label, holderMemberId, bankAccountId }
+  const [cardErr, setCardErr] = useState("");
+  const saveCard = async () => {
+    setCardErr("");
+    try { await handlers.saveCard?.(cardForm); setCardForm(null); }
+    catch (e) { setCardErr(e?.message || "Could not save card."); }
+  };
   const [newType, setNewType] = useState(""); const [newCat, setNewCat] = useState("");
   const [catEdit, setCatEdit] = useState(null); // {id, name}
   const [newPayee, setNewPayee] = useState(""); const [payeeEdit, setPayeeEdit] = useState(null); // {id, name}
@@ -50312,7 +50351,7 @@ function ExpenseManage({ expenseTypes = [], categories = [], payees = [], cashAc
   return (
     <div className="space-y-4">
       <div className="flex gap-1 flex-wrap">
-        {[["categories","Categories"],["payees","Payees"],["people","Assign employee"]].map(([k,l])=>(
+        {[["categories","Categories"],["payees","Payees"],["people","Assign employee"],["cards","Company cards"]].map(([k,l])=>(
           <button key={k} onClick={()=>setSection(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${section===k?"bg-indigo-600 text-white":"bg-slate-800 text-slate-400"}`}>{l}</button>
         ))}
       </div>
@@ -50374,6 +50413,35 @@ function ExpenseManage({ expenseTypes = [], categories = [], payees = [], cashAc
             ))}
           </div>
           <div className="text-[11px] text-slate-600">Categories are shared with the Accounts module — changes here apply there too.</div>
+        </div>
+      )}
+
+      {section==="cards" && (
+        <div className="space-y-3">
+          <div className="text-[11px] text-slate-500">Company cards by their last 4 digits and who holds them. When someone submits an expense they pick their card, so Finance can see exactly which card paid. Only the last 4 are stored — never the full number.</div>
+          <button onClick={()=>{ setCardErr(""); setCardForm({ last4:"", label:"", holderMemberId:"", bankAccountId:"" }); }} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold">+ Add card</button>
+          {cardForm && (
+            <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 grid grid-cols-1 md:grid-cols-4 gap-2">
+              <div><label className="text-[10px] uppercase text-slate-500 font-bold">Last 4 digits</label><input value={cardForm.last4} maxLength={4} inputMode="numeric" onChange={e=>setCardForm(f=>({...f,last4:e.target.value.replace(/\D/g,"").slice(0,4)}))} className={ec + " w-full"} placeholder="1234"/></div>
+              <div><label className="text-[10px] uppercase text-slate-500 font-bold">Label</label><input value={cardForm.label} onChange={e=>setCardForm(f=>({...f,label:e.target.value}))} className={ec + " w-full"} placeholder="Tide · Ops card"/></div>
+              <div><label className="text-[10px] uppercase text-slate-500 font-bold">Holder</label><select value={cardForm.holderMemberId||""} onChange={e=>setCardForm(f=>({...f,holderMemberId:e.target.value}))} className={ec + " w-full"}><option value="">— shared / unassigned —</option>{people.map(m=><option key={m.id} value={m.id}>{m.firstName} {m.lastName}</option>)}</select></div>
+              <div><label className="text-[10px] uppercase text-slate-500 font-bold">Bank account</label><select value={cardForm.bankAccountId||""} onChange={e=>setCardForm(f=>({...f,bankAccountId:e.target.value}))} className={ec + " w-full"}><option value="">—</option>{(bankAccounts||[]).filter(a=>!a.archived).map(a=><option key={a.id} value={a.id}>{a.name}</option>)}</select></div>
+              {cardErr && <div className="md:col-span-4 text-xs text-red-400">{cardErr}</div>}
+              <div className="md:col-span-4 flex gap-2"><button onClick={saveCard} className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold">Save</button><button onClick={()=>setCardForm(null)} className="px-3 py-1.5 rounded-lg bg-slate-800 text-slate-300 text-xs font-semibold">Cancel</button></div>
+            </div>
+          )}
+          <div className="space-y-1.5">
+            {(companyCards||[]).length===0 && <div className="text-[11px] text-slate-600">No cards yet.</div>}
+            {(companyCards||[]).map(c=>(
+              <div key={c.id} className={`flex items-center justify-between gap-2 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 ${c.active?"":"opacity-50"}`}>
+                <div className="text-xs text-slate-200 flex items-center gap-2 flex-wrap"><CreditCard size={14} className="text-indigo-400"/>{cardText(c, opsTeam)}{c.bankAccountId && <span className="text-[10px] text-slate-500">· {(bankAccounts||[]).find(a=>a.id===c.bankAccountId)?.name || ""}</span>}{!c.active && <span className="text-[10px] text-slate-500">(inactive)</span>}</div>
+                <div className="flex gap-1.5 flex-shrink-0">
+                  <button onClick={()=>{ setCardErr(""); setCardForm({ id:c.id, last4:c.last4, label:c.label, holderMemberId:c.holderMemberId||"", bankAccountId:c.bankAccountId||"" }); }} className="px-2 py-1 rounded-md bg-slate-800 text-slate-300 text-[11px] font-semibold">Edit</button>
+                  <button onClick={()=>handlers.setCardActive?.(c.id, !c.active)} className="px-2 py-1 rounded-md bg-slate-800 text-slate-400 text-[11px] font-semibold">{c.active?"Deactivate":"Reactivate"}</button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -51029,7 +51097,8 @@ function ExpenseSplitFlow({ stores = [], categories = [], expenseTypes = [], acc
   );
 }
 
-function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expenseTypes = [], categories = [], payees = [], bankTransactions = [], stores = [], opsTeam = [], currentUser, effectiveRole, canReconcile = false, typeAccounts = {}, memberAccounts = {}, excludedStores = [], memberTypes = {}, memberCategories = {}, memberStores = {}, handlers = {} }) {
+function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expenseTypes = [], categories = [], payees = [], bankTransactions = [], stores = [], opsTeam = [], currentUser, effectiveRole, canReconcile = false, typeAccounts = {}, memberAccounts = {}, excludedStores = [], memberTypes = {}, memberCategories = {}, memberStores = {}, handlers = {}, companyCards = [] }) {
+  const cardById = (id) => (companyCards || []).find(c => c.id === id) || null;   // CARDS 2026-09-20a
   const money = (n) => `${ccySym()}${(Number(n)||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2})}`;
   const ec = "px-3 py-2 bg-slate-900 border border-slate-700 rounded-xl text-sm text-white w-full";
   const [tab, setTab] = useState("submitted"); // submitted | approved | reconciled | rejected | new
@@ -51053,7 +51122,7 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
     .slice().sort((a, b) => claimTime(b).localeCompare(claimTime(a)));
   const counts = { submitted: byStatus("submitted").length, approved: byStatus("approved").length, reconciled: byStatus("reconciled").length, rejected: byStatus("rejected").length };
 
-  const openNew = () => { setErr(""); setForm({ description:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), expenseTypeId:"", accountKey:"", categoryId:"", payeeId:"", storeId:"", vendor:"", reference:"", receiptUrl:null }); setTab("new"); };
+  const openNew = () => { setErr(""); setForm({ cardId:"", description:"", amount:"", expenseDate:new Date().toISOString().slice(0,10), expenseTypeId:"", accountKey:"", categoryId:"", payeeId:"", storeId:"", vendor:"", reference:"", receiptUrl:null }); setTab("new"); };
   const setF = (k,v) => setForm(f=>({ ...f, [k]: v }));
 
   // Submit-form scoping: a regular employee only sees what they're granted.
@@ -51080,7 +51149,8 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
     setBusy(true); setErr("");
     try {
       const chosen = accountOptions.find(o => o.key === form.accountKey);
-      const payload = { ...form, amount: Number(form.amount) };
+      const [paidKind, paidId] = (form.accountKey || "").split(":");
+      const payload = { ...form, amount: Number(form.amount), paidAccountKind: paidKind || null, paidAccountId: paidId || null, cardId: form.cardId || null };
       if (chosen) payload.reference = `[${chosen.label}]${form.reference?` ${form.reference}`:""}`;
       await handlers.submit?.(payload); setForm(null); setTab("submitted");
     }
@@ -51231,7 +51301,8 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
           {/* SPLITCARD: the store this money is for, stated plainly rather than
               buried among the other metadata — it is the first thing anyone
               approving an expense needs to know. */}
-          <div className="mt-1">
+          <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+            {c.cardId && <CardChip card={cardById(c.cardId)} opsTeam={opsTeam}/>}
             {c.storeId ? (
               <span className="text-[10px] px-1.5 py-0.5 rounded-md bg-emerald-600/15 border border-emerald-700/40 text-emerald-300 font-semibold">
                 for {storeName(c.storeId)}
@@ -51302,6 +51373,13 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
           <div className="text-sm font-bold text-white">New expense</div>
           {cannotSubmit && <div className="text-xs text-amber-300 bg-amber-950/30 border border-amber-500/30 rounded-xl px-3 py-2">You don't have any expense types or stores assigned yet. Ask an admin to assign them in Manage lists → Assign employee.</div>}
           <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Vendor / paid to</label><input value={form.vendor} onChange={e=>setF("vendor",e.target.value)} placeholder="Who was paid" className={ec}/></div>
+          {(() => { const mine = cardsFor(companyCards, myMemberId, unrestrictedSubmit); return mine.length > 0 && (
+            <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Paid with card</label>
+              <select value={form.cardId || ""} onChange={e=>{ const card = mine.find(c=>c.id===e.target.value); setForm(f=>({ ...f, cardId: e.target.value, accountKey: (card?.bankAccountId && accountOptions.some(o=>o.key===`bank:${card.bankAccountId}`)) ? `bank:${card.bankAccountId}` : f.accountKey })); }} className={ec}>
+                <option value="">— not a card / cash —</option>
+                {mine.map(c=><option key={c.id} value={c.id}>{cardText(c, opsTeam)}</option>)}
+              </select>
+            </div>); })()}
           <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Bank assigned</label><select value={form.accountKey} onChange={e=>setF("accountKey",e.target.value)} className={ec}><option value="">—</option>{accountOptions.map(o=><option key={o.key} value={o.key}>{o.label}</option>)}</select></div>
           <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Category</label><select value={form.categoryId} onChange={e=>setF("categoryId",e.target.value)} className={ec}><option value="">—</option>{formCategories.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
           <div><label className="text-[11px] text-slate-500 uppercase font-semibold">Payment for</label><select value={form.payeeId} onChange={e=>setF("payeeId",e.target.value)} className={ec}><option value="">—</option>{payees.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
@@ -51345,7 +51423,7 @@ function ExpensesView({ claims = [], cashAccounts = [], bankAccounts = [], expen
           </div>
         </div>
       ) : tab==="manage" ? (
-        <ExpenseManage expenseTypes={expenseTypes} categories={categories} payees={payees} cashAccounts={cashAccounts} bankAccounts={bankAccounts} stores={stores} opsTeam={opsTeam} typeAccounts={typeAccounts} memberAccounts={memberAccounts} excludedStores={excludedStores} memberTypes={memberTypes} memberCategories={memberCategories} memberStores={memberStores} handlers={handlers} money={money}/>
+        <ExpenseManage expenseTypes={expenseTypes} categories={categories} payees={payees} cashAccounts={cashAccounts} bankAccounts={bankAccounts} stores={stores} opsTeam={opsTeam} typeAccounts={typeAccounts} memberAccounts={memberAccounts} excludedStores={excludedStores} memberTypes={memberTypes} memberCategories={memberCategories} memberStores={memberStores} handlers={handlers} money={money} companyCards={companyCards}/>
       ) : (
         <div className="space-y-2">
           {byStatus(tab).length===0 ? <div className="text-center py-10 text-sm text-slate-500">Nothing here.</div> : groupClaims(byStatus(tab)).map((g, i) => (
@@ -68288,7 +68366,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: STOCK 2026-09-20d (standalone invoices move stock)");
+      console.log("CB build: CARDS 2026-09-20a (company cards on expense claims)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -68402,6 +68480,7 @@ export default function App() {
   const [expenseClaimsAll, setExpenseClaims] = useState([]);
   const [expTypeAccounts, setExpTypeAccounts] = useState({}); // {typeId:[{accountKind,accountId}]}
   const [memberExpAccounts, setMemberExpAccounts] = useState({}); // {memberId:[...]}
+  const [companyCards, setCompanyCards] = useState([]);           // CARDS 2026-09-20a
   const [expExcludedStores, setExpExcludedStores] = useState([]); // [storeId]
   const [memberExpTypes, setMemberExpTypes] = useState({}); // {memberId:[typeId]}
   const [memberExpCategories, setMemberExpCategories] = useState({}); // {memberId:[catId]}
@@ -68409,11 +68488,12 @@ export default function App() {
   const [expensePayees, setExpensePayees] = useState([]); // [{id,name}]
   const reloadExpenses = useCallback(async () => {
     try {
-      const [cl, eta, mea, exc, met, mec, mes, pay] = await Promise.all([
+      const [cl, eta, mea, exc, met, mec, mes, pay, cards] = await Promise.all([
         fetchExpenseClaims(), fetchExpenseTypeAccounts(), fetchMemberExpenseAccounts(), fetchExpenseExcludedStores(),
         fetchMemberExpenseTypes(), fetchMemberExpenseCategories(), fetchMemberExpenseStores(), fetchExpensePayees().catch(()=>[]),
+        fetchCompanyCards().catch(()=>[]),   // CARDS 2026-09-20a — tolerant until the table exists
       ]);
-      setExpenseClaims(cl); setExpTypeAccounts(eta); setMemberExpAccounts(mea); setExpExcludedStores(exc);
+      setExpenseClaims(cl); setExpTypeAccounts(eta); setMemberExpAccounts(mea); setExpExcludedStores(exc); setCompanyCards(cards || []);
       setMemberExpTypes(met); setMemberExpCategories(mec); setMemberExpStores(mes); setExpensePayees(pay);
     } catch (e) {}
   }, []);
@@ -69165,6 +69245,8 @@ export default function App() {
     remove: async (claim) => { await deleteExpenseClaim(claim); await Promise.all([reloadExpenses(), reloadCash()]); },
     setTypeAccounts: async (typeId, accts) => { await setExpenseTypeAccounts(typeId, accts); await reloadExpenses(); },
     setMemberAccounts: async (memberId, accts) => { await setMemberExpenseAccounts(memberId, accts); await reloadExpenses(); },
+    saveCard: async (card) => { await upsertCompanyCard(card); await reloadExpenses(); },                 // CARDS 2026-09-20a
+    setCardActive: async (id, active) => { await setCompanyCardActive(id, active); await reloadExpenses(); },
     setMemberTypes: async (memberId, ids) => { await setMemberExpenseTypes(memberId, ids); await reloadExpenses(); },
     setMemberCategories: async (memberId, ids) => { await setMemberExpenseCategories(memberId, ids); await reloadExpenses(); },
     setMemberStores: async (memberId, ids) => { await setMemberExpenseStores(memberId, ids); await reloadExpenses(); },
@@ -69982,7 +70064,7 @@ export default function App() {
           onEmpPunchIn={handlePunchIn} onEmpPunchOut={handlePunchOut}
           expenseClaims={expenseClaims} expenseTypes={cashExpenseTypes} expenseCategories={categories}
           cashAccounts={cashAccounts} bankAccounts={bankAccounts}
-          memberExpTypes={memberExpTypes} memberExpCategories={memberExpCategories} memberExpStores={memberExpStores} memberExpAccounts={memberExpAccounts}
+          memberExpTypes={memberExpTypes} memberExpCategories={memberExpCategories} memberExpStores={memberExpStores} memberExpAccounts={memberExpAccounts} companyCards={companyCards}
           onSubmitExpense={expenseHandlers.submit} onSubmitExpenseMany={expenseHandlers.submitMany}
           onLogout={handleLogout}
         />
@@ -70701,7 +70783,7 @@ export default function App() {
             {effectiveActiveView === "cash-accounts" && financeAvailable && <CashAccountsView accounts={cashAccounts} sources={cashSources} expenseTypes={cashExpenseTypes} ledger={cashLedger} stores={stores} categories={categories} handlers={cashHandlers}/>}
             {effectiveActiveView === "spend" && financeAvailable && <SpendDashboardView claims={expenseClaims} payees={expensePayees} bankTransactions={bankTransactions} bankAccounts={bankAccounts} cashAccounts={cashAccounts} cashLedger={cashLedger} stores={stores}/>}
             {effectiveActiveView === "petty-cash" && financeAvailable && <PettyCashView accounts={cashAccounts} ledger={cashLedger} stores={stores} target={pettyTarget} handlers={pettyHandlers}/>}
-            {effectiveActiveView === "expenses" && <ExpensesView claims={expenseClaims} cashAccounts={cashAccounts} bankAccounts={bankAccounts} expenseTypes={cashExpenseTypes} categories={categories} payees={expensePayees} bankTransactions={bankTransactions} stores={stores} opsTeam={opsTeam} currentUser={currentUser} effectiveRole={effectiveRole} canReconcile={["owner","hq_staff","manager"].includes(effectiveRole)} typeAccounts={expTypeAccounts} memberAccounts={memberExpAccounts} excludedStores={expExcludedStores} memberTypes={memberExpTypes} memberCategories={memberExpCategories} memberStores={memberExpStores} handlers={expenseHandlers}/>}
+            {effectiveActiveView === "expenses" && <ExpensesView companyCards={companyCards} claims={expenseClaims} cashAccounts={cashAccounts} bankAccounts={bankAccounts} expenseTypes={cashExpenseTypes} categories={categories} payees={expensePayees} bankTransactions={bankTransactions} stores={stores} opsTeam={opsTeam} currentUser={currentUser} effectiveRole={effectiveRole} canReconcile={["owner","hq_staff","manager"].includes(effectiveRole)} typeAccounts={expTypeAccounts} memberAccounts={memberExpAccounts} excludedStores={expExcludedStores} memberTypes={memberExpTypes} memberCategories={memberExpCategories} memberStores={memberExpStores} handlers={expenseHandlers}/>}
             {effectiveActiveView === "fresh-produce" && <DistTypedItemsView itemType="fresh" currentUser={currentUser}/>}
             {(effectiveActiveView === "accounts" || effectiveActiveView === "bank" || effectiveActiveView === "reconcile" || (effectiveActiveView === "invoices" && financeAvailable)) && financeAvailable && <AccountsHubView stores={stores} bankTransactions={bankTransactions} bankAccounts={bankAccounts} categories={categories} categoryRules={categoryRules} currentUser={currentUser} allowedStoreIds={regionalStoreIdList} onImport={importBankTxns} onUpdateTxn={updateBankTxn} onDeleteTxn={deleteBankTxn} onSaveAccount={saveBankAccount} onDeleteAccount={removeBankAccount} onSaveCategory={saveCategory} onDeleteCategory={removeCategory} onSaveRule={saveCategoryRule} onDeleteRule={removeCategoryRule} sharedFile={sharedBankFile} onConsumeSharedFile={() => setSharedBankFile(null)} cashAccounts={cashAccounts} cashLedger={cashLedger} cashHandlers={cashHandlers} entities={entities} opsTeam={opsTeam} customRoles={customRoles} onSaveRole={handleSaveRole} onArchiveRole={handleArchiveRole} onAssignMemberRole={handleAssignMemberRole} accessPerms={accessPerms} onSetPerm={async (role, featKey, allowed) => { await setAccessPermission(role, featKey, allowed); reloadAccessPerms(); }} onInvoicePaid={async (invId, paidDate) => { try { await updateInvoiceHeader(invId, { payment_status: "paid", paid_date: paidDate }); } catch (e) {} }} initialTab={effectiveActiveView==="bank"?"bank":effectiveActiveView==="reconcile"?"reconcile":effectiveActiveView==="invoices"?"invoices":"pnl"}/>}
             {effectiveActiveView === "reports" && canSeeView("reports") && <ReportsView stores={visibleStores} brands={visibleBrands} opsTeam={opsTeam} currentUser={currentUser} visibleStoreIds={scopedVisibleStoreIds} assignments={assignments} auditTrail={auditTrail} onClearAudit={handleClearAudit} checklistStates={checklistStates} fenced={!!regionalScope}/>}
