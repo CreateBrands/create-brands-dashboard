@@ -67161,6 +67161,65 @@ function ApplyField({ label, hint, children }) {
 }
 
 // ── Sidebar Component ─────────────────────────────────────────────────────────
+// ─── NAV 2026-09-22a: command palette (Ctrl/⌘ K) ────────────────────────────
+// Every page in the current entity's nav (children included), plus entity
+// switches. Type to filter, ↑↓ to move, Enter to go, Esc to close.
+function CommandPalette({ navGroups = [], entities = [], currentEntity, onGo, onSwitchEntity, onClose }) {
+  const [q, setQ] = useState("");
+  const [idx, setIdx] = useState(0);
+  const inputRef = useRef(null);
+  useEffect(() => { inputRef.current?.focus(); }, []);
+  const items = useMemo(() => {
+    const out = [];
+    navGroups.forEach(g => (g.items || []).forEach(n => {
+      out.push({ id: `p:${n.key}`, label: n.label, hint: g.group, icon: n.icon, kind: "Page", run: () => onGo(n.key) });
+      (n.children || []).forEach(c => out.push({ id: `c:${n.key}:${c.key}`, label: c.label, hint: `${g.group} · ${n.label}`, icon: c.icon || n.icon, kind: "Page", run: () => (c.tab && c.view) ? onGo(c.view, c.tab) : onGo(c.key) }));
+    }));
+    entities.filter(e => e.id !== currentEntity).forEach(e => out.push({ id: `e:${e.id}`, label: `Switch to ${e.name}`, hint: "Entity", icon: ArrowRight, kind: "Switch", run: () => onSwitchEntity(e.id) }));
+    return out;
+  }, [navGroups, entities, currentEntity, onGo, onSwitchEntity]);
+  const norm = (t) => (t || "").toLowerCase();
+  const results = useMemo(() => {
+    const t = norm(q).trim();
+    if (!t) return items.slice(0, 14);
+    const words = t.split(/\s+/);
+    return items
+      .map(it => { const hay = `${norm(it.label)} ${norm(it.hint)}`; const score = words.every(w => hay.includes(w)) ? (norm(it.label).startsWith(t) ? 3 : norm(it.label).includes(t) ? 2 : 1) : 0; return { it, score }; })
+      .filter(r => r.score > 0).sort((a, b) => b.score - a.score).slice(0, 14).map(r => r.it);
+  }, [items, q]);
+  useEffect(() => { setIdx(0); }, [q]);
+  const onKey = (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setIdx(i => Math.min(i + 1, results.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setIdx(i => Math.max(i - 1, 0)); }
+    else if (e.key === "Enter") { e.preventDefault(); results[idx]?.run(); }
+    else if (e.key === "Escape") { e.preventDefault(); onClose(); }
+  };
+  return (
+    <div className="fixed inset-0 z-[90] bg-black/50 backdrop-blur-[1px] flex items-start justify-center pt-[12vh] px-4" onMouseDown={onClose}>
+      <div role="dialog" aria-label="Jump to" className="cb-chrome w-full max-w-xl bg-slate-950 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden" onMouseDown={e => e.stopPropagation()}>
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-800">
+          <Search size={16} className="text-slate-500 flex-shrink-0"/>
+          <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)} onKeyDown={onKey} placeholder="Jump to a page or switch entity…" aria-label="Search pages"
+            className="flex-1 bg-transparent outline-none text-[15px] text-white placeholder:text-slate-500"/>
+          <kbd className="text-[10px] font-bold px-1.5 py-0.5 rounded border border-slate-700 text-slate-500">Esc</kbd>
+        </div>
+        <div className="max-h-[60vh] overflow-y-auto p-1.5">
+          {results.length === 0 && <div className="px-3 py-8 text-center text-sm text-slate-500">Nothing matches "{q}".</div>}
+          {results.map((r, i) => { const I = r.icon; return (
+            <button key={r.id} onClick={r.run} onMouseEnter={() => setIdx(i)}
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${i === idx ? "bg-indigo-600 text-white" : "text-slate-300 hover:bg-slate-800/70"}`}>
+              <span className={`w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0 ${i === idx ? "bg-white/15" : "bg-slate-800"}`}>{I ? <I size={14}/> : null}</span>
+              <span className="flex-1 min-w-0"><span className="block text-[13.5px] font-semibold truncate">{r.label}</span><span className={`block text-[11px] truncate ${i === idx ? "text-white/70" : "text-slate-500"}`}>{r.hint}</span></span>
+              <span className={`text-[10px] font-bold uppercase tracking-wider ${i === idx ? "text-white/70" : "text-slate-600"}`}>{r.kind}</span>
+            </button>
+          ); })}
+        </div>
+        <div className="flex gap-4 px-4 py-2 border-t border-slate-800 text-[11px] text-slate-500"><span>↑↓ move</span><span>↵ open</span><span>Esc close</span><span className="ml-auto">Ctrl K anywhere</span></div>
+      </div>
+    </div>
+  );
+}
+
 function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, collapsed, setCollapsed, entityName,
                     actualUser = null, users = [], onImpersonate = null, isImpersonating = false, onSwitchEntity = null,
                     onSelectSub = null, subActiveTab = {} }) {
@@ -67209,6 +67268,18 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
     const count = parseInt(it.badge, 10) || 0;
     return count > (badgeSeen[it.key] ?? 0) ? it.badge : null;
   };
+  // NAV 2026-09-22a: badges say what they mean. Red = needs action; grey =
+  // just a count (badgeTone: "count"). Capped at 99+ so widths stay sane.
+  const Badge = ({ value, tone }) => {
+    if (!value) return null;
+    const n = parseInt(value, 10);
+    const txt = Number.isFinite(n) && n > 99 ? "99+" : value;
+    const cls = tone === "count" ? "bg-slate-700/80 text-slate-300" : tone === "warn" ? "bg-amber-500 text-amber-950" : "bg-red-500 text-white";
+    return <span className={`text-[11px] leading-none font-bold rounded-full px-1.5 py-[3px] min-w-[20px] text-center tabular-nums flex-shrink-0 ${cls}`}>{txt}</span>;
+  };
+  const ROW = "w-full flex items-center gap-2.5 px-2.5 rounded-lg text-[13px] leading-5 transition-colors relative";
+  const rowCls = (active, parent = false) => `${ROW} ${parent ? "py-[7px] font-bold" : "py-[7px] font-semibold"} ${active ? "bg-indigo-600 text-white" : parent ? "text-white hover:bg-slate-800/70" : "text-slate-400 hover:bg-slate-800/70 hover:text-white"}`;
+  const AccentBar = () => <span aria-hidden="true" className="absolute left-0 top-[7px] bottom-[7px] w-[3px] rounded-r bg-amber-300"/>;
 
   // ── Sub-item routing ────────────────────────────────────────────────────────
   // A child with a `tab` field is a tab WITHIN a parent view (Operations/Team/
@@ -67242,7 +67313,7 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
     : [];
 
   return (
-    <div className={`cb-chrome hidden md:flex flex-col h-full bg-slate-950 border-r border-slate-800/60 transition-all duration-300 ${collapsed ? "w-16" : "w-56"}`}>
+    <div className={`cb-chrome hidden md:flex flex-col h-full bg-slate-950 border-r border-slate-800/60 transition-all duration-300 ${collapsed ? "w-16" : "w-60"}`}>
       {/* Logo — click to go to Dashboard */}
       <div className="flex items-center gap-3 px-4 py-4 border-b border-slate-800/60">
         <div onClick={() => setActiveView("dashboard")} className="flex items-center gap-3 cursor-pointer flex-1 min-w-0" title="Go to Dashboard">
@@ -67258,15 +67329,17 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
             </div>
           )}
         </div>
-        <button onClick={() => setCollapsed(c => !c)} className="ml-auto text-slate-600 hover:text-slate-700 p-1 rounded-lg">
+        <button onClick={() => setCollapsed(c => !c)} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} title={collapsed ? "Expand" : "Collapse"} className="ml-auto text-slate-500 hover:text-white hover:bg-slate-800/70 p-1.5 rounded-lg transition-colors">
           {collapsed ? <ChevronRight size={14}/> : <ChevronLeft size={14}/>}
         </button>
       </div>
-      {/* Nav */}
-      <nav className="flex-1 overflow-y-auto py-2 space-y-0.5 px-2">
+      {/* Nav — NAV 2026-09-22a: 13px rows, 11px section labels, accent bar on the current page,
+          parent lit when a child is active, tooltips when collapsed. */}
+      <nav aria-label="Main" className="flex-1 overflow-y-auto py-1.5 space-y-px px-2">
         {navGroups.map(g => (
           <div key={g.group}>
-            {!collapsed && <div className="text-xs font-bold text-slate-600 uppercase tracking-widest px-2 pt-3 pb-1">{g.group}</div>}
+            {!collapsed && <div className="text-[11px] font-extrabold text-slate-500 uppercase tracking-[0.12em] px-2.5 pt-4 pb-1">{g.group}</div>}
+            {collapsed && <div aria-hidden="true" className="mx-3 my-2 h-px bg-slate-800/70"/>}
             {g.items.map(n => {
               const NIcon = n.icon;
               const active = activeView === n.key;
@@ -67281,23 +67354,27 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
                     onMouseEnter={() => { if (collapsed && !flyoutPinned) setFlyoutKey(n.key); }}
                     onMouseLeave={() => { if (collapsed && !flyoutPinned) setFlyoutKey(k => k === n.key ? null : k); }}>
                     <button onClick={() => { if (collapsed) { setFlyoutPinned(p => !(flyoutKey === n.key && p)); setFlyoutKey(n.key); } else { openParent(); } }}
-                      className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-xs font-semibold transition-all ${isParentActive ? "text-white" : "text-slate-400 hover:bg-slate-800 hover:text-white"}`}>
-                      <NIcon size={15} className="flex-shrink-0"/>
+                      title={collapsed ? n.label : undefined} aria-expanded={!collapsed ? expanded : undefined}
+                      className={rowCls(collapsed && isParentActive, !collapsed && isParentActive)}>
+                      {collapsed && isParentActive && <AccentBar/>}
+                      <NIcon size={17} strokeWidth={1.9} className="flex-shrink-0"/>
                       {!collapsed && <span className="flex-1 text-left truncate">{n.label}</span>}
-                      {!collapsed && displayBadge(n) && <span className="text-xs bg-red-500 text-white rounded-full px-1.5 py-0.5 leading-none font-bold">{displayBadge(n)}</span>}
-                      {!collapsed && <ChevronDownIcon size={13} className={`flex-shrink-0 transition-transform ${expanded ? "" : "-rotate-90"}`}/>}
+                      {!collapsed && <Badge value={displayBadge(n)} tone={n.badgeTone}/>}
+                      {!collapsed && !displayBadge(n) && <ChevronDownIcon size={14} className={`flex-shrink-0 text-slate-500 transition-transform ${expanded ? "" : "-rotate-90"}`}/>}
+                      {collapsed && displayBadge(n) && <span aria-hidden="true" className={`absolute top-1.5 right-1.5 w-2 h-2 rounded-full border-2 border-slate-950 ${n.badgeTone === "count" ? "bg-slate-500" : "bg-red-500"}`}/>}
                     </button>
                     {/* Expanded sidebar: inline accordion */}
                     {!collapsed && expanded && (
-                      <div className="ml-3 pl-2 border-l border-slate-800 space-y-0.5 mt-0.5">
+                      <div className="space-y-px mt-px">
                         {n.children.map(c => {
                           const CIcon = c.icon;
                           const cActive = childIsActive(c);
                           return (
-                            <button key={c.key} onClick={() => selectChild(c)}
-                              className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${cActive ? "bg-indigo-600 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-white"}`}>
-                              <span className="flex items-center gap-2 min-w-0">{CIcon && <CIcon size={13} className="flex-shrink-0"/>}<span className="truncate">{c.label}</span></span>
-                              {c.badge && <span className="text-[10px] bg-red-500 text-white rounded-full px-1.5 py-0.5 leading-none font-bold flex-shrink-0">{c.badge}</span>}
+                            <button key={c.key} onClick={() => selectChild(c)} aria-current={cActive ? "page" : undefined}
+                              className={`w-full flex items-center justify-between gap-2 pl-9 pr-2.5 py-[6px] rounded-lg text-[12.5px] leading-5 font-medium transition-colors relative ${cActive ? "bg-indigo-600 text-white" : "text-slate-400 hover:bg-slate-800/70 hover:text-white"}`}>
+                              {cActive && <AccentBar/>}
+                              <span className="flex items-center gap-2 min-w-0">{CIcon && <CIcon size={14} strokeWidth={1.9} className="flex-shrink-0"/>}<span className="truncate">{c.label}</span></span>
+                              <Badge value={c.badge} tone={c.badgeTone}/>
                             </button>
                           );
                         })}
@@ -67305,9 +67382,9 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
                     )}
                     {/* Collapsed sidebar: flyout popout (hover to peek, click to pin) */}
                     {flyoutOpen && (
-                      <div className="absolute left-full top-0 ml-1 z-50 min-w-[180px] bg-slate-900 border border-slate-700 rounded-xl shadow-xl p-1.5"
+                      <div className="absolute left-full top-0 ml-1 z-50 min-w-[200px] bg-slate-900 border border-slate-700 rounded-xl shadow-xl p-1.5"
                         onMouseLeave={() => { if (!flyoutPinned) setFlyoutKey(null); }}>
-                        <div className="text-xs font-bold text-slate-500 px-2 py-1 flex items-center justify-between">
+                        <div className="text-[11px] font-extrabold uppercase tracking-[0.12em] text-slate-500 px-2 py-1.5 flex items-center justify-between">
                           {n.label}
                           {flyoutPinned && <button onClick={() => { setFlyoutPinned(false); setFlyoutKey(null); }} className="text-slate-600 hover:text-slate-300"><X size={12}/></button>}
                         </div>
@@ -67315,10 +67392,10 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
                           const CIcon = c.icon;
                           const cActive = childIsActive(c);
                           return (
-                            <button key={c.key} onClick={() => { selectChild(c); setFlyoutPinned(false); setFlyoutKey(null); }}
-                              className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all ${cActive ? "bg-indigo-600 text-white" : "text-slate-300 hover:bg-slate-800 hover:text-white"}`}>
-                              <span className="flex items-center gap-2 min-w-0">{CIcon && <CIcon size={14} className="flex-shrink-0"/>}<span className="truncate">{c.label}</span></span>
-                              {c.badge && <span className="text-[10px] bg-red-500 text-white rounded-full px-1.5 py-0.5 leading-none font-bold flex-shrink-0">{c.badge}</span>}
+                            <button key={c.key} onClick={() => { selectChild(c); setFlyoutPinned(false); setFlyoutKey(null); }} aria-current={cActive ? "page" : undefined}
+                              className={`w-full flex items-center justify-between gap-2 px-2.5 py-[7px] rounded-lg text-[13px] leading-5 font-medium transition-colors ${cActive ? "bg-indigo-600 text-white" : "text-slate-300 hover:bg-slate-800/70 hover:text-white"}`}>
+                              <span className="flex items-center gap-2 min-w-0">{CIcon && <CIcon size={15} strokeWidth={1.9} className="flex-shrink-0"/>}<span className="truncate">{c.label}</span></span>
+                              <Badge value={c.badge} tone={c.badgeTone}/>
                             </button>
                           );
                         })}
@@ -67328,11 +67405,13 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
                 );
               }
               return (
-                <button key={n.key} onClick={() => setActiveView(n.key)}
-                  className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-xl text-xs font-semibold transition-all ${active ? "bg-indigo-600 text-white" : "text-slate-400 hover:bg-slate-800 hover:text-white"}`}>
-                  <NIcon size={15} className="flex-shrink-0"/>
+                <button key={n.key} onClick={() => setActiveView(n.key)} aria-current={active ? "page" : undefined} title={collapsed ? n.label : undefined}
+                  className={rowCls(active)}>
+                  {active && <AccentBar/>}
+                  <NIcon size={17} strokeWidth={1.9} className="flex-shrink-0"/>
                   {!collapsed && <span className="flex-1 text-left truncate">{n.label}</span>}
-                  {!collapsed && displayBadge(n) && <span className="text-xs bg-red-500 text-white rounded-full px-1.5 py-0.5 leading-none font-bold">{displayBadge(n)}</span>}
+                  {!collapsed && <Badge value={displayBadge(n)} tone={n.badgeTone}/>}
+                  {collapsed && displayBadge(n) && <span aria-hidden="true" className={`absolute top-1.5 right-1.5 w-2 h-2 rounded-full border-2 border-slate-950 ${n.badgeTone === "count" ? "bg-slate-500" : "bg-red-500"}`}/>}
                 </button>
               );
             })}
@@ -67340,30 +67419,25 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
         ))}
       </nav>
 
-      {/* View-as picker (owner only, expanded sidebar only) */}
-      {canImpersonate && !collapsed && (
-        <div className="border-t border-slate-800/60 px-3 py-2">
-          <label className="block text-[10px] uppercase tracking-widest text-slate-600 font-semibold mb-1">View as</label>
-          <select
-            value={isImpersonating ? currentUser.id : ""}
-            onChange={e => onImpersonate(e.target.value || null)}
-            className="w-full px-2 py-1.5 rounded-lg bg-slate-900 border border-slate-700 text-slate-200 text-xs focus:outline-none focus:border-indigo-500 cursor-pointer"
-          >
-            <option value="">— Myself (owner) —</option>
-            {impersonationTargets.map(u => (
-              <option key={u.id} value={u.id}>
-                {u.name} · {u.role === "hq_staff" ? "HQ" : u.role}
-              </option>
-            ))}
-          </select>
-        </div>
-      )}
-
-      {/* User */}
-      <div className="border-t border-slate-800/60 p-3">
+      {/* User + view-as — NAV 2026-09-22a: one compact footer */}
+      <div className="border-t border-slate-800/60 p-2.5 bg-slate-900/40">
         <div className={`flex items-center gap-2 ${collapsed ? "justify-center" : ""}`}>
-          <Avatar photoUrl={currentUser.photoUrl} name={currentUser.name} initials={currentUser.avatar} color={currentUser.color || "#844429"} size={28} rounded="lg" />
-          {!collapsed && <div className="flex-1 min-w-0"><div className="text-xs font-semibold text-white truncate">{currentUser.name}</div><div className="text-xs text-amber-500 font-semibold uppercase">{currentUser.role}</div></div>}
+          <Avatar photoUrl={currentUser.photoUrl} name={currentUser.name} initials={currentUser.avatar} color={currentUser.color || "#844429"} size={30} rounded="lg" />
+          {!collapsed && (
+            <div className="flex-1 min-w-0">
+              <div className="text-[13px] font-bold text-white truncate leading-tight">{currentUser.name}</div>
+              {canImpersonate ? (
+                <label className="flex items-center gap-1 text-[11px] text-slate-400 cursor-pointer" title="View the dashboard as another user">
+                  <span className="text-amber-400 font-semibold uppercase">{isImpersonating ? "viewing as" : currentUser.role}</span>
+                  <select value={isImpersonating ? currentUser.id : ""} onChange={e => onImpersonate(e.target.value || null)} aria-label="View as"
+                    className="bg-transparent border-0 p-0 pr-4 text-[11px] text-slate-300 font-semibold focus:outline-none cursor-pointer max-w-[110px] truncate">
+                    <option value="">myself</option>
+                    {impersonationTargets.map(u => <option key={u.id} value={u.id}>{u.name} · {u.role === "hq_staff" ? "HQ" : u.role}</option>)}
+                  </select>
+                </label>
+              ) : <div className="text-[11px] text-amber-400 font-semibold uppercase leading-tight">{currentUser.role}</div>}
+            </div>
+          )}
           {!collapsed && <NotificationBell recipientType="user" recipientId={currentUser.id} panelClass="bottom-full left-0 mb-2" onNavigate={setActiveView} onViewAll={() => setActiveView("notifications")}/>}
           {!collapsed && <button onClick={onLogout} className="p-1.5 text-slate-500 hover:text-red-400 transition-colors rounded-lg hover:bg-red-950/20"><LogOut size={14}/></button>}
         </div>
@@ -68730,7 +68804,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: PACKUNDO 2026-09-20a (packaging undo/delete) + PRICEWATCH 20b + SALESITEM 20a");
+      console.log("CB build: NAV 2026-09-22a (sidebar polish, Ctrl K palette, last page per entity)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -68926,12 +69000,29 @@ export default function App() {
   const [selectedEntityBrand, setSelectedEntityBrand] = useState(() => {
     try { return localStorage.getItem("cb_entity") || null; } catch { return null; }
   });
+  // NAV 2026-09-22a: remember the last page per entity, so Chocoberry → Distribution → back
+  // lands where you were. Refs so chooseEntity can stay dependency-free.
+  const navMemRef = useRef({ entity: null, view: null });
+  useEffect(() => { navMemRef.current = { entity: selectedEntityBrand, view: activeView }; }, [selectedEntityBrand, activeView]);
   const chooseEntity = useCallback((brandId) => {
+    try { const { entity, view } = navMemRef.current; if (entity && view) localStorage.setItem(`cb_lastview_${entity}`, view); } catch {}
     setSelectedEntityBrand(brandId);
     try { brandId ? localStorage.setItem("cb_entity", brandId) : localStorage.removeItem("cb_entity"); } catch {}
-    setActiveView("dashboard");
+    let next = "dashboard";
+    try { const saved = brandId ? localStorage.getItem(`cb_lastview_${brandId}`) : null; if (saved) next = saved; } catch {}
+    setActiveView(next);
   }, []);
-  const [sidebarCollapsed,setSidebarCollapsed]=useState(false);
+  const [sidebarCollapsed,setSidebarCollapsedRaw]=useState(() => { try { return localStorage.getItem("cb_sidebar_collapsed") === "1"; } catch { return false; } });
+  const setSidebarCollapsed = useCallback((v) => setSidebarCollapsedRaw(prev => { const next = typeof v === "function" ? v(prev) : v; try { localStorage.setItem("cb_sidebar_collapsed", next ? "1" : "0"); } catch {} return next; }), []);
+  // NAV 2026-09-22a: Ctrl/⌘ K command palette
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  useEffect(() => {
+    const onKey = (e) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "k" || e.key === "K")) { e.preventDefault(); setPaletteOpen(o => !o); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // Access control (Level 1): role × section permission overrides from DB.
   // Shape: { [role]: { [sectionKey]: allowed } }. Missing → use section default.
@@ -70547,11 +70638,11 @@ export default function App() {
       { key: "fresh-produce", label: "Fresh Produce", icon: Truck, requiresEntity: "brand-distribution" },
       { key: "expenses", label: "Expenses", icon: Receipt, requiresEntity: "brand-distribution" },
       { key: "dist-movements", label: "Stock Movements", icon: Activity, requiresEntity: "brand-distribution" },
-      { key: "dist-reports", label: "Reports", icon: BarChart2, requiresEntity: "brand-distribution" },
+      { key: "dist-reports", label: "Warehouse Reports", icon: BarChart2, requiresEntity: "brand-distribution" },
       { key: "dist-fuel", label: "Fleet Fuel", icon: Truck, requiresEntity: "brand-distribution" },
     ]},
     { group: "PEOPLE", items: [
-      { key: "team",         label: "Team",              icon: Users, badge: (pendingSetupCount + hiringBadge) > 0 ? (pendingSetupCount + hiringBadge).toString() : null, badgeClearOnView: true, children: [
+      { key: "team",         label: "Team",              icon: Users, badge: (pendingSetupCount + hiringBadge) > 0 ? (pendingSetupCount + hiringBadge).toString() : null, badgeClearOnView: true, badgeTone: "count", children: [
         { key: "team:team",            view: "team", tab: "team",            label: "Team",              icon: Users },
         { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
         { key: "team:time-attend",     view: "team", tab: "time-attend",     label: "Time & Attendance", icon: Clock },
@@ -70745,6 +70836,20 @@ export default function App() {
         <EmpThemeStyle/>
         <GlobalMobileStyle/>
         <AnnouncementGate currentUser={currentUser_ctx} opsTeam={opsTeam} />
+        {paletteOpen && (
+          <CommandPalette
+            navGroups={effectiveNavGroups}
+            entities={[...entityBrands.map(b => ({ id: b.id, name: b.name })), ...(financeAvailable ? [{ id: "finance", name: "Finance" }] : [])]}
+            currentEntity={selectedEntityBrand}
+            onGo={(view, tab) => {
+              const setters = { operations: setOpsTab, team: setTeamTab, dashboard: setDashTab, comms: setCommsTab };
+              if (tab && setters[view]) setters[view](tab);
+              setActiveView(view); setPaletteOpen(false);
+            }}
+            onSwitchEntity={(id) => { chooseEntity(id); setPaletteOpen(false); }}
+            onClose={() => setPaletteOpen(false)}
+          />
+        )}
         {/* Sidebar */}
         <Sidebar
           navGroups={effectiveNavGroups} activeView={effectiveActiveView} setActiveView={setActiveView}
@@ -70802,6 +70907,11 @@ export default function App() {
                   </button>
                 ) : null;
               })()}
+              <button onClick={() => setPaletteOpen(true)} title="Search or jump to any page (Ctrl K)"
+                className="hidden lg:flex items-center gap-2 h-8 pl-2.5 pr-1.5 rounded-lg border border-slate-700/70 bg-slate-900/60 text-slate-400 hover:text-white hover:border-slate-600 text-xs font-medium transition-colors min-w-[200px]">
+                <Search size={13}/><span className="flex-1 text-left">Jump to…</span>
+                <span className="flex gap-0.5"><kbd className="text-[10px] font-bold px-1 py-0.5 rounded border border-slate-700 bg-slate-950 text-slate-500">Ctrl</kbd><kbd className="text-[10px] font-bold px-1 py-0.5 rounded border border-slate-700 bg-slate-950 text-slate-500">K</kbd></span>
+              </button>
               <div className="flex items-center gap-1.5 text-xs text-emerald-400 font-semibold"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"/><span>Live</span></div>
               {commsUnread > 0 && <div className="text-xs bg-red-500 text-white rounded-full px-2 py-0.5 font-bold">{commsUnread} unread</div>}
               <button onClick={() => setActiveView("comms")} title="Chat & Helpdesk" className="relative text-slate-400 hover:text-indigo-300 transition-colors">
