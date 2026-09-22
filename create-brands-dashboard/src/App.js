@@ -24707,6 +24707,27 @@ function EmpThemeStyle() {
 .emp-theme .text-sky-300,   .emp-theme .text-sky-400,
 .emp-theme .text-blue-300,  .emp-theme .text-blue-400   { color: #1f6f8b !important; }
 
+/* THEME 2026-09-22a: tints the remap missed. Pale -100/-200 text and any
+   "/opacity" variant (text-amber-400/80, hover:bg-slate-800/50 ...) were
+   falling through as light-on-cream or grey overlays. */
+.emp-theme [class*="text-amber-100"], .emp-theme [class*="text-amber-200"], .emp-theme [class*="text-amber-300/"], .emp-theme [class*="text-amber-400/"],
+.emp-theme [class*="text-yellow-100"], .emp-theme [class*="text-yellow-200"] { color: #8a5200 !important; }
+.emp-theme [class*="text-red-100"], .emp-theme [class*="text-red-200"], .emp-theme [class*="text-rose-100"], .emp-theme [class*="text-rose-200"],
+.emp-theme [class*="text-red-300/"], .emp-theme [class*="text-red-400/"] { color: #c0392b !important; }
+.emp-theme [class*="text-emerald-100"], .emp-theme [class*="text-emerald-200"], .emp-theme [class*="text-green-100"], .emp-theme [class*="text-green-200"],
+.emp-theme [class*="text-emerald-300/"], .emp-theme [class*="text-emerald-400/"] { color: #1f7a4d !important; }
+.emp-theme [class*="text-sky-100"], .emp-theme [class*="text-sky-200"], .emp-theme [class*="text-blue-100"], .emp-theme [class*="text-blue-200"],
+.emp-theme [class*="text-indigo-100"], .emp-theme [class*="text-indigo-200"], .emp-theme [class*="text-indigo-300/"] { color: #1f6f8b !important; }
+.emp-theme [class*="text-white/"] { color: var(--ink-soft) !important; }
+.emp-theme [class*="text-slate-200/"], .emp-theme [class*="text-slate-300/"], .emp-theme [class*="text-slate-400/"], .emp-theme [class*="text-slate-500/"] { color: var(--ink-soft) !important; }
+.emp-theme :not(.cb-chrome) [class*="hover:bg-slate-800/"]:hover, .emp-theme :not(.cb-chrome) [class*="hover:bg-slate-900/"]:hover,
+.emp-theme :not(.cb-chrome) [class*="hover:bg-slate-700/"]:hover { background-color: var(--cream-deep) !important; }
+.emp-theme :not(.cb-chrome) [class*="bg-slate-950/"], .emp-theme :not(.cb-chrome) [class*="bg-slate-900/"] { background-color: var(--cream-soft) !important; }
+.emp-theme :not(.cb-chrome) [class*="bg-slate-800/"] { background-color: var(--cream-deep) !important; }
+.emp-theme [class*="border-amber-800"], .emp-theme [class*="border-amber-700"] { border-color: #d9a765 !important; }
+.emp-theme [class*="border-red-800"], .emp-theme [class*="border-red-700"] { border-color: #e39b93 !important; }
+.emp-theme [class*="border-emerald-800"], .emp-theme [class*="border-emerald-700"] { border-color: #8fc7a8 !important; }
+
 /* StatCard / KPI gradient tints -> soft cream so text stays legible */
 .emp-theme [class*="from-slate-700"],
 .emp-theme [class*="from-indigo-600"],
@@ -44344,7 +44365,7 @@ function HiringView({
               <div key={app.id} className="bg-slate-900 border border-slate-700 rounded-2xl overflow-hidden">
                 {/* Summary row — click to expand */}
                 <div onClick={() => handleExpand(app)}
-                  className="flex items-center gap-3 p-4 cursor-pointer hover:bg-slate-800/50 transition-colors">
+                  className={`flex items-center gap-3 p-4 cursor-pointer transition-colors ${isExpanded ? "bg-slate-800/40" : "hover:bg-slate-800/30"}`}>
                   {/* HIRE-UI 2026-09-22a: photo if there is one, initials otherwise */}
                   {app.photoUrl
                     ? <img src={app.photoUrl} alt="" className="w-10 h-10 rounded-xl object-cover border border-slate-700 flex-shrink-0"/>
@@ -44357,8 +44378,8 @@ function HiringView({
                       <Badge label={status.label} color={status.color}/>
                       {app.position && <span className="text-xs text-slate-400 font-medium">{app.position}</span>}
                       {app.isMinor && <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-950/60 border border-red-800 text-red-300 font-semibold">Under 18</span>}
-                      {!app.rtwVerified && app.status !== "rejected" && app.status !== "withdrawn" && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/50 border border-amber-800/70 text-amber-300 font-semibold">RTW unchecked</span>}
-                      {(() => { const d = Math.floor((Date.now() - new Date(app.createdAt).getTime()) / 864e5); const t = d <= 0 ? "today" : d === 1 ? "yesterday" : d < 30 ? `${d}d ago` : d < 365 ? `${Math.floor(d/30)}mo ago` : `${Math.floor(d/365)}y ago`; return <span className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold ${d >= 14 && app.status === "applied" ? "bg-slate-800 border-slate-700 text-slate-400" : "bg-slate-800/60 border-slate-700/60 text-slate-500"}`} title={new Date(app.createdAt).toLocaleString("en-GB")}>{t}</span>; })()}
+                      {!app.rtwVerified && !["applied", "rejected", "withdrawn"].includes(app.status) && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/50 border border-amber-800/70 text-amber-300 font-semibold">RTW unchecked</span>}
+                      {(() => { const d = Math.floor((Date.now() - new Date(app.createdAt).getTime()) / 864e5); const t = d <= 0 ? "today" : d === 1 ? "yesterday" : d < 30 ? `${d}d ago` : d < 365 ? `${Math.floor(d/30)}mo ago` : `${Math.floor(d/365)}y ago`; return d <= 0 ? null : <span className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold ${d >= 14 && app.status === "applied" ? "bg-amber-950/40 border-amber-800/60 text-amber-300" : "bg-slate-800/60 border-slate-700/60 text-slate-500"}`} title={new Date(app.createdAt).toLocaleString("en-GB")}>{d >= 14 && app.status === "applied" ? `waiting ${t}` : t}</span>; })()}
                       {/* Slice 4: surface magic-link failures so manager
                           can follow up manually. We only render the badge
                           when something's not normal — 'sent' is silent. */}
@@ -44370,14 +44391,7 @@ function HiringView({
                           ✉ link failed
                         </span>
                       )}
-                      {app.emailLinkStatus === "pending" && app.source === "public_form" && (
-                        <span
-                          title="Magic link send in progress or not yet attempted."
-                          className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400"
-                        >
-                          ✉ link pending
-                        </span>
-                      )}
+
                     </div>
                     <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-x-3 gap-y-0.5 flex-wrap">
                       <span className="text-slate-400 font-medium">{showBrandPrefix && brand ? `${brand.name} · ` : ""}{store?.shortName || store?.name || app.storeId}</span>
@@ -68820,7 +68834,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: HIRE-UI 2026-09-22a (hiring card polish, sidebar no-squeeze)");
+      console.log("CB build: HIRE-UI 2026-09-22b (theme tints fixed, hiring chips trimmed)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
