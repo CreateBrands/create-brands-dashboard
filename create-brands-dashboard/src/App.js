@@ -67290,6 +67290,8 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
   }, [navGroups, onSelectSub, setActiveView]);
   const pinnedPages = pins.map(k => allPages.find(pg => pg.key === k)).filter(Boolean);
   const [entityMenu, setEntityMenu] = useState(false);
+  const [viewAsOpen, setViewAsOpen] = useState(false);
+  const [viewAsQ, setViewAsQ] = useState("");
   const navRef = useRef(null);
   // scroll the current page into view when it changes (long sidebars on small screens)
   useEffect(() => { const el = navRef.current?.querySelector('[aria-current="page"]'); el?.scrollIntoView?.({ block: "nearest" }); }, [activeView]);
@@ -67545,18 +67547,54 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
           {!collapsed && <button onClick={onLogout} title="Log out" className="p-1.5 text-slate-500 hover:text-red-400 transition-colors rounded-lg hover:bg-red-950/20"><LogOut size={14}/></button>}
         </div>
         {!collapsed && canImpersonate && (
-          <label className="mt-2 flex items-center gap-2 h-8 px-2.5 rounded-lg cursor-pointer" title="View the dashboard as another user"
-            style={{ backgroundColor: isImpersonating ? "#F2C9A8" : "rgba(255,255,255,0.08)", border: `1px solid ${isImpersonating ? "#F2C9A8" : "rgba(255,255,255,0.16)"}` }}>
-            <Users size={13} style={{ color: isImpersonating ? "#5b3a2e" : "#F2C9A8", flexShrink: 0 }}/>
-            <span className="text-[11px] font-bold uppercase tracking-wide" style={{ color: isImpersonating ? "#5b3a2e" : "#F2C9A8" }}>View as</span>
-            <select value={isImpersonating ? currentUser.id : ""} onChange={e => onImpersonate(e.target.value || null)} aria-label="View as"
-              className="flex-1 min-w-0 bg-transparent border-0 p-0 text-[12px] font-semibold focus:outline-none cursor-pointer truncate"
-              style={{ color: isImpersonating ? "#3A2418" : "#FFFFFF" }}>
-              <option value="">— myself —</option>
-              {impersonationTargets.map(u => <option key={u.id} value={u.id}>{u.name} · {u.role === "hq_staff" ? "HQ" : u.role}</option>)}
-            </select>
-            <ChevronDownIcon size={13} style={{ color: isImpersonating ? "#5b3a2e" : "#F2C9A8", flexShrink: 0 }}/>
-          </label>
+          <div className="relative mt-2">
+            {/* VIEWAS 2026-09-22b: our own menu, styled like the rest of the sidebar — searchable, grouped by role */}
+            <button onClick={() => { setViewAsOpen(o => !o); setViewAsQ(""); }} aria-haspopup="menu" aria-expanded={viewAsOpen} title="View the dashboard as another user"
+              className="w-full flex items-center gap-2 h-8 px-2.5 rounded-lg cursor-pointer text-left"
+              style={{ backgroundColor: isImpersonating ? "#F2C9A8" : "rgba(255,255,255,0.08)", border: `1px solid ${isImpersonating ? "#F2C9A8" : "rgba(255,255,255,0.16)"}` }}>
+              <Users size={13} style={{ color: isImpersonating ? "#5b3a2e" : "#F2C9A8", flexShrink: 0 }}/>
+              <span className="text-[11px] font-bold uppercase tracking-wide flex-shrink-0" style={{ color: isImpersonating ? "#5b3a2e" : "#F2C9A8" }}>View as</span>
+              <span className="flex-1 min-w-0 truncate text-[12px] font-semibold" style={{ color: isImpersonating ? "#3A2418" : "#FFFFFF" }}>{isImpersonating ? currentUser.name : "myself"}</span>
+              <ChevronDownIcon size={13} className={`transition-transform ${viewAsOpen ? "rotate-180" : ""}`} style={{ color: isImpersonating ? "#5b3a2e" : "#F2C9A8", flexShrink: 0 }}/>
+            </button>
+            {viewAsOpen && (
+              <div role="menu" className="absolute left-0 right-0 bottom-full mb-1.5 z-50 rounded-xl border border-slate-700 shadow-2xl overflow-hidden" style={{ backgroundColor: "#4a2e24" }}>
+                <div className="flex items-center gap-2 px-2.5 py-2 border-b border-slate-800/70">
+                  <Search size={13} className="text-slate-500 flex-shrink-0"/>
+                  <input autoFocus value={viewAsQ} onChange={e => setViewAsQ(e.target.value)} placeholder="Find a person…" aria-label="Find a person"
+                    onKeyDown={e => { if (e.key === "Escape") setViewAsOpen(false); }}
+                    className="flex-1 min-w-0 bg-transparent border-0 p-0 text-[12.5px] focus:outline-none" style={{ color: "#fff" }}/>
+                </div>
+                <div className="max-h-72 overflow-y-auto p-1.5">
+                  <button role="menuitem" onClick={() => { onImpersonate(null); setViewAsOpen(false); }}
+                    className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-[13px] font-semibold text-left ${!isImpersonating ? "bg-slate-800/60 text-white" : "text-slate-300 hover:bg-slate-800/60 hover:text-white"}`}>
+                    <Avatar photoUrl={actualUser?.photoUrl} name={actualUser?.name} initials={actualUser?.avatar} color={actualUser?.color || "#844429"} size={22} rounded="lg"/>
+                    <span className="flex-1 truncate">Myself <span className="text-slate-500 font-medium">· owner</span></span>
+                    {!isImpersonating && <Check size={13} className="text-amber-300"/>}
+                  </button>
+                  {[["hq_staff","HQ"],["owner","Owners"],["manager","Managers"],["staff","Staff"]].map(([role, title]) => {
+                    const list = impersonationTargets.filter(u => u.role === role && (!viewAsQ.trim() || (u.name || "").toLowerCase().includes(viewAsQ.trim().toLowerCase())));
+                    if (!list.length) return null;
+                    return (
+                      <div key={role}>
+                        <div className="text-[10.5px] font-extrabold uppercase tracking-[0.12em] text-slate-500 px-2.5 pt-2.5 pb-1">{title}</div>
+                        {list.map(u => (
+                          <button key={u.id} role="menuitem" onClick={() => { onImpersonate(u.id); setViewAsOpen(false); }}
+                            className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-[13px] font-semibold text-left ${isImpersonating && currentUser.id === u.id ? "bg-slate-800/60 text-white" : "text-slate-300 hover:bg-slate-800/60 hover:text-white"}`}>
+                            <Avatar photoUrl={u.photoUrl} name={u.name} initials={u.avatar} color={u.color || "#844429"} size={22} rounded="lg"/>
+                            <span className="flex-1 truncate">{u.name}</span>
+                            {isImpersonating && currentUser.id === u.id && <Check size={13} className="text-amber-300"/>}
+                          </button>
+                        ))}
+                      </div>
+                    );
+                  })}
+                  {viewAsQ.trim() && !impersonationTargets.some(u => (u.name || "").toLowerCase().includes(viewAsQ.trim().toLowerCase())) && <div className="px-2.5 py-4 text-center text-[12px] text-slate-500">No one matches "{viewAsQ}".</div>}
+                </div>
+                <div className="px-3 py-2 border-t border-slate-800/70 text-[10.5px] text-slate-500">UI preview only — anything you save still goes through your own account.</div>
+              </div>
+            )}
+          </div>
         )}
       </div>
     </div>
@@ -68928,7 +68966,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: NAV 2026-09-22b (entity menu, pins, chords, arrow keys, palette recents)");
+      console.log("CB build: VIEWAS 2026-09-22b (custom view-as menu) + NAV 22b");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
