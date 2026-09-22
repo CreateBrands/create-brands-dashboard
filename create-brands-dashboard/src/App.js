@@ -24714,6 +24714,11 @@ function EmpThemeStyle() {
 .emp-theme .text-sky-300,   .emp-theme .text-sky-400,
 .emp-theme .text-blue-300,  .emp-theme .text-blue-400   { color: #1f6f8b !important; }
 
+/* VIEWAS 2026-09-22a: native <select> popups render on white, but the options were
+   inheriting the pale chrome text colour, so the View-as list was invisible. */
+.emp-theme .cb-chrome select option, .emp-theme select option { color: #3A2418 !important; background-color: #FFFFFF !important; }
+.emp-theme .cb-chrome select { color: #F5EBD9 !important; }
+
 /* THEME 2026-09-22a: tints the remap missed. Pale -100/-200 text and any
    "/opacity" variant (text-amber-400/80, hover:bg-slate-800/50 ...) were
    falling through as light-on-cream or grey overlays. */
@@ -68854,7 +68859,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: DASH-ISSUES 2026-09-22a (dashboard issues clickable)");
+      console.log("CB build: VIEWAS 2026-09-22a (view-as options readable) + DASH-ISSUES 22a");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
