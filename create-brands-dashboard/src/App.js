@@ -67217,6 +67217,9 @@ function CommandPalette({ navGroups = [], entities = [], currentEntity, onGo, on
   const [idx, setIdx] = useState(0);
   const inputRef = useRef(null);
   useEffect(() => { inputRef.current?.focus(); }, []);
+  // NAV 2026-09-22b: remember what was opened from here, show it first when the box is empty
+  const [recent, setRecent] = useState(() => { try { return JSON.parse(localStorage.getItem("cb_palette_recent") || "[]"); } catch { return []; } });
+  const remember = (id) => { const next = [id, ...recent.filter(x => x !== id)].slice(0, 6); setRecent(next); try { localStorage.setItem("cb_palette_recent", JSON.stringify(next)); } catch {} };
   const items = useMemo(() => {
     const out = [];
     navGroups.forEach(g => (g.items || []).forEach(n => {
@@ -67229,7 +67232,7 @@ function CommandPalette({ navGroups = [], entities = [], currentEntity, onGo, on
   const norm = (t) => (t || "").toLowerCase();
   const results = useMemo(() => {
     const t = norm(q).trim();
-    if (!t) return items.slice(0, 14);
+    if (!t) { const rec = recent.map(id => items.find(it => it.id === id)).filter(Boolean).map(it => ({ ...it, kind: "Recent" })); const rest = items.filter(it => !recent.includes(it.id)); return [...rec, ...rest].slice(0, 14); }
     const words = t.split(/\s+/);
     return items
       .map(it => { const hay = `${norm(it.label)} ${norm(it.hint)}`; const score = words.every(w => hay.includes(w)) ? (norm(it.label).startsWith(t) ? 3 : norm(it.label).includes(t) ? 2 : 1) : 0; return { it, score }; })
@@ -67239,7 +67242,7 @@ function CommandPalette({ navGroups = [], entities = [], currentEntity, onGo, on
   const onKey = (e) => {
     if (e.key === "ArrowDown") { e.preventDefault(); setIdx(i => Math.min(i + 1, results.length - 1)); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setIdx(i => Math.max(i - 1, 0)); }
-    else if (e.key === "Enter") { e.preventDefault(); results[idx]?.run(); }
+    else if (e.key === "Enter") { e.preventDefault(); const r = results[idx]; if (r) { remember(r.id); r.run(); } }
     else if (e.key === "Escape") { e.preventDefault(); onClose(); }
   };
   return (
@@ -67254,7 +67257,7 @@ function CommandPalette({ navGroups = [], entities = [], currentEntity, onGo, on
         <div className="max-h-[60vh] overflow-y-auto p-1.5">
           {results.length === 0 && <div className="px-3 py-8 text-center text-sm text-slate-500">Nothing matches "{q}".</div>}
           {results.map((r, i) => { const I = r.icon; return (
-            <button key={r.id} onClick={r.run} onMouseEnter={() => setIdx(i)}
+            <button key={r.id} onClick={() => { remember(r.id); r.run(); }} onMouseEnter={() => setIdx(i)}
               className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${i === idx ? "bg-indigo-600 text-white" : "text-slate-300 hover:bg-slate-800/70"}`}>
               <span className={`w-7 h-7 rounded-md flex items-center justify-center flex-shrink-0 ${i === idx ? "bg-white/15" : "bg-slate-800"}`}>{I ? <I size={14}/> : null}</span>
               <span className="flex-1 min-w-0"><span className="block text-[13.5px] font-semibold truncate">{r.label}</span><span className={`block text-[11px] truncate ${i === idx ? "text-white/70" : "text-slate-500"}`}>{r.hint}</span></span>
@@ -67262,7 +67265,7 @@ function CommandPalette({ navGroups = [], entities = [], currentEntity, onGo, on
             </button>
           ); })}
         </div>
-        <div className="flex gap-4 px-4 py-2 border-t border-slate-800 text-[11px] text-slate-500"><span>↑↓ move</span><span>↵ open</span><span>Esc close</span><span className="ml-auto">Ctrl K anywhere</span></div>
+        <div className="flex gap-4 px-4 py-2 border-t border-slate-800 text-[11px] text-slate-500 flex-wrap"><span>↑↓ move</span><span>↵ open</span><span>Esc close</span><span className="ml-auto" title="Press G, then a letter: D dashboard · O operations · T team · R reports · I agent inbox · S setup · C communication">G + D / O / T / R / I / S jumps</span></div>
       </div>
     </div>
   );
@@ -67270,7 +67273,36 @@ function CommandPalette({ navGroups = [], entities = [], currentEntity, onGo, on
 
 function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, collapsed, setCollapsed, entityName,
                     actualUser = null, users = [], onImpersonate = null, isImpersonating = false, onSwitchEntity = null,
-                    onSelectSub = null, subActiveTab = {} }) {
+                    onSelectSub = null, subActiveTab = {}, entities = [], currentEntity = null, onChooseEntity = null }) {
+  // ── NAV 2026-09-22b: pinned pages (per user, on this device), entity menu, keyboard ──
+  const pinKey = `cb_pins_${currentUser?.id || "anon"}`;
+  const [pins, setPins] = useState(() => { try { return JSON.parse(localStorage.getItem(pinKey) || "[]"); } catch { return []; } });
+  useEffect(() => { try { localStorage.setItem(pinKey, JSON.stringify(pins)); } catch {} }, [pins, pinKey]);
+  const togglePin = (key) => setPins(p => p.includes(key) ? p.filter(k => k !== key) : [...p, key].slice(-8));
+  const allPages = useMemo(() => {
+    const out = [];
+    (navGroups || []).forEach(g => (g.items || []).forEach(n => {
+      out.push({ key: n.key, label: n.label, icon: n.icon, go: () => setActiveView(n.key), group: g.group });
+      (n.children || []).forEach(c => out.push({ key: c.key, label: c.label, icon: c.icon || n.icon, group: n.label,
+        go: () => (c.tab && c.view && onSelectSub) ? onSelectSub(c.view, c.tab) : setActiveView(c.key) }));
+    }));
+    return out;
+  }, [navGroups, onSelectSub, setActiveView]);
+  const pinnedPages = pins.map(k => allPages.find(pg => pg.key === k)).filter(Boolean);
+  const [entityMenu, setEntityMenu] = useState(false);
+  const navRef = useRef(null);
+  // scroll the current page into view when it changes (long sidebars on small screens)
+  useEffect(() => { const el = navRef.current?.querySelector('[aria-current="page"]'); el?.scrollIntoView?.({ block: "nearest" }); }, [activeView]);
+  // arrow keys move focus between rows; Home/End jump
+  const onNavKey = (e) => {
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+    const rows = [...(navRef.current?.querySelectorAll("button:not([disabled]), a[href]") || [])].filter(el => el.offsetParent !== null);
+    const i = rows.indexOf(document.activeElement);
+    if (i < 0 && e.key !== "Home" && e.key !== "End") return;
+    e.preventDefault();
+    const next = e.key === "ArrowDown" ? rows[Math.min(i + 1, rows.length - 1)] : e.key === "ArrowUp" ? rows[Math.max(i - 1, 0)] : e.key === "Home" ? rows[0] : rows[rows.length - 1];
+    next?.focus();
+  };
   // Only an actual owner gets the view-as picker. Impersonated views never show it
   // (avoid the "view as X → view as Y" rabbit hole).
   const canImpersonate = actualUser?.role === "owner" && onImpersonate;
@@ -67363,7 +67395,7 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
   return (
     <div className={`cb-chrome hidden md:flex flex-col h-full flex-shrink-0 overflow-hidden bg-slate-950 border-r border-slate-800/60 transition-all duration-300 ${collapsed ? "w-16" : "w-60"}`}>
       {/* Logo — click to go to Dashboard */}
-      <div className="flex items-center gap-3 px-4 py-4 border-b border-slate-800/60">
+      <div className="relative flex items-center gap-3 px-4 py-4 border-b border-slate-800/60">
         <div onClick={() => setActiveView("dashboard")} className="flex items-center gap-3 cursor-pointer flex-1 min-w-0" title="Go to Dashboard">
           <div className="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center flex-shrink-0">
             <BarChart2 size={16} className="text-white"/>
@@ -67372,18 +67404,48 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
             <div>
               <div className="text-sm font-black text-white">Create Brands</div>
               {onSwitchEntity
-                ? <span onClick={(e) => { e.stopPropagation(); onSwitchEntity(); }} className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1 cursor-pointer" title="Switch entity">{entityName || "Switch entity"} <ChevronDown size={11}/></span>
+                ? <button onClick={(e) => { e.stopPropagation(); if (entities.length > 1 && onChooseEntity) setEntityMenu(m => !m); else onSwitchEntity(); }} aria-haspopup="menu" aria-expanded={entityMenu}
+                    className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1 cursor-pointer bg-transparent border-0 p-0 font-semibold" title="Switch entity">{entityName || "Switch entity"} <ChevronDown size={11} className={`transition-transform ${entityMenu ? "rotate-180" : ""}`}/></button>
                 : <div className="text-xs text-slate-500">Hospitality Group</div>}
             </div>
           )}
         </div>
+        {entityMenu && !collapsed && (
+          <div role="menu" className="absolute left-2 right-2 top-[60px] z-50 rounded-xl border border-slate-700 shadow-2xl p-1.5" style={{ backgroundColor: "#4a2e24" }} onMouseLeave={() => setEntityMenu(false)}>
+            <div className="text-[10.5px] font-extrabold uppercase tracking-[0.12em] text-slate-500 px-2 py-1.5">Switch to</div>
+            {entities.map(en => (
+              <button key={en.id} role="menuitem" onClick={() => { setEntityMenu(false); if (en.id !== currentEntity) onChooseEntity(en.id); }}
+                className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-[13px] font-semibold text-left ${en.id === currentEntity ? "bg-slate-800/60 text-white" : "text-slate-300 hover:bg-slate-800/60 hover:text-white"}`}>
+                <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: en.color || "#F2C9A8" }}/>
+                <span className="flex-1 truncate">{en.name}</span>
+                {en.id === currentEntity && <Check size={13} className="text-amber-300"/>}
+              </button>
+            ))}
+            <div className="h-px bg-slate-800/70 my-1"/>
+            <button role="menuitem" onClick={() => { setEntityMenu(false); onSwitchEntity(); }} className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-[12px] font-semibold text-slate-400 hover:text-white hover:bg-slate-800/60 text-left"><LayoutGrid size={13}/> All entities</button>
+          </div>
+        )}
         <button onClick={() => setCollapsed(c => !c)} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} title={collapsed ? "Expand" : "Collapse"} className="ml-auto text-slate-500 hover:text-white hover:bg-slate-800/70 p-1.5 rounded-lg transition-colors">
           {collapsed ? <ChevronRight size={14}/> : <ChevronLeft size={14}/>}
         </button>
       </div>
       {/* Nav — NAV 2026-09-22a: 13px rows, 11px section labels, accent bar on the current page,
           parent lit when a child is active, tooltips when collapsed. */}
-      <nav aria-label="Main" className="flex-1 overflow-y-auto py-1.5 space-y-px px-2">
+      <nav aria-label="Main" ref={navRef} onKeyDown={onNavKey} className="flex-1 overflow-y-auto py-1.5 space-y-px px-2 [&_button:focus-visible]:outline-none [&_button:focus-visible]:ring-2 [&_button:focus-visible]:ring-amber-300/70">
+        {pinnedPages.length > 0 && (
+          <div>
+            {!collapsed && <div className="text-[11px] font-extrabold text-slate-500 uppercase tracking-[0.12em] px-2.5 pt-3 pb-1 flex items-center gap-1.5"><Star size={10} className="text-amber-300"/> Pinned</div>}
+            {collapsed && <div aria-hidden="true" className="mx-3 my-2 h-px bg-slate-800/70"/>}
+            {pinnedPages.map(pg => { const PI = pg.icon; const isAct = activeView === pg.key || (pg.key.includes(":") && pg.key.startsWith(activeView + ":") && subActiveTab[activeView] === pg.key.split(":")[1]); return (
+              <button key={"pin-" + pg.key} onClick={pg.go} title={collapsed ? pg.label : pg.group} aria-current={isAct ? "page" : undefined} className={rowCls(isAct) + " group/pin"}>
+                {isAct && <AccentBar/>}
+                {PI ? <PI size={17} strokeWidth={1.9} className="flex-shrink-0"/> : <Star size={17} className="flex-shrink-0"/>}
+                {!collapsed && <span className="flex-1 text-left truncate">{pg.label}</span>}
+                {!collapsed && <span role="button" tabIndex={-1} onClick={(e) => { e.stopPropagation(); togglePin(pg.key); }} title="Unpin" className="opacity-0 group-hover/pin:opacity-100 text-amber-300 hover:text-white"><Star size={12} fill="currentColor"/></span>}
+              </button>
+            ); })}
+          </div>
+        )}
         {navGroups.map(g => (
           <div key={g.group}>
             {!collapsed && <div className="text-[11px] font-extrabold text-slate-500 uppercase tracking-[0.12em] px-2.5 pt-4 pb-1">{g.group}</div>}
@@ -67454,8 +67516,9 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
               }
               return (
                 <button key={n.key} onClick={() => setActiveView(n.key)} aria-current={active ? "page" : undefined} title={collapsed ? n.label : undefined}
-                  className={rowCls(active)}>
+                  className={rowCls(active) + " group/row"}>
                   {active && <AccentBar/>}
+                  {!collapsed && !pins.includes(n.key) && !displayBadge(n) && <span role="button" tabIndex={-1} onClick={(e) => { e.stopPropagation(); togglePin(n.key); }} title="Pin to top" className="absolute right-2 opacity-0 group-hover/row:opacity-100 text-slate-500 hover:text-amber-300"><Star size={12}/></span>}
                   <NIcon size={17} strokeWidth={1.9} className="flex-shrink-0"/>
                   {!collapsed && <span className="flex-1 text-left truncate">{n.label}</span>}
                   {!collapsed && <Badge value={displayBadge(n)} tone={n.badgeTone}/>}
@@ -68865,7 +68928,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: FOOTER 2026-09-22a (sidebar footer + view-as pill)");
+      console.log("CB build: NAV 2026-09-22b (entity menu, pins, chords, arrow keys, palette recents)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -69078,9 +69141,19 @@ export default function App() {
   const setSidebarCollapsed = useCallback((v) => setSidebarCollapsedRaw(prev => { const next = typeof v === "function" ? v(prev) : v; try { localStorage.setItem("cb_sidebar_collapsed", next ? "1" : "0"); } catch {} return next; }), []);
   // NAV 2026-09-22a: Ctrl/⌘ K command palette
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // NAV 2026-09-22b: "G then letter" chords jump between the main pages
+  // (G D dashboard · G O operations · G T team · G R reports · G I agent inbox · G S setup).
+  const chordRef = useRef(0);
   useEffect(() => {
+    const CHORDS = { d: "dashboard", o: "operations", t: "team", r: "reports", i: "agent-inbox", s: "setup", c: "comms" };
+    const typing = () => { const el = document.activeElement; return el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable); };
     const onKey = (e) => {
-      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "k" || e.key === "K")) { e.preventDefault(); setPaletteOpen(o => !o); }
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "k" || e.key === "K")) { e.preventDefault(); setPaletteOpen(o => !o); return; }
+      if (e.ctrlKey || e.metaKey || e.altKey || typing()) return;
+      const k = (e.key || "").toLowerCase();
+      if (k === "g") { chordRef.current = Date.now(); return; }
+      if (chordRef.current && Date.now() - chordRef.current < 1500 && CHORDS[k]) { e.preventDefault(); chordRef.current = 0; setActiveView(CHORDS[k]); }
+      else chordRef.current = 0;
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -70952,6 +71025,8 @@ export default function App() {
           }}
           subActiveTab={{ operations: opsTab, team: teamTab, dashboard: dashTab, comms: commsTab }}
           onSwitchEntity={(!effectiveFinanceOnly && destinationCount > 1) ? (() => chooseEntity(null)) : null}
+          entities={[...entityBrands.map(b => ({ id: b.id, name: b.name, color: b.color })), ...(financeAvailable ? [{ id: "finance", name: "Finance", color: "#3f9a5c" }] : [])]}
+          currentEntity={selectedEntityBrand} onChooseEntity={(id) => chooseEntity(id)}
           entityName={selectedEntityBrand === "finance" ? "Finance" : (brands.find(b => b.id === selectedEntityBrand)?.name || null)}
           currentUser={currentUser} onLogout={handleLogout}
           collapsed={sidebarCollapsed} setCollapsed={setSidebarCollapsed}
