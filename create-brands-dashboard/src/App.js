@@ -44345,15 +44345,20 @@ function HiringView({
                 {/* Summary row — click to expand */}
                 <div onClick={() => handleExpand(app)}
                   className="flex items-center gap-3 p-4 cursor-pointer hover:bg-slate-800/50 transition-colors">
-                  {/* Avatar (initials) */}
-                  <div className="w-10 h-10 rounded-xl bg-indigo-950 border border-indigo-500/30 flex items-center justify-center text-indigo-300 font-bold text-sm flex-shrink-0">
-                    {(app.firstName?.[0] || "?")}{app.lastName?.[0] || ""}
-                  </div>
+                  {/* HIRE-UI 2026-09-22a: photo if there is one, initials otherwise */}
+                  {app.photoUrl
+                    ? <img src={app.photoUrl} alt="" className="w-10 h-10 rounded-xl object-cover border border-slate-700 flex-shrink-0"/>
+                    : <div className="w-10 h-10 rounded-xl bg-indigo-950 border border-indigo-500/30 flex items-center justify-center text-indigo-300 font-bold text-sm flex-shrink-0">
+                        {(app.firstName?.[0] || "?")}{app.lastName?.[0] || ""}
+                      </div>}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <div className="text-sm font-bold text-white">{app.firstName} {app.lastName}</div>
                       <Badge label={status.label} color={status.color}/>
-                      {app.position && <span className="text-xs text-slate-500">· {app.position}</span>}
+                      {app.position && <span className="text-xs text-slate-400 font-medium">{app.position}</span>}
+                      {app.isMinor && <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-950/60 border border-red-800 text-red-300 font-semibold">Under 18</span>}
+                      {!app.rtwVerified && app.status !== "rejected" && app.status !== "withdrawn" && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/50 border border-amber-800/70 text-amber-300 font-semibold">RTW unchecked</span>}
+                      {(() => { const d = Math.floor((Date.now() - new Date(app.createdAt).getTime()) / 864e5); const t = d <= 0 ? "today" : d === 1 ? "yesterday" : d < 30 ? `${d}d ago` : d < 365 ? `${Math.floor(d/30)}mo ago` : `${Math.floor(d/365)}y ago`; return <span className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold ${d >= 14 && app.status === "applied" ? "bg-slate-800 border-slate-700 text-slate-400" : "bg-slate-800/60 border-slate-700/60 text-slate-500"}`} title={new Date(app.createdAt).toLocaleString("en-GB")}>{t}</span>; })()}
                       {/* Slice 4: surface magic-link failures so manager
                           can follow up manually. We only render the badge
                           when something's not normal — 'sent' is silent. */}
@@ -44374,10 +44379,10 @@ function HiringView({
                         </span>
                       )}
                     </div>
-                    <div className="text-xs text-slate-600 mt-0.5">
-                      {showBrandPrefix && brand ? `${brand.name} · ` : ""}{store?.shortName || store?.name || app.storeId}
-                      {app.email && ` · ${app.email}`}
-                      {app.phone && ` · ${app.phone}`}
+                    <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-x-3 gap-y-0.5 flex-wrap">
+                      <span className="text-slate-400 font-medium">{showBrandPrefix && brand ? `${brand.name} · ` : ""}{store?.shortName || store?.name || app.storeId}</span>
+                      {app.email && <a href={`mailto:${app.email}`} onClick={e => e.stopPropagation()} className="hover:text-indigo-300 truncate max-w-[260px]">{app.email}</a>}
+                      {app.phone && <a href={`tel:${app.phone}`} onClick={e => e.stopPropagation()} className="hover:text-indigo-300">{app.phone}</a>}
                     </div>
                   </div>
                   <ChevronDownIcon size={16} className={`text-slate-500 transition-transform flex-shrink-0 ${isExpanded ? "rotate-180" : ""}`}/>
@@ -44391,6 +44396,23 @@ function HiringView({
                         fetches on mount (i.e. when the row is expanded). Manager-
                         only info; never shown to the candidate. */}
                     <DuplicateWarning email={app.email} excludeId={app.id}/>
+
+                    {/* HIRE-UI 2026-09-22a: the decision sits at the top, where the eye lands */}
+                    {transitions.length > 0 && (
+                      <div className="flex flex-wrap items-center gap-2 -mt-1">
+                        {transitions.map(t => {
+                          const tinfo = APPLICATION_STATUSES.find(s => s.key === t);
+                          const isReject = t === "rejected" || t === "withdrawn";
+                          return (
+                            <button key={t} onClick={(e) => { e.stopPropagation(); handleTransition(app, t); }}
+                              className={`px-3.5 py-2 rounded-lg text-xs font-bold transition-colors ${isReject ? "bg-slate-800 text-slate-400 hover:bg-red-950/40 hover:text-red-300" : "bg-indigo-600 text-white hover:bg-indigo-500"}`}>
+                              {isReject ? tinfo?.label || t : `Move to ${tinfo?.label || t}`}
+                            </button>
+                          );
+                        })}
+                        <span className="ml-auto text-[11px] text-slate-500">Applied {new Date(app.createdAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}{app.source ? ` · via ${app.source.replace(/_/g, " ")}` : ""}</span>
+                      </div>
+                    )}
 
                     {/* Top row: photo (if uploaded) + key details */}
                     <div className="flex items-start gap-4">
@@ -44412,58 +44434,42 @@ function HiringView({
                       )}
                       <div className="flex-1 grid grid-cols-2 md:grid-cols-3 gap-3 text-xs">
                         <DetailField label="Position"    value={app.position || "—"}/>
-                        <DetailField label="Source"      value={app.source || "—"}/>
-                        <DetailField label="Email"       value={app.email || "—"}/>
-                        <DetailField label="Phone"       value={app.phone || "—"}/>
-                        <DetailField label="Date of Birth"
+                        <DetailField label="Email"       value={app.email ? <a href={`mailto:${app.email}`} className="text-indigo-300 hover:underline break-all">{app.email}</a> : "—"}/>
+                        <DetailField label="Phone"       value={app.phone ? <a href={`tel:${app.phone}`} className="text-indigo-300 hover:underline">{app.phone}</a> : "—"}/>
+                        <DetailField label="Date of birth"
                           value={app.dateOfBirth
-                            ? `${new Date(app.dateOfBirth).toLocaleDateString("en-GB")}${app.isMinor ? " ⚠ UNDER 18" : ""}`
-                            : "—"
-                          }
+                            ? <span className={app.isMinor ? "text-red-300 font-semibold" : ""}>{new Date(app.dateOfBirth).toLocaleDateString("en-GB")}{app.isMinor ? " · under 18" : ""}</span>
+                            : "—"}
                         />
-                        <DetailField label="Legal Status"
+                        <DetailField label="Legal status"
                           value={LEGAL_STATUS_OPTIONS.find(o => o.value === app.legalStatus)?.label || app.legalStatus || "—"}
                         />
-                        <DetailField label="RTW Verified" value={app.rtwVerified ? "✓ Yes" : "✗ No"}/>
-                        <DetailField label="Applied On"  value={new Date(app.createdAt).toLocaleDateString("en-GB")}/>
+                        <DetailField label="Right to work" value={app.rtwVerified ? <span className="text-emerald-300 font-semibold">Verified</span> : <span className="text-amber-300 font-semibold">Not yet checked</span>}/>
                       </div>
                     </div>
 
                     {/* Wider fields full-width below */}
                     {app.address              && <DetailField label="Address"              value={app.address} full/>}
                     {app.availabilityNotes    && <DetailField label="Availability"         value={app.availabilityNotes} full/>}
-                    {app.relevantExperience   && <DetailField label="Relevant Experience"  value={app.relevantExperience} full/>}
-                    {app.resumeText && (
-                      <div className="col-span-full">
-                        <div className="text-[10px] uppercase tracking-wider text-slate-600 font-semibold mb-1.5">Resume / CV</div>
-                        <pre className="text-xs text-slate-200 bg-slate-950 border border-slate-800 rounded-xl p-3 max-h-64 overflow-y-auto whitespace-pre-wrap font-mono">{app.resumeText}</pre>
+                    {app.relevantExperience   && <DetailField label="Relevant experience"  value={<span className="whitespace-pre-line leading-relaxed">{app.relevantExperience}</span>} full/>}
+                    {app.applicantNotes && (
+                      <div className="rounded-xl border border-amber-800/40 bg-amber-950/20 px-3 py-2.5">
+                        <div className="text-[10px] uppercase tracking-wider text-amber-400/80 font-semibold mb-0.5">Candidate's note</div>
+                        <div className="text-xs text-amber-100/90 whitespace-pre-line leading-relaxed">{app.applicantNotes}</div>
                       </div>
                     )}
-                    {app.applicantNotes    && <DetailField label="Notes"        value={app.applicantNotes}    full/>}
+                    {app.resumeText && (
+                      <details className="group rounded-xl border border-slate-800 bg-slate-950/60">
+                        <summary className="cursor-pointer select-none px-3 py-2 flex items-center gap-2 text-[11px] font-semibold text-slate-400 hover:text-white">
+                          <ChevronDownIcon size={13} className="transition-transform group-open:rotate-180"/> Resume / CV <span className="text-slate-600 font-normal">· {app.resumeText.length.toLocaleString()} chars</span>
+                        </summary>
+                        <div className="px-4 pb-3 text-[13px] text-slate-200 whitespace-pre-line leading-relaxed max-h-96 overflow-y-auto">{app.resumeText}</div>
+                      </details>
+                    )}
                     {app.status === "rejected" && app.rejectionReason &&
                       <DetailField label="Rejection Reason" value={app.rejectionReason} full/>
                     }
 
-                    {/* Status transition buttons */}
-                    {transitions.length > 0 && (
-                      <div className="flex flex-wrap items-center gap-2 pt-2">
-                        <span className="text-xs text-slate-500">Move to:</span>
-                        {transitions.map(t => {
-                          const tinfo = APPLICATION_STATUSES.find(s => s.key === t);
-                          const isReject = t === "rejected" || t === "withdrawn";
-                          return (
-                            <button key={t} onClick={(e) => { e.stopPropagation(); handleTransition(app, t); }}
-                              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
-                                isReject
-                                  ? "bg-slate-800 text-slate-400 hover:bg-red-950/40 hover:text-red-300"
-                                  : "bg-indigo-600 text-white hover:bg-indigo-600 hover:text-white"
-                              }`}>
-                              {tinfo?.label || t}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
 
                     {/* Edit / Delete / Retry link */}
                     <div className="flex flex-wrap gap-2 pt-1">
@@ -67316,7 +67322,7 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
     : [];
 
   return (
-    <div className={`cb-chrome hidden md:flex flex-col h-full bg-slate-950 border-r border-slate-800/60 transition-all duration-300 ${collapsed ? "w-16" : "w-60"}`}>
+    <div className={`cb-chrome hidden md:flex flex-col h-full flex-shrink-0 overflow-hidden bg-slate-950 border-r border-slate-800/60 transition-all duration-300 ${collapsed ? "w-16" : "w-60"}`}>
       {/* Logo — click to go to Dashboard */}
       <div className="flex items-center gap-3 px-4 py-4 border-b border-slate-800/60">
         <div onClick={() => setActiveView("dashboard")} className="flex items-center gap-3 cursor-pointer flex-1 min-w-0" title="Go to Dashboard">
@@ -68814,7 +68820,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: BADGES 2026-09-22a (per-user seen badges) + NAV 2026-09-22a");
+      console.log("CB build: HIRE-UI 2026-09-22a (hiring card polish, sidebar no-squeeze)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
