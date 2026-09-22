@@ -2041,7 +2041,7 @@ function IssueDetailModal({ issue, brands, users, currentUser, onUpdate, onClose
 }
 
 // ─── Issues Tracker View ──────────────────────────────────────────────────────
-function IssuesView({ brands, stores, visibleStoreIds, issues, users, currentUser, onAddIssue, onUpdateIssue, onDeleteIssue, scopeDebug = null, onSeen }) {
+function IssuesView({ brands, stores, visibleStoreIds, issues, users, currentUser, onAddIssue, onUpdateIssue, onDeleteIssue, scopeDebug = null, onSeen, openIssueId = null, onOpenedIssue }) {
   const { user } = useAuth();
 
   const allVisibleStores = useMemo(
@@ -2063,6 +2063,13 @@ function IssuesView({ brands, stores, visibleStoreIds, issues, users, currentUse
   const [detailIssue, setDetailIssue] = useState(null);
   const [editIssue, setEditIssue] = useState(null);
   const [deleteId, setDeleteId] = useState(null);
+  // DASH-ISSUES 2026-09-22a: arrive with an issue already open (from the dashboard)
+  useEffect(() => {
+    if (!openIssueId) return;
+    const it = (issues || []).find(i => i.id === openIssueId);
+    if (it) { onSeen?.("issue", [it.id]); setDetailIssue(it); }
+    onOpenedIssue?.();
+  }, [openIssueId, issues]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reset selStore if it falls out of scope (ownership change)
   useEffect(() => {
@@ -34198,7 +34205,7 @@ function DailySalesReportCard({ storeId, date }) {
   );
 }
 
-function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentUser, defaultStoreId = "all" }) {
+function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentUser, defaultStoreId = "all", onOpenIssues, onOpenIssue }) {
   const { user } = useAuth();
   const isHQ = isHqOrAbove(user.role);
   const visibleBrands = brands.filter(b => isHQ || user.brandIds.includes(b.id));
@@ -35045,7 +35052,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         <StatCard label="COGS %" value={allInCogsPct != null ? `${allInCogsPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={allInCogsPct != null ? `${fmtCurrency(allInCogs)} all-in${estUncostedCogs > 0 ? ` · incl. est.` : ""}` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={ShoppingCart} accent="caramel" status={allInCogsPct == null ? "neut" : allInCogsPct > 35 ? "bad" : allInCogsPct > 30 ? "warn" : "good"} note={allInCogsPct == null ? null : allInCogsPct > 35 ? "high" : allInCogsPct > 30 ? "watch" : "on track"} alert={allInCogsPct != null && allInCogsPct > 35} onClick={allInCogsPct != null ? () => setCogsBreakdown({ mappedCogs: dashCogs.cogs, costedRevenue: dashCogs.costedRevenue || 0, unmappedRevenue: dashCogs.unmappedRevenue || 0, mappedUncostedRevenue: dashCogs.mappedButUncostedRevenue || 0, estUncostedCogs, allInCogs, allInCogsPct, totalRevenue: cur.revenue, rate: UNCOSTED_COGS_RATE }) : null} />
         <StatCard label="Prime Cost %" value={primeCostPct != null ? `${primeCostPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={primeCostPct != null ? `${fmtCurrency(dashCogs.cogs)} COGS + ${fmtCurrency(cur.labourCost)} labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={Activity} accent="brown" status={primeCostPct == null ? "neut" : primeCostPct > 65 ? "bad" : primeCostPct > 60 ? "warn" : "good"} note={primeCostPct == null ? null : primeCostPct > 65 ? "high" : primeCostPct > 60 ? "watch" : "healthy"} alert={primeCostPct != null && primeCostPct > 65} />
         <StatCard label="Net Margin" value={netMarginPct != null ? `${netMarginPct.toFixed(1)}%` : (!singleStoreId ? "Per-store" : (err||loading) ? "—" : "Pending")} sub={netMarginPct != null ? `after COGS + labour` : (!singleStoreId ? "Select a store" : (err||loading) ? "Actuals loading…" : "Awaiting recipe costing")} icon={TrendingUp} accent="brand" status={netMarginPct == null ? "neut" : netMarginPct < 0 ? "bad" : netMarginPct < 10 ? "warn" : "good"} note={netMarginPct == null ? null : netMarginPct < 0 ? "loss" : netMarginPct < 10 ? "thin" : "healthy"} />
-        <StatCard label="Open Issues" value={openIssues} sub={criticalIssues > 0 ? `${criticalIssues} critical` : "All under control"} icon={AlertCircle} accent="gold" status={criticalIssues > 0 ? "bad" : openIssues > 0 ? "warn" : "good"} note={criticalIssues > 0 ? `${criticalIssues} critical` : openIssues > 0 ? `${openIssues} open` : "clear"} alert={criticalIssues > 0} />
+        <StatCard onClick={onOpenIssues} label="Open Issues" value={openIssues} sub={criticalIssues > 0 ? `${criticalIssues} critical` : "All under control"} icon={AlertCircle} accent="gold" status={criticalIssues > 0 ? "bad" : openIssues > 0 ? "warn" : "good"} note={criticalIssues > 0 ? `${criticalIssues} critical` : openIssues > 0 ? `${openIssues} open` : "clear"} alert={criticalIssues > 0} />
         <StatCard label="Google Rating" value={ratingAvg != null ? ratingAvg.toFixed(2) : "—"} sub={`${totalReviews} reviews · all-time`} icon={Star} accent="caramel" status={ratingAvg == null ? "neut" : ratingAvg >= 4.3 ? "good" : ratingAvg >= 4.0 ? "warn" : "bad"} note={ratingAvg == null ? null : `${ratingAvg.toFixed(2)}★`} />
       </div>
 
@@ -35230,23 +35237,33 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
 
       {issues.filter(i => visibleBrandIds.includes(i.brandId) && !["Resolved","Closed"].includes(i.status)).length > 0 && (
         <AnalysisBlock title="Active Issues Requiring Attention">
-          <div className="space-y-2">
+          {/* DASH-ISSUES 2026-09-22a: rows open the issue; the footer opens the full list */}
+          <div className="space-y-0.5">
             {issues.filter(i => visibleBrandIds.includes(i.brandId) && !["Resolved","Closed"].includes(i.status)).slice(0, 5).map(issue => {
               const sc = STATUS_CONFIG[issue.status];
               const pc = PRIORITY_CONFIG[issue.priority];
               const brand = brands.find(b => b.id === issue.brandId);
+              const store = stores.find(st => st.id === issue.storeId);
+              const age = Math.floor((Date.now() - new Date(issue.createdAt).getTime()) / 864e5);
               return (
-                <div key={issue.id} className="flex items-center gap-3 py-2 border-b border-slate-800/60 last:border-0">
+                <button key={issue.id} onClick={() => onOpenIssue?.(issue.id)} title="Open this issue"
+                  className="w-full text-left flex items-center gap-3 px-2 py-2.5 -mx-2 rounded-xl border-b border-slate-800/60 last:border-0 hover:bg-slate-800/30 transition-colors group">
                   <Badge label={issue.priority} color={pc.color} />
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm text-slate-200 truncate">{issue.title}</div>
-                    <div className="text-xs text-slate-500">{brand?.name}</div>
+                    <div className="text-sm text-slate-200 truncate group-hover:text-white">{issue.title}</div>
+                    <div className="text-xs text-slate-500">{store ? (store.shortName || store.name) : brand?.name}{age > 0 ? ` · ${age}d open` : " · today"}</div>
                   </div>
                   <Badge label={issue.status} color={sc.color} />
-                </div>
+                  <ChevronRight size={14} className="text-slate-500 group-hover:text-white flex-shrink-0"/>
+                </button>
               );
             })}
           </div>
+          {(() => { const total = issues.filter(i => visibleBrandIds.includes(i.brandId) && !["Resolved","Closed"].includes(i.status)).length; return (
+            <button onClick={onOpenIssues} className="mt-2 text-xs font-semibold text-indigo-300 hover:text-white flex items-center gap-1">
+              {total > 5 ? `View all ${total} open issues` : "Open the issues board"} <ArrowRight size={12}/>
+            </button>
+          ); })()}
         </AnalysisBlock>
       )}
     </div>
@@ -68837,7 +68854,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: HIRE-UI 2026-09-22c (theme tints scoped off the chrome)");
+      console.log("CB build: DASH-ISSUES 2026-09-22a (dashboard issues clickable)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -68864,6 +68881,7 @@ export default function App() {
   // Tasks, Temperatures, Deliveries, Issues, Assignments. The old per-item nav
   // keys still work and redirect into the matching tab.
   const [opsTab, setOpsTab] = useState("ops-network");
+  const [pendingIssueId, setPendingIssueId] = useState(null);   // DASH-ISSUES 2026-09-22a
   const OPS_TAB_KEYS = ["ops-network", "ops-tasks", "ops-temps", "ops-deliveries", "issues", "ops-assigns", "smallware", "store-docs"];
   useEffect(() => {
     if (OPS_TAB_KEYS.includes(activeView)) setOpsTab(activeView);
@@ -71000,7 +71018,7 @@ export default function App() {
               return (
                 <div>
                   {effDashTab === "overview" && ckOnly && <CentralKitchenDashboard brands={visibleBrands} stores={stores} opsTeam={opsTeam} issues={issues} punchRecords={punchRecords} currentUser={currentUser}/>}
-                  {effDashTab === "overview" && !ckOnly && <DashboardView key={"dash-" + (selectedEntityBrand || "all")} brands={visibleBrands} stores={visibleStores} entries={entries} issues={issues} opsTeam={opsTeam} currentUser={currentUser} defaultStoreId={resolveDefaultStoreId()}/>}
+                  {effDashTab === "overview" && !ckOnly && <DashboardView onOpenIssues={() => { setOpsTab("issues"); setActiveView("operations"); }} onOpenIssue={(id) => { setPendingIssueId(id); setOpsTab("issues"); setActiveView("operations"); }} key={"dash-" + (selectedEntityBrand || "all")} brands={visibleBrands} stores={visibleStores} entries={entries} issues={issues} opsTeam={opsTeam} currentUser={currentUser} defaultStoreId={resolveDefaultStoreId()}/>}
                   {effDashTab === "chain" && <ChainPerformanceView key={"chain-" + (selectedEntityBrand || "all")} brands={visibleBrands} stores={visibleStores} flipdishStores={flipdishStores} flipdishSyncLog={flipdishSyncLog} entries={entries} currentUser={currentUser} onRefreshSync={handleFlipdishSync}/>}
                   {effDashTab === "store-analytics" && <ManagerStoreDashboard key={"sa-" + (selectedEntityBrand || "all")} stores={visibleStores} brands={visibleBrands} currentUser={currentUser}/>}
                 </div>
@@ -71020,7 +71038,7 @@ export default function App() {
                       Showing all entities you have access to — {crossEntityStoreIds.length} sites. Use the filters below to narrow to one.
                     </div>
                   )}
-                  {effOpsTab === "issues" && <IssuesView onSeen={markSeen} brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
+                  {effOpsTab === "issues" && <IssuesView onSeen={markSeen} openIssueId={pendingIssueId} onOpenedIssue={() => setPendingIssueId(null)} brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
                   {effOpsTab === "ops-tasks" && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle} onTempLog={handleTempLog} currentUser={currentUser} storeRoles={storeRoles} opsTeam={opsTeam} punchRecords={punchRecords} schedules={schedules}/>}
                   {effOpsTab === "ops-temps" && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog} assignments={assignments} onSignOff={handleSignOff}/>}
                   {effOpsTab === "ops-deliveries" && <DeliveriesHub brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
