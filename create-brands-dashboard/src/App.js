@@ -24720,10 +24720,13 @@ function EmpThemeStyle() {
 .emp-theme [class*="text-indigo-100"], .emp-theme [class*="text-indigo-200"], .emp-theme [class*="text-indigo-300/"] { color: #1f6f8b !important; }
 .emp-theme [class*="text-white/"] { color: var(--ink-soft) !important; }
 .emp-theme [class*="text-slate-200/"], .emp-theme [class*="text-slate-300/"], .emp-theme [class*="text-slate-400/"], .emp-theme [class*="text-slate-500/"] { color: var(--ink-soft) !important; }
-.emp-theme :not(.cb-chrome) [class*="hover:bg-slate-800/"]:hover, .emp-theme :not(.cb-chrome) [class*="hover:bg-slate-900/"]:hover,
-.emp-theme :not(.cb-chrome) [class*="hover:bg-slate-700/"]:hover { background-color: var(--cream-deep) !important; }
-.emp-theme :not(.cb-chrome) [class*="bg-slate-950/"], .emp-theme :not(.cb-chrome) [class*="bg-slate-900/"] { background-color: var(--cream-soft) !important; }
-.emp-theme :not(.cb-chrome) [class*="bg-slate-800/"] { background-color: var(--cream-deep) !important; }
+.emp-theme [class*="hover:bg-slate-800/"]:not(.cb-chrome *):hover, .emp-theme [class*="hover:bg-slate-900/"]:not(.cb-chrome *):hover,
+.emp-theme [class*="hover:bg-slate-700/"]:not(.cb-chrome *):hover { background-color: var(--cream-deep) !important; }
+.emp-theme [class*="bg-slate-950/"]:not(.cb-chrome *), .emp-theme [class*="bg-slate-900/"]:not(.cb-chrome *) { background-color: var(--cream-soft) !important; }
+.emp-theme [class*="bg-slate-800/"]:not(.cb-chrome *) { background-color: var(--cream-deep) !important; }
+/* chrome keeps its own hover: any translucent slate hover inside the brown rail -> lighter brown */
+.emp-theme .cb-chrome [class*="hover:bg-slate-800/"]:hover, .emp-theme .cb-chrome [class*="hover:bg-slate-700/"]:hover { background-color: #9A5436 !important; }
+.emp-theme .cb-chrome [class*="bg-slate-800/"]:not([class*="hover:"]) { background-color: rgba(255,255,255,0.06) !important; }
 .emp-theme [class*="border-amber-800"], .emp-theme [class*="border-amber-700"] { border-color: #d9a765 !important; }
 .emp-theme [class*="border-red-800"], .emp-theme [class*="border-red-700"] { border-color: #e39b93 !important; }
 .emp-theme [class*="border-emerald-800"], .emp-theme [class*="border-emerald-700"] { border-color: #8fc7a8 !important; }
@@ -68834,7 +68837,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: HIRE-UI 2026-09-22b (theme tints fixed, hiring chips trimmed)");
+      console.log("CB build: HIRE-UI 2026-09-22c (theme tints scoped off the chrome)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
