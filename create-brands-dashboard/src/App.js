@@ -176,7 +176,7 @@ import {
   suggestDistFefo, fetchDistPicks, createDistPick, fetchDistDispatches, postDistDispatch,
   fetchDistInvoices, postDistInvoice, fetchDistInvoicePayments, postDistInvoicePayment,
   fetchDistCreditNotes, postDistCreditNote, deleteDistCreditNote, deleteDistInvoicePayment, fetchDistBillPaidMap, fetchDistInvoicePaidMap,
-  fetchAgentTasks, createAgentTask, updateAgentTaskStatus, fetchAgentAutonomy, saveAgentAutonomy,
+  fetchAgentTasks, createAgentTask, updateAgentTaskStatus, fetchAgentAutonomy, saveAgentAutonomy, fetchSeenItems, markSeenItems,
   runOrderingAssistant, approveOrderingTask, runProfitWatch, fetchProfitTargets, saveProfitTargets, fetchProfitWatchTrends,
   runReconciliationAssistant_v2, probeFlipdishPayouts, syncFlipdishPayouts, fetchFlipdishPayouts,
   runPayoutReconciliation, fetchFlipdishPayoutStores,
@@ -2041,7 +2041,7 @@ function IssueDetailModal({ issue, brands, users, currentUser, onUpdate, onClose
 }
 
 // ─── Issues Tracker View ──────────────────────────────────────────────────────
-function IssuesView({ brands, stores, visibleStoreIds, issues, users, currentUser, onAddIssue, onUpdateIssue, onDeleteIssue, scopeDebug = null }) {
+function IssuesView({ brands, stores, visibleStoreIds, issues, users, currentUser, onAddIssue, onUpdateIssue, onDeleteIssue, scopeDebug = null, onSeen }) {
   const { user } = useAuth();
 
   const allVisibleStores = useMemo(
@@ -2262,7 +2262,7 @@ function IssuesView({ brands, stores, visibleStoreIds, issues, users, currentUse
                       </div>
                     </div>
                     <div className="flex items-center gap-1.5 flex-shrink-0">
-                      <button onClick={() => setDetailIssue(issue)} className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700 transition-colors">View</button>
+                      <button onClick={() => { onSeen?.("issue", [issue.id]); setDetailIssue(issue); }} className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700 transition-colors">View</button>
                       <button onClick={() => setEditIssue(issue)} className="p-1.5 rounded-xl bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 transition-colors"><Edit size={13}/></button>
                       {isHqOrAbove(user.role) && (
                         <button onClick={() => setDeleteId(issue.id)} className="p-1.5 rounded-xl bg-slate-800 text-slate-600 hover:text-red-400 hover:bg-red-950/20 transition-colors"><Trash2 size={13}/></button>
@@ -17307,7 +17307,7 @@ function DistDepartmentEditModal({ dept, allCategories, collections, onClose, on
 // Draft actions land here; the owner approves, edits, or dismisses. Numbers are
 // computed server-side in code; Claude only writes the prose.
 // ============================================================================
-function AgentInboxView({ currentUser, onNavigate }) {
+function AgentInboxView({ currentUser, onNavigate, onSeen }) {
   const cleanName = (n) => (n || "").replace(/\s*[-–]?\s*\(\s*\d+\s*[*x×].*?\)\s*$/i, "").trim() || n;
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -17358,7 +17358,7 @@ function AgentInboxView({ currentUser, onNavigate }) {
   };
 
   const approve = async (task) => {
-    setErr("");
+    setErr(""); onSeen?.("agent_task", [task.id]);   // BADGES 2026-09-22a
     try {
       if (task.agent === "ordering") {
         const soId = await approveOrderingTask(task, { reviewedBy: currentUser?.id });
@@ -17371,6 +17371,7 @@ function AgentInboxView({ currentUser, onNavigate }) {
     } catch (e) { setErr(e.message); }
   };
   const dismiss = async (task) => {
+    onSeen?.("agent_task", [task.id]);   // BADGES 2026-09-22a
     try { await updateAgentTaskStatus(task.id, "dismissed", { reviewedBy: currentUser?.id }); await load(); }
     catch (e) { setErr(e.message); }
   };
@@ -17390,6 +17391,7 @@ function AgentInboxView({ currentUser, onNavigate }) {
           <h1 className="text-2xl font-bold" style={{ color: "#3A2E26" }}>Agent Inbox</h1>
         </div>
         <div className="flex items-center gap-2">
+          {tasks.length > 0 && <button onClick={() => onSeen?.("agent_task", tasks.map(t => t.id))} title="Clear the sidebar badge for everything currently listed" className="px-3 py-2 rounded-xl text-sm font-semibold" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }}>Mark all seen</button>}
           <input type="date" value={pwDate} max={new Date().toISOString().slice(0,10)} onChange={e => setPwDate(e.target.value)} title="Profit Watch date" className="px-2.5 py-2 rounded-xl text-sm" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#3A2E26" }}/>
           <button onClick={() => setShowSettings(true)} className="px-3 py-2 rounded-xl text-sm font-semibold" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }}><Settings size={15}/></button>
           <button onClick={runAgents} disabled={running} className="px-4 py-2 rounded-xl text-sm font-bold disabled:opacity-50 flex items-center gap-2" style={{ backgroundColor: "#844429", color: "#FDF2E0" }}>
@@ -17461,7 +17463,7 @@ function AgentInboxView({ currentUser, onNavigate }) {
                     )}
                     <div className="flex items-center gap-2 mt-3">
                       <button onClick={() => approve(t)} className="px-4 py-1.5 rounded-lg text-sm font-bold" style={{ backgroundColor: "#5C9442", color: "#fff" }}>{t.agent === "ordering" ? "Approve & create order" : "Mark done"}</button>
-                      {t.agent === "ordering" && <button onClick={() => setEditing(t)} className="px-3 py-1.5 rounded-lg text-sm font-semibold" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }}>Edit</button>}
+                      {t.agent === "ordering" && <button onClick={() => { onSeen?.("agent_task", [t.id]); setEditing(t); }} className="px-3 py-1.5 rounded-lg text-sm font-semibold" style={{ backgroundColor: "#FDF2E0", border: "1px solid #E8DCC6", color: "#844429" }}>Edit</button>}
                       <button onClick={() => dismiss(t)} className="px-3 py-1.5 rounded-lg text-sm font-semibold" style={{ color: "#9A8770" }}>Dismiss</button>
                     </div>
                   </div>
@@ -43819,6 +43821,7 @@ function HiringView({
   onAdd, onUpdate, onSetStatus, onDelete,
   onAddOpsTeam, onOpenEmployeeProfile,
   advertisedRoles = [], onAddAdvertisedRole, onUpdateAdvertisedRole, onArchiveAdvertisedRole,
+  onSeen,
 }) {
   const [showForm, setShowForm]   = useState(false);
   const [editItem, setEditItem]   = useState(null);
@@ -43978,7 +43981,7 @@ function HiringView({
   // Lazy-load status history when a row is expanded
   const handleExpand = async (app) => {
     if (expandedId === app.id) { setExpandedId(null); return; }
-    setExpandedId(app.id);
+    setExpandedId(app.id); onSeen?.("application", [app.id]);   // BADGES 2026-09-22a
     if (!statusHistory[app.id]) {
       try {
         const history = await fetchApplicationStatusHistory(app.id);
@@ -68693,14 +68696,21 @@ export default function App() {
     try { return localStorage.getItem("cb_impersonate") || null; } catch { return null; }
   });
   const [loginMode, setLoginMode] = useState("employee");
-  const [agentPendingCount, setAgentPendingCount] = useState(0);
+  // BADGES 2026-09-22a: the sidebar counts what needs THIS user and that they
+  // have not yet opened — Slack/WhatsApp style, per item, stored server-side —
+  // instead of "every open issue in the estate" or "hide it once the page was
+  // visited". Pending agent tasks are kept as a list (ids matter now), polled
+  // and refreshed live on any agent_tasks change.
+  const [agentPendingTasks, setAgentPendingTasks] = useState([]);
   useEffect(() => {
     let a = true;
-    const poll = () => fetchAgentTasks({ status: "pending", limit: 50 }).then(t => { if (a) setAgentPendingCount(t.length); }).catch(() => {});
+    const poll = () => fetchAgentTasks({ status: "pending", limit: 200 }).then(t => { if (a) setAgentPendingTasks(t); }).catch(() => {});
     poll();
     const iv = setInterval(poll, 60000);
-    return () => { a = false; clearInterval(iv); };
+    const ch = supabase.channel("realtime:agent_tasks").on("postgres_changes", { event: "*", schema: "public", table: "agent_tasks" }, poll).subscribe();
+    return () => { a = false; clearInterval(iv); try { supabase.removeChannel(ch); } catch {} };
   }, []);
+  const [seenItems, setSeenItems] = useState({ issue: new Set(), agent_task: new Set(), application: new Set() });
 
   const [brandsAll,      setBrands]         = useState([]);
   const [usersAll,       setUsers]          = useState([]);
@@ -68804,7 +68814,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: NAV 2026-09-22a (sidebar polish, Ctrl K palette, last page per entity)");
+      console.log("CB build: BADGES 2026-09-22a (per-user seen badges) + NAV 2026-09-22a");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -69320,6 +69330,12 @@ export default function App() {
         if (eventType === "INSERT") setHdTickets(ts => ts.some(x => x.id === t.id) ? ts : [t, ...ts]);
         if (eventType === "UPDATE") setHdTickets(ts => ts.map(x => x.id === t.id ? t : x));
       }).subscribe();
+    // BADGES 2026-09-22a: issues and applications refresh live so the badges move
+    // as soon as someone raises or resolves something, not on the next reload.
+    const issueChannel = supabase.channel("realtime:issues")
+      .on("postgres_changes", { event: "*", schema: "public", table: "issues" }, () => { fetchIssues().then(setIssues).catch(() => {}); }).subscribe();
+    const appChannel = supabase.channel("realtime:applications")
+      .on("postgres_changes", { event: "*", schema: "public", table: "job_applications" }, () => { fetchApplications().then(setApplications).catch(() => {}); }).subscribe();
     const msgChannel = supabase.channel("realtime:inbox_messages")
       .on("postgres_changes", { event: "*", schema: "public", table: "inbox_messages" }, (payload) => {
         const { eventType, new: r } = payload;
@@ -69357,6 +69373,7 @@ export default function App() {
       supabase.removeChannel(punchChannel); supabase.removeChannel(schedChannel);
       supabase.removeChannel(availChannel); supabase.removeChannel(ticketChannel);
       supabase.removeChannel(msgChannel);
+      supabase.removeChannel(issueChannel); supabase.removeChannel(appChannel);
     };
   }, [dbReady]);
 
@@ -69499,6 +69516,21 @@ export default function App() {
   // by narrowing the lists every view receives, so the ~50 isHqOrAbove()
   // bypasses below can only ever reach that region. Non-regional sessions get
   // the full lists unchanged. Session/login healing above uses the *All lists.
+  // BADGES 2026-09-22a: this user's seen markers, loaded once per login;
+  // markSeen updates them optimistically and persists in the background.
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    let alive = true;
+    fetchSeenItems(currentUser.id).then(m => { if (alive) setSeenItems(m); }).catch(() => {});
+    return () => { alive = false; };
+  }, [currentUser?.id]);
+  const markSeen = useCallback((kind, ids) => {
+    const list = (ids || []).filter(Boolean);
+    if (!list.length) return;
+    setSeenItems(prev => { const next = { ...prev, [kind]: new Set(prev[kind] || []) }; list.forEach(id => next[kind].add(id)); return next; });
+    if (currentUser?.id) markSeenItems(currentUser.id, kind, list).catch(() => {});
+  }, [currentUser?.id]);
+
   // REGIONAL 2026-09-20a: the fence no longer depends solely on the custom
   // role's scope flag. A login whose brands (directly, or via its stores) are
   // ALL non-UK regions is fenced to those brands automatically — so a UAE
@@ -70541,7 +70573,15 @@ export default function App() {
   const visibleBrands = (selectedEntityBrand && selectedEntityBrand !== "finance" && allVisibleBrands.some(b => b.id === selectedEntityBrand))
     ? allVisibleBrands.filter(b => b.id === selectedEntityBrand)
     : allVisibleBrands;
-  const openIssueCount = issues.filter(i => visibleBrands.some(b=>b.id===i.brandId) && ["Open","In Progress","Awaiting Parts"].includes(i.status)).length;
+  // BADGES 2026-09-22a: what the sidebar counts.
+  //   Operations  = issues in scope that are still "Open" (nobody has picked them
+  //                 up) and this user has not opened yet.
+  //   Agent Inbox = pending agent tasks this user has not opened/decided.
+  //   Team        = new applications (applied, not yet triaged by this user)
+  //                 + employees still in pending_setup.
+  // Backlog totals still live on the pages; the rail only shows what is NEW to you.
+  const openIssueCount = issues.filter(i => visibleBrands.some(b=>b.id===i.brandId) && i.status === "Open" && !seenItems.issue.has(i.id)).length;
+  const agentPendingCount = agentPendingTasks.filter(t => !seenItems.agent_task.has(t.id)).length;
   const commsUnread = (() => {
     const myId = currentUser.id; const myOpsId = currentUser.opsTeamMemberId || currentUser.id;
     return messages.filter(m => {
@@ -70563,7 +70603,7 @@ export default function App() {
   // and manager_reviewing — so the badge represents "things waiting for me",
   // not just "stuff in pipeline".
   const hiringBadge = applications.filter(a => {
-    if (!["applied", "manager_reviewing"].includes(a.status)) return false;
+    if (a.status !== "applied" || seenItems.application.has(a.id)) return false;   // BADGES 2026-09-22a
     if (isHqOrAbove(currentUser.role)) return true;
     return (currentUser.storeIds || []).includes(a.storeId);
   }).length;
@@ -70642,7 +70682,7 @@ export default function App() {
       { key: "dist-fuel", label: "Fleet Fuel", icon: Truck, requiresEntity: "brand-distribution" },
     ]},
     { group: "PEOPLE", items: [
-      { key: "team",         label: "Team",              icon: Users, badge: (pendingSetupCount + hiringBadge) > 0 ? (pendingSetupCount + hiringBadge).toString() : null, badgeClearOnView: true, badgeTone: "count", children: [
+      { key: "team",         label: "Team",              icon: Users, badge: (pendingSetupCount + hiringBadge) > 0 ? (pendingSetupCount + hiringBadge).toString() : null, badgeTone: "warn", children: [
         { key: "team:team",            view: "team", tab: "team",            label: "Team",              icon: Users },
         { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
         { key: "team:time-attend",     view: "team", tab: "time-attend",     label: "Time & Attendance", icon: Clock },
@@ -70957,7 +70997,7 @@ export default function App() {
                       Showing all entities you have access to — {crossEntityStoreIds.length} sites. Use the filters below to narrow to one.
                     </div>
                   )}
-                  {effOpsTab === "issues" && <IssuesView brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
+                  {effOpsTab === "issues" && <IssuesView onSeen={markSeen} brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds} issues={issues} users={users} currentUser={currentUser} onAddIssue={addIssue} onUpdateIssue={updateIssue} onDeleteIssue={deleteIssue}/>}
                   {effOpsTab === "ops-tasks" && <TodaysTasks brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds} assignments={assignments} checklists={checklists} tempUnits={tempUnits} cleaningTasks={cleaningTasks} auditTrail={auditTrail} checklistStates={checklistStates} onSignOff={handleSignOff} onChecklistItemToggle={handleChecklistItemToggle} onTempLog={handleTempLog} currentUser={currentUser} storeRoles={storeRoles} opsTeam={opsTeam} punchRecords={punchRecords} schedules={schedules}/>}
                   {effOpsTab === "ops-temps" && <TemperatureLog brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds} tempUnits={tempUnits} tempLogs={tempLogs} onLog={handleTempLog} assignments={assignments} onSignOff={handleSignOff}/>}
                   {effOpsTab === "ops-deliveries" && <DeliveriesHub brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds} deliveries={deliveries} onAdd={handleDeliveryAdd}/>}
@@ -70970,7 +71010,7 @@ export default function App() {
               );
             })()}
             {effectiveActiveView === "dist-order" && <DistOrderPortalView currentUser={currentUser} onNavigate={setActiveView}/>}
-            {effectiveActiveView === "agent-inbox" && !regionalScope && <AgentInboxView currentUser={currentUser} onNavigate={setActiveView}/>}
+            {effectiveActiveView === "agent-inbox" && !regionalScope && <AgentInboxView currentUser={currentUser} onNavigate={setActiveView} onSeen={markSeen}/>}
             {effectiveActiveView === "ops-compliance" && <ComplianceView brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds} assignments={assignments} auditTrail={auditTrail} checklistStates={checklistStates}/>}
             {effectiveActiveView === "ops-audit"      && <AuditTrailView brands={visibleBrands} stores={stores} visibleStoreIds={crossEntityStoreIds} auditTrail={auditTrail} onClear={handleClearAudit}/>}
             {effectiveActiveView === "employee-profile" && selectedEmployeeId && <EmployeeProfileView
@@ -71021,7 +71061,7 @@ export default function App() {
                     onApprovePunch={approveOnePunch}
                     onApproveAllPunches={approveAllPunchesInPeriod}
                   />}
-                  {effTeamTab === "hiring" && <HiringView
+                  {effTeamTab === "hiring" && <HiringView onSeen={markSeen}
                     brands={visibleBrands} stores={stores} storeRoles={storeRoles} storeDepartments={storeDepartments} visibleStoreIds={crossEntityStoreIds}
                     applications={applications} opsTeam={opsTeam} currentUser={currentUser}
                     onAdd={addApplication} onUpdate={updateApplicationRow}

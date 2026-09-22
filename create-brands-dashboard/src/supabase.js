@@ -15518,6 +15518,24 @@ export async function fetchAgentTasks({ status, agent, limit = 50 } = {}) {
   return (data || []).map(mapAgentTask);
 }
 
+// ── BADGES 2026-09-22a: per-user seen markers (what the sidebar badges count against) ──
+export async function fetchSeenItems(userId) {
+  const out = { issue: new Set(), agent_task: new Set(), application: new Set() };
+  if (!userId) return out;
+  const { data, error } = await supabase.from("user_seen_items").select("kind, item_id").eq("user_id", userId);
+  if (error) throw error;
+  (data || []).forEach(r => { if (!out[r.kind]) out[r.kind] = new Set(); out[r.kind].add(r.item_id); });
+  return out;
+}
+export async function markSeenItems(userId, kind, itemIds = []) {
+  const ids = [...new Set((itemIds || []).filter(Boolean))];
+  if (!userId || !kind || !ids.length) return 0;
+  const rows = ids.map(item_id => ({ user_id: userId, kind, item_id }));
+  const { error } = await supabase.from("user_seen_items").upsert(rows, { onConflict: "user_id,kind,item_id", ignoreDuplicates: true });
+  if (error) throw error;
+  return ids.length;
+}
+
 export async function createAgentTask(t) {
   const row = {
     id: t.id || agentId("atask"), agent: t.agent, kind: t.kind, title: t.title, body: t.body || null,
