@@ -34550,9 +34550,13 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
   // this, a multi-store salaried manager with no punch was charged a full day
   // at each store in turn — so London Road showed Tove/Distribution staff and
   // the chain total over-counted. Punched days are still split by hours.
+  // WAGE-EXCL 2026-09-25a: "Hidden — excluded" (Team profile → Salary visibility)
+  // now means what it says on the dashboard too: not in the wage tile, not in
+  // the labour breakdown. Before this only the Payroll report honoured it.
+  const wageExcludedIds = useMemo(() => new Set((opsTeam || []).filter(m => m.salaryPrivacy === "hidden_excluded").map(m => m.id)), [opsTeam]);
   const scopedSalaried = useMemo(
-    () => (opsTeam || []).filter(m => !m.archivedAt && isSalaried(m) && scopedStoreIds.has((m.storeIds || [])[0])),
-    [opsTeam, scopedStoreIds]
+    () => (opsTeam || []).filter(m => !m.archivedAt && isSalaried(m) && !wageExcludedIds.has(m.id) && scopedStoreIds.has((m.storeIds || [])[0])),
+    [opsTeam, scopedStoreIds, wageExcludedIds]
   );
   const salariedIds = useMemo(() => new Set(scopedSalaried.map(m => m.id)), [scopedSalaried]);
   // ALL salaried staff (not store-scoped). Used to exclude salaried punches from
@@ -34588,7 +34592,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
     const hours = Math.round(p.reduce((a, r) => a + punchHours(r, cutoffMin), 0) * 100) / 100;
     // Hourly cost excludes ALL salaried staff (their 'rate' is a salary, not an
     // hourly rate — costing punches at it would inflate labour massively).
-    const hourlyCost = p.reduce((a, r) => salariedByIdAll.has(r.employeeId) ? a : a + punchCost(r, cutoffMin), 0);
+    const hourlyCost = p.reduce((a, r) => (salariedByIdAll.has(r.employeeId) || wageExcludedIds.has(r.employeeId)) ? a : a + punchCost(r, cutoffMin), 0);   // WAGE-EXCL 2026-09-25a
     const labourCost = Math.round((hourlyCost + salariedCost) * 100) / 100;
     return {
       revenue, orders, hours, labourCost,
@@ -34597,7 +34601,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
       atv: orders > 0 ? revenue / orders : null,
     };
   };
-  const cur = useMemo(() => rollup(data.curSales, data.curPunch, null, salariedPeriodCost), [data, scopedStoreIds, dashTick, salariedIds, salariedByIdAll, salariedPeriodCost]);
+  const cur = useMemo(() => rollup(data.curSales, data.curPunch, null, salariedPeriodCost), [data, scopedStoreIds, dashTick, salariedIds, salariedByIdAll, salariedPeriodCost, wageExcludedIds]);
   // When in progress, clip the comparison day's punches to the same time-of-day.
   const prev = useMemo(() => rollup(data.prevSales, data.prevPunch, inProgress ? nowCutoffMin : null, salariedPrevCost), [data, scopedStoreIds, inProgress, nowCutoffMin, salariedIds, salariedByIdAll, salariedPrevCost]);
 
@@ -34853,6 +34857,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         salDayHours[k] = (salDayHours[k] || 0) + h;
       });
       punches.forEach(p => {
+        if (wageExcludedIds.has(p.employeeId)) return;   // WAGE-EXCL 2026-09-25a: excluded from store wage cost
         const open = (p.status === "open" || !p.punchOut);
         const member = (opsTeam || []).find(m => m.id === p.employeeId);
         const salaried = isSalaried(member);
@@ -69003,7 +69008,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: CLOCKSTORE 2026-09-25a (clock in at the store you are in; labour drill shows scope + home) + SALARY-HOME 24a");
+      console.log("CB build: WAGE-EXCL 2026-09-25a (hidden-excluded honoured on dashboard) + CLOCKSTORE 25a");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
