@@ -539,6 +539,21 @@ const PRIORITY_CONFIG = {
 // ─── Period Utilities ─────────────────────────────────────────────────────────
 function getMonday(d) { const dt = new Date(d); const day = dt.getDay(); dt.setDate(dt.getDate() + (day === 0 ? -6 : 1 - day)); return dt; }
 // Distance in metres between two lat/lng points (Haversine).
+// CLOCKSTORE 2026-09-25a: for someone assigned to several stores, clock them
+// in at the assigned store they are actually standing in, not blindly at the
+// first one on their profile. Returns { store } or { error, nearest }.
+function resolveClockStore(coords, candidateStores = []) {
+  const located = candidateStores.filter(st => st && st.latitude != null && st.longitude != null);
+  if (!located.length) return { error: "none_located" };
+  let best = null;
+  for (const st of located) {
+    const dist = metresBetween(coords.latitude, coords.longitude, st.latitude, st.longitude);
+    const radius = st.geofenceRadius || 200;
+    if (dist <= radius) return { store: st, dist };
+    if (!best || dist < best.dist) best = { store: st, dist, radius };
+  }
+  return { error: "outside", nearest: best };
+}
 function metresBetween(lat1, lng1, lat2, lng2) {
   const R = 6371000, toRad = (x) => x * Math.PI / 180;
   const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1);
@@ -24221,18 +24236,24 @@ function PhoneClockInCard({ currentUser, opsTeam = [], stores = [], punchRecords
   const doPunch = async (action) => {
     setStatus(null); setBusy(true);
     try {
-      if (!store) throw new Error("No store is linked to your account — ask your manager.");
-      if (store.latitude == null || store.longitude == null) throw new Error("Your store hasn't set its location yet — ask your manager to add it.");
       const coords = await getPosition();
-      const dist = metresBetween(coords.latitude, coords.longitude, store.latitude, store.longitude);
-      const radius = store.geofenceRadius || 200;
-      if (dist > radius) {
-        throw new Error(`You're about ${Math.round(dist)}m from ${store.shortName || store.name}. You must be within ${radius}m to clock ${action === "in" ? "in" : "out"}.`);
+      // CLOCKSTORE 2026-09-25a: clocking OUT stays at the open punch's store;
+      // clocking IN picks whichever of the person's stores they are inside.
+      const candidates = action === "in" && !openPunch
+        ? (me.storeIds || []).map(id => stores.find(st => st.id === id)).filter(Boolean)
+        : [store].filter(Boolean);
+      if (!candidates.length) throw new Error("No store is linked to your account — ask your manager.");
+      const picked = resolveClockStore(coords, candidates);
+      if (picked.error === "none_located") throw new Error("Your store hasn't set its location yet — ask your manager to add it.");
+      if (picked.error === "outside") {
+        const n = picked.nearest;
+        throw new Error(`You're about ${Math.round(n.dist)}m from ${n.store.shortName || n.store.name}. You must be within ${n.radius}m of one of your stores to clock ${action === "in" ? "in" : "out"}.`);
       }
+      const clockStore = picked.store;
       if (action === "in") {
         const now = new Date().toISOString();
         await onPunchIn({
-          id: `pr-${Date.now()}`, brandId: store.brandId, storeId: store.id,
+          id: `pr-${Date.now()}`, brandId: clockStore.brandId, storeId: clockStore.id,
           employeeId: myId, employeeName: `${me.firstName} ${me.lastName}`.trim(),
           date: today, punchIn: now, punchOut: null, hoursWorked: null,
           hourlyRate: me.hourlyRate || 0, grossPay: null, status: "open", notes: "phone clock-in",
@@ -25992,8 +26013,6 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
   const doPhoneClockCore = async (action, mileage) => {
     setClockMsg(null); setClockBusy(true);
     try {
-      if (!myClockStore) throw new Error("No store is linked to your account — ask your manager.");
-      if (myClockStore.latitude == null || myClockStore.longitude == null) throw new Error("Your store hasn't set its location yet — ask your manager.");
       const coords = await new Promise((resolve, reject) => {
         if (!navigator.geolocation) return reject(new Error("Location isn't available on this device."));
         navigator.geolocation.getCurrentPosition(
@@ -26002,14 +26021,23 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
           { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
         );
       });
-      const dist = metresBetween(coords.latitude, coords.longitude, myClockStore.latitude, myClockStore.longitude);
-      const radius = myClockStore.geofenceRadius || 200;
-      if (dist > radius) throw new Error(`You're about ${Math.round(dist)}m from ${myClockStore.shortName || myClockStore.name}. You must be within ${radius}m to clock ${action === "in" ? "in" : "out"}.`);
+      // CLOCKSTORE 2026-09-25a: clock IN at whichever assigned store the person is inside; OUT at the open punch's store.
+      const candidates = action === "in" && !myOpenPunch
+        ? (myOpsMember?.storeIds || []).map(id => (stores || []).find(st => st.id === id)).filter(Boolean)
+        : [myClockStore].filter(Boolean);
+      if (!candidates.length) throw new Error("No store is linked to your account — ask your manager.");
+      const picked = resolveClockStore(coords, candidates);
+      if (picked.error === "none_located") throw new Error("Your store hasn't set its location yet — ask your manager.");
+      if (picked.error === "outside") {
+        const n = picked.nearest;
+        throw new Error(`You're about ${Math.round(n.dist)}m from ${n.store.shortName || n.store.name}. You must be within ${n.radius}m of one of your stores to clock ${action === "in" ? "in" : "out"}.`);
+      }
+      const myClockStoreNow = picked.store;
       const todayStr = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; })();
       if (action === "in") {
         const punchId = `pr-${Date.now()}`;
         await onEmpPunchIn({
-          id: punchId, brandId: myClockStore.brandId, storeId: myClockStore.id,
+          id: punchId, brandId: myClockStoreNow.brandId, storeId: myClockStoreNow.id,
           employeeId: (currentUser.opsTeamMemberId || currentUser.id), employeeName: `${myOpsMember.firstName} ${myOpsMember.lastName}`.trim(),
           date: todayStr, punchIn: new Date().toISOString(), punchOut: null, hoursWorked: null,
           hourlyRate: myOpsMember.hourlyRate || 0, grossPay: null, status: "open", notes: "phone clock-in",
@@ -34847,7 +34875,10 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         const costCell = salaried
           ? `${fmtCurrency(rowCost)}${salShare < 0.999 ? ` (salaried · ${Math.round(salShare*100)}% of day)` : " /day (salaried)"}`
           : (open ? `${fmtCurrency(punchCost(p))} (live)` : fmtCurrency(p.grossPay || 0));
-        addTo(deptOf(member), [ p.employeeName || "—", nameOfStore(p.storeId), p.date || "—", hoursCell, costCell ], h, rowCost);
+        // CLOCKSTORE 2026-09-25a: say where they punched AND where they belong
+        const home = member && (member.storeIds || [])[0];
+        const storeCell = home && home !== p.storeId ? `${nameOfStore(p.storeId)} (home ${nameOfStore(home)})` : nameOfStore(p.storeId);
+        addTo(deptOf(member), [ p.employeeName || "—", storeCell, p.date || "—", hoursCell, costCell ], h, rowCost);
       });
       // Salaried staff who didn't punch — included so the popup total reconciles
       // with the wage-cost tile; grouped into their own department too.
@@ -34874,7 +34905,7 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         g.rows.forEach(r => rows.push(r));
       });
       setDrill({
-        title: `Labour cost breakdown · ${period.label}`,
+        title: `Labour cost breakdown · ${period.label} · ${scopedStores.length === allStores.length ? "all stores" : scopedStores.map(st => st.shortName || st.name).join(", ")}`,
         columns: ["Employee", "Store", "Date", "Hours", "Gross pay"],
         rows,
         footer: ["Total", "", "", `${totHours.toFixed(2)}h`, fmtCurrency(totCost)],
@@ -68972,7 +69003,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: SALARY-HOME 2026-09-24a (salaried no-punch costed to home store) + VIEWAS 22b");
+      console.log("CB build: CLOCKSTORE 2026-09-25a (clock in at the store you are in; labour drill shows scope + home) + SALARY-HOME 24a");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
