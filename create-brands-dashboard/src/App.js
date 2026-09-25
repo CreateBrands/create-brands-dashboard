@@ -34517,8 +34517,13 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
   // slice (7shifts model: annual/52/7), applied per day in the period — NOT
   // derived from punches. We also build a Set of their employee IDs so the
   // punch-cost path can exclude them (avoids double-counting).
+  // SALARY-HOME 2026-09-24a: a salaried person is costed to their PRIMARY store
+  // (first on the profile), not to every store they are attached to. Before
+  // this, a multi-store salaried manager with no punch was charged a full day
+  // at each store in turn — so London Road showed Tove/Distribution staff and
+  // the chain total over-counted. Punched days are still split by hours.
   const scopedSalaried = useMemo(
-    () => (opsTeam || []).filter(m => !m.archivedAt && isSalaried(m) && (m.storeIds || []).some(id => scopedStoreIds.has(id))),
+    () => (opsTeam || []).filter(m => !m.archivedAt && isSalaried(m) && scopedStoreIds.has((m.storeIds || [])[0])),
     [opsTeam, scopedStoreIds]
   );
   const salariedIds = useMemo(() => new Set(scopedSalaried.map(m => m.id)), [scopedSalaried]);
@@ -34854,11 +34859,12 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         if (punchedAnywhereIds.has(m.id)) return;
         const dayCost = salariedDailyCost(m) * daysInPeriod(period.from, period.to);
         totCost += dayCost;
+        const others = (m.storeIds || []).slice(1).map(nameOfStore).filter(Boolean);
         addTo(deptOf(m), [
           `${m.firstName} ${m.lastName || ""}`.trim(),
-          (m.storeIds || []).map(nameOfStore).filter(Boolean)[0] || "—",
+          `${nameOfStore((m.storeIds || [])[0]) || "—"}${others.length ? ` (home · also ${others.join(", ")})` : " (home)"}`,
           period.label,
-          "salaried",
+          "salaried · no punch",
           `${fmtCurrency(dayCost)} (salaried)`,
         ], 0, dayCost);
       });
@@ -68966,7 +68972,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: VIEWAS 2026-09-22b (custom view-as menu) + NAV 22b");
+      console.log("CB build: SALARY-HOME 2026-09-24a (salaried no-punch costed to home store) + VIEWAS 22b");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
