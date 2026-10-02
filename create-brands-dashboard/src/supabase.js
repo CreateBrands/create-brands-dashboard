@@ -10827,7 +10827,12 @@ export async function synthesizeInvoiceFromItems({ items, storeId, vendor, recei
   const { error: iErr } = await supabase.from("invoices").insert({
     id: invId, entity: "shop", entity_id: entityId,
     supplier_name: vendor || null,
-    image_path: receiptUrl || null, status: "uploaded",
+    // SYNTH-STATUS 2026-10-03a: the lines are typed in by the person, so there
+    // is nothing to extract. "uploaded" put every split-purchase invoice in
+    // front of the retry sweep, which sent a receipts-bucket URL to the
+    // extractor, failed on download, and marked a perfectly good invoice
+    // "failed" (12 of them on 1-2 Oct, 2-3 per receipt).
+    image_path: receiptUrl || null, status: "pending_review",
     // RECONTOTAL 2026-08-19 — a synthesized invoice used to carry NO total, so
     // every receipt-derived invoice showed as £0.00 in reconcile, could never
     // auto-match and added nothing to a picked total (84 of 84 were zero).
