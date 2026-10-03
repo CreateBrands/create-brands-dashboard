@@ -43587,10 +43587,10 @@ function isUnder18(dobString) {
 // Amounts are still stored in the hourly_rate column regardless of type;
 // the column is "amount in whatever unit pay_type says".
 const PAY_TYPE_OPTIONS = [
-  { value: "hourly",  label: "Hourly",          unitLabel: "£/hour",  suffix: "/hour",  step: "0.25", placeholder: "e.g. 12.50" },
-  { value: "monthly", label: "Monthly salary",  unitLabel: "£/month", suffix: "/month", step: "50",   placeholder: "e.g. 2500"  },
-  { value: "annual",  label: "Annual salary",   unitLabel: "£/year",  suffix: "/year",  step: "500",  placeholder: "e.g. 32000" },
-];
+  { value: "hourly",  label: "Hourly",          get unitLabel() { return `${ccySym().trim()}/hour`; },  suffix: "/hour",  step: "0.25", placeholder: "e.g. 12.50" },
+  { value: "monthly", label: "Monthly salary",  get unitLabel() { return `${ccySym().trim()}/month`; }, suffix: "/month", step: "50",   placeholder: "e.g. 2500"  },
+  { value: "annual",  label: "Annual salary",   get unitLabel() { return `${ccySym().trim()}/year`; },  suffix: "/year",  step: "500",  placeholder: "e.g. 32000" },
+];   // SALARY-PUNCH 2026-10-04a: currency follows the active entity (AED for UAE)
 
 function getPayTypeMeta(payType) {
   return PAY_TYPE_OPTIONS.find(o => o.value === payType) || PAY_TYPE_OPTIONS[0];
@@ -67647,7 +67647,9 @@ function Sidebar({ navGroups, activeView, setActiveView, currentUser, onLogout, 
 // Entity landing screen — pick a Brand or an Operations entity (tiles).
 // Edit a single punch: clock-in, clock-out, or delete. Recomputes hours/gross
 // on save. Times use the browser's local timezone via datetime-local inputs.
-function PunchEditModal({ punch, memberName, storeName, onClose, onSave, onDelete }) {
+function PunchEditModal({ punch, memberName, storeName, onClose, onSave, onDelete, member = null }) {
+  // SALARY-PUNCH 2026-10-04a: a salaried person's "rate" is their monthly/annual figure, never per hour.
+  const salaried = isSalaried(member);
   // Convert an ISO timestamp to a value for <input type="datetime-local"> (local).
   const toLocalInput = (iso) => {
     if (!iso) return "";
@@ -67666,7 +67668,7 @@ function PunchEditModal({ punch, memberName, storeName, onClose, onSave, onDelet
   const [err, setErr] = useState(null);
 
   const breakMins = Number(punch.breakMinutes) || 0;
-  const rate = Number(punch.hourlyRate) || 0;
+  const rate = salaried ? 0 : (Number(punch.hourlyRate) || 0);
   // Live preview of hours/gross as the manager types. Overnight-aware: if the
   // clock-out is at/before clock-in, treat it as the next day rather than negative.
   const preview = useMemo(() => {
@@ -67791,7 +67793,8 @@ function PunchEditModal({ punch, memberName, storeName, onClose, onSave, onDelet
               {!preview.breakEnforced && preview.punched > 0 && <div className="mt-1.5 text-[11px] text-slate-500">{preview.punched}m break punched (meets the minimum).</div>}
               {preview.overnight && <div className="mt-1.5 text-[11px] text-sky-300">⏱ Overnight shift — clock-out is on the next day.</div>}
               {preview.long && <div className="mt-1.5 text-[11px] text-red-300 font-semibold">⚠ Unusually long — check for a missed clock-out.</div>}
-              {rate === 0 && <div className="mt-1.5 text-[11px] text-amber-400">No pay rate set for this employee — gross can't be shown.</div>}
+              {salaried && <div className="mt-1.5 text-[11px] text-sky-300">Salaried — {ccySym()}{(Number(member?.hourlyRate) || 0).toLocaleString("en-GB")}{getPayTypeMeta(member?.payType).suffix}. Hours are tracked for attendance; pay is not calculated per shift.</div>}
+              {!salaried && rate === 0 && <div className="mt-1.5 text-[11px] text-amber-400">No pay rate set for this employee — gross can't be shown.</div>}
             </div>
           )}
 
@@ -68350,6 +68353,7 @@ function WhosWorkingScreen({ punchRecords = [], schedules = [], opsTeam = [], st
       {editPunch && (
         <PunchEditModal
           punch={editPunch}
+          member={memberOf(editPunch.employeeId) || null}
           memberName={(() => { const m = memberOf(editPunch.employeeId); return editPunch.employeeName || (m ? `${m.firstName} ${m.lastName}`.trim() : "Unknown"); })()}
           storeName={(() => { const s = (stores || []).find(x => x.id === editPunch.storeId); return s ? (s.shortName || s.name) : null; })()}
           onClose={() => setEditPunch(null)}
@@ -69008,7 +69012,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: WAGE-EXCL 2026-09-25a (hidden-excluded honoured on dashboard) + CLOCKSTORE 25a");
+      console.log("CB build: SALARY-PUNCH 2026-10-04a (salaried punches show no hourly pay; pay labels in entity currency)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
