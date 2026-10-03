@@ -14760,6 +14760,7 @@ const mapDistInvoice = (i) => ({
   vatMode: i.vat_mode || "exclusive", discountPercent: Number(i.discount_percent) || 0, discountType: i.discount_type || "percent",
   shippingCharge: Number(i.shipping_charge) || 0, note: i.note || "", terms: i.terms || "",
   posted: !!i.posted, createdBy: i.created_by || null, createdAt: i.created_at, lines: (i.dist_invoice_lines || []).map(mapDistInvoiceLine),
+  grandTotal: i.grand_total != null ? Number(i.grand_total) : null,   // INV-TOTAL 2026-10-04a: the posted, printed total — single source of truth
 });
 const mapDistInvoiceLine = (l) => ({ id: l.id, invoiceId: l.invoice_id, itemId: l.item_id, description: l.description || "", qty: Number(l.qty) || 0, unitPrice: Number(l.unit_price) || 0, discount: Number(l.discount) || 0, discountType: l.discount_type || "percent", taxRateId: l.tax_rate_id || null, accountCode: l.account_code || null });
 
@@ -14989,7 +14990,7 @@ export async function fetchDistInvoiceDetail(invoiceId) {
   const net = +lines.reduce((s, l) => s + l.amount, 0).toFixed(2);
   const vat = +lines.reduce((s, l) => s + l.vat, 0).toFixed(2);
   const shipping = Number(head.shipping_charge) || 0;
-  const grand = +(net + vat + shipping).toFixed(2);
+  const grand = head.grand_total != null && Number(head.grand_total) > 0 ? +Number(head.grand_total).toFixed(2) : +(net + vat + shipping).toFixed(2);   // INV-TOTAL 2026-10-04a
   const paidMap = await fetchDistInvoicePaidMap([invoiceId]).catch(() => new Map());
   const paid = paidMap.get(invoiceId) || 0;
   const balance = +(grand - paid).toFixed(2);
@@ -15062,7 +15063,9 @@ export async function fetchDistCustomerDetail(customerId) {
   };
 
   const invRows = invoices.map(i => {
-    const gross = invGross(i);
+    // INV-TOTAL 2026-10-04a: the posted total is the one on the printed invoice — never recompute it
+    // (the recompute below ignores invoice discounts and inclusive VAT, which produced the ±pennies balances).
+    const gross = i.grandTotal != null && i.grandTotal > 0 ? i.grandTotal : invGross(i);
     const paid = paidMap.get(i.id) || 0;
     const balance = +(gross - paid).toFixed(2);
     return { id: i.id, invoiceNumber: i.invoiceNumber, soId: i.soId, date: i.invoiceDate, dueDate: i.dueDate,

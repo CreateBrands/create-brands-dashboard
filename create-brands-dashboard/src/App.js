@@ -13205,7 +13205,8 @@ function DistReceiptsView({ currentUser, pendingConvert, setPendingConvert }) {
   const cName = (id) => customers.find(c => c.id === id)?.displayName || "—";
   const custInvoices = creating ? invoices.filter(i => i.customerId === creating.customerId) : [];
   const invGross = (i) => distComputeTotals(i.lines, taxRates, i.vatMode, i.discountPercent, i.discountType).grandTotal + (Number(i.shippingCharge) || 0);
-  const invDue = (i) => +(invGross(i) - (paidMap.get(i.id) || 0)).toFixed(2);
+  // INV-TOTAL 2026-10-04a: "pay in full" uses the posted total, so it always matches the printed invoice
+  const invDue = (i) => +((i.grandTotal != null && i.grandTotal > 0 ? i.grandTotal : invGross(i)) - (paidMap.get(i.id) || 0)).toFixed(2);
   const totalAllocated = (creating?.allocations || []).reduce((s, a) => s + (Number(a.amount) || 0), 0);
   const amountInExcess = +((Number(creating?.amount) || 0) - totalAllocated).toFixed(2);
   const payInFull = (i) => { const others = (creating.allocations || []).filter(a => a.invoiceId !== i.id); setCreating({ ...creating, allocations: [...others, { invoiceId: i.id, amount: +invDue(i).toFixed(2) }] }); };
@@ -69064,7 +69065,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: LABOUR-UI 2026-10-04a (labour breakdown polished)");
+      console.log("CB build: INV-TOTAL 2026-10-04a (one invoice total everywhere) + LABOUR-UI 04a");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
