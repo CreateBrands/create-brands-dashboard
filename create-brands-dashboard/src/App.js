@@ -44576,21 +44576,37 @@ function HiringView({
                       <div className="flex-1 grid grid-cols-2 md:grid-cols-3 gap-3 text-xs">
                         <DetailField label="Position"    value={app.position || "—"}/>
                         <DetailField label="Email"       value={app.email ? <a href={`mailto:${app.email}`} className="text-indigo-300 hover:underline break-all">{app.email}</a> : "—"}/>
-                        <DetailField label="Phone"       value={app.phone ? <a href={`tel:${app.phone}`} className="text-indigo-300 hover:underline">{app.phone}</a> : "—"}/>
+                        <DetailField label="Phone" value={app.phone ? (
+                          <span className="inline-flex items-center gap-2 flex-wrap">
+                            <a href={`tel:${app.phone}`} className="text-indigo-300 hover:underline">{app.phone}</a>
+                            <a href={`https://wa.me/${String(app.phone).replace(/\D/g, "").replace(/^0/, "44")}`} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
+                              className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-950/50 border border-emerald-800/60 text-emerald-300 font-semibold hover:bg-emerald-900/50">WhatsApp</a>
+                          </span>) : "—"}/>
                         <DetailField label="Date of birth"
                           value={app.dateOfBirth
-                            ? <span className={app.isMinor ? "text-red-300 font-semibold" : ""}>{new Date(app.dateOfBirth).toLocaleDateString("en-GB")}{app.isMinor ? " · under 18" : ""}</span>
+                            ? (() => { const b = new Date(app.dateOfBirth); const n = new Date(); let age = n.getFullYear() - b.getFullYear(); if (n < new Date(n.getFullYear(), b.getMonth(), b.getDate())) age--;
+                                return <span className={app.isMinor ? "text-red-300 font-semibold" : ""}>{b.toLocaleDateString("en-GB")} <span className={app.isMinor ? "" : "text-slate-500"}>· {age}{app.isMinor ? " — under 18" : ""}</span></span>; })()
                             : "—"}
                         />
                         <DetailField label="Legal status"
                           value={LEGAL_STATUS_OPTIONS.find(o => o.value === app.legalStatus)?.label || app.legalStatus || "—"}
                         />
-                        <DetailField label="Right to work" value={app.rtwVerified ? <span className="text-emerald-300 font-semibold">Verified</span> : <span className="text-amber-300 font-semibold">Not yet checked</span>}/>
+                        <DetailField label="Right to work" value={app.rtwVerified
+                          ? <span className="text-emerald-300 font-semibold">Verified</span>
+                          : <span className="inline-flex items-center gap-2 flex-wrap"><span className="text-amber-300 font-semibold">Not yet checked</span>
+                              {onUpdate && <button onClick={(e) => { e.stopPropagation(); if (window.confirm(`Confirm you have seen ${app.firstName}'s right-to-work document?`)) onUpdate(app.id, { rtwVerified: true, rtwVerifiedBy: currentUser?.id || null, rtwVerifiedAt: new Date().toISOString() }); }}
+                                className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-200 font-semibold hover:bg-slate-700">Mark checked</button>}
+                            </span>}/>
                       </div>
                     </div>
 
                     {/* Wider fields full-width below */}
-                    {app.address              && <DetailField label="Address"              value={app.address} full/>}
+                    {app.address && <DetailField label="Address" full value={
+                      <span className="inline-flex items-center gap-2 flex-wrap">
+                        <span>{String(app.address).replace(/\b([a-z]{1,2}\d[a-z\d]?\s*\d[a-z]{2})\b/i, m => m.toUpperCase())}</span>
+                        <a href={`https://www.google.com/maps/search/${encodeURIComponent(app.address)}`} target="_blank" rel="noopener noreferrer" onClick={e => e.stopPropagation()}
+                          className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 font-semibold hover:bg-slate-700">Map</a>
+                      </span>}/>}
                     {app.availabilityNotes    && <DetailField label="Availability"         value={app.availabilityNotes} full/>}
                     {app.relevantExperience   && <DetailField label="Relevant experience"  value={<span className="whitespace-pre-line leading-relaxed">{app.relevantExperience}</span>} full/>}
                     {app.applicantNotes && (
@@ -44669,10 +44685,10 @@ function HiringView({
                     {history.length > 0 && (
                       <div className="pt-3 border-t border-slate-800">
                         <div className="text-xs font-semibold text-slate-500 uppercase tracking-widest mb-2">Timeline</div>
-                        <div className="space-y-1.5">
-                          {history.map(h => (
-                            <div key={h.id} className="flex items-start gap-2 text-xs">
-                              <div className="w-1.5 h-1.5 rounded-full bg-indigo-500 mt-1.5 flex-shrink-0"/>
+                        <div className="space-y-2 relative pl-1 border-l border-slate-800 ml-[3px]">
+                          {[...history].sort((a, b) => new Date(b.changedAt) - new Date(a.changedAt)).map((h, hi) => (
+                            <div key={h.id} className="flex items-start gap-2.5 text-xs -ml-[5px]">
+                              <div className={`w-2 h-2 rounded-full mt-1.5 flex-shrink-0 ${hi === 0 ? "bg-amber-400 ring-2 ring-amber-400/30" : "bg-slate-600"}`}/>
                               <div className="flex-1">
                                 <div className="text-slate-300">
                                   {h.fromStatus
@@ -44680,7 +44696,7 @@ function HiringView({
                                     : <>Application created with status <span className="font-semibold">{APPLICATION_STATUSES.find(s=>s.key===h.toStatus)?.label || h.toStatus}</span></>
                                   }
                                 </div>
-                                <div className="text-slate-600">{new Date(h.changedAt).toLocaleString("en-GB")}</div>
+                                <div className="text-slate-600">{(() => { const d = new Date(h.changedAt); const mins = Math.round((Date.now() - d) / 60000); const rel = mins < 60 ? `${mins}m ago` : mins < 1440 ? `${Math.floor(mins/60)}h ago` : `${Math.floor(mins/1440)}d ago`; return `${rel} · ${d.toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`; })()}{h.changedByName ? ` · ${h.changedByName}` : ""}</div>
                               </div>
                             </div>
                           ))}
@@ -69072,7 +69088,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: BULK-SCAN 2026-10-04a (bulk upload queued server-side) + INV-TOTAL 04a");
+      console.log("CB build: HIRE-UI 2026-10-04a (age, WhatsApp, map, one-click RTW, timeline) + BULK-SCAN 04a");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
