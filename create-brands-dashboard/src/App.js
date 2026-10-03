@@ -34875,15 +34875,19 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         }
         totCost += rowCost;
         const implausible = !open && (p.hoursWorked || 0) > 16;
-        const hoursCell = open ? `${punchHours(p).toFixed(2)}h (live)` : `${(p.hoursWorked||0).toFixed(2)}h${implausible ? " ⚠ check punch" : ""}`;
-        // Salaried: show the store's proportional slice, flagged when it's a split.
+        // LABOUR-UI 2026-10-04a: structured cells — text plus a quiet sub-line and a chip
+        const fmtT = (ts) => ts ? new Date(ts).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }) : "";
+        const hoursCell = { text: `${(open ? punchHours(p) : (p.hoursWorked || 0)).toFixed(2)}h`,
+          chip: open ? "live" : implausible ? "check punch" : null, tone: open ? "live" : implausible ? "warn" : null,
+          sub: fmtT(p.punchIn) + (p.punchOut ? ` – ${fmtT(p.punchOut)}` : open ? " – now" : "") };
         const costCell = salaried
-          ? `${fmtCurrency(rowCost)}${salShare < 0.999 ? ` (salaried · ${Math.round(salShare*100)}% of day)` : " /day (salaried)"}`
-          : (open ? `${fmtCurrency(punchCost(p))} (live)` : fmtCurrency(p.grossPay || 0));
-        // CLOCKSTORE 2026-09-25a: say where they punched AND where they belong
+          ? { text: fmtCurrency(rowCost), chip: "salaried", tone: "muted", sub: salShare < 0.999 ? `${Math.round(salShare*100)}% of daily slice` : "daily slice" }
+          : { text: fmtCurrency(open ? punchCost(p) : (p.grossPay || 0)), chip: open ? "live" : null, tone: open ? "live" : null, sub: p.hourlyRate ? `${fmtCurrency(p.hourlyRate)}/hr` : "" };
         const home = member && (member.storeIds || [])[0];
-        const storeCell = home && home !== p.storeId ? `${nameOfStore(p.storeId)} (home ${nameOfStore(home)})` : nameOfStore(p.storeId);
-        addTo(deptOf(member), [ p.employeeName || "—", storeCell, p.date || "—", hoursCell, costCell ], h, rowCost);
+        const storeCell = home && home !== p.storeId ? { text: nameOfStore(p.storeId), sub: `home ${nameOfStore(home)}` } : { text: nameOfStore(p.storeId) };
+        const nameCell = { text: p.employeeName || "—", sub: member ? (member.role || "") : "" };
+        const dateCell = { text: p.date ? new Date(p.date + "T00:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) : "—" };
+        addTo(deptOf(member), [ nameCell, storeCell, dateCell, hoursCell, costCell ], h, rowCost);
       });
       // Salaried staff who didn't punch — included so the popup total reconciles
       // with the wage-cost tile; grouped into their own department too.
@@ -34897,21 +34901,30 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         totCost += dayCost;
         const others = (m.storeIds || []).slice(1).map(nameOfStore).filter(Boolean);
         addTo(deptOf(m), [
-          `${m.firstName} ${m.lastName || ""}`.trim(),
-          `${nameOfStore((m.storeIds || [])[0]) || "—"}${others.length ? ` (home · also ${others.join(", ")})` : " (home)"}`,
-          period.label,
-          "salaried · no punch",
-          `${fmtCurrency(dayCost)} (salaried)`,
+          { text: `${m.firstName} ${m.lastName || ""}`.trim(), sub: m.role || "" },
+          { text: nameOfStore((m.storeIds || [])[0]) || "—", sub: others.length ? `home · also ${others.join(", ")}` : "home store" },
+          { text: period.label },
+          { text: "—", chip: "no punch", tone: "muted", sub: "charged to home store" },
+          { text: fmtCurrency(dayCost), chip: "salaried", tone: "muted", sub: "daily slice" },
         ], 0, dayCost);
       });
       const rows = [];
       [...groups.entries()].sort((a, b) => b[1].cost - a[1].cost).forEach(([dept, g]) => {
-        rows.push({ group: true, cells: [dept, "", "", `${g.hours.toFixed(2)}h`, fmtCurrency(g.cost)] });
+        const share = totCost > 0 ? Math.round((g.cost / totCost) * 100) : 0;
+        rows.push({ group: true, cells: [{ text: dept, sub: `${g.rows.length} ${g.rows.length === 1 ? "person" : "people"}` }, "", "", `${g.hours.toFixed(2)}h`, { text: fmtCurrency(g.cost), sub: `${share}% of total` }] });
         g.rows.forEach(r => rows.push(r));
       });
+      const headcount = new Set([...groups.values()].flatMap(g => g.rows.map(r => (r[0] && r[0].text) || r[0]))).size;
       setDrill({
-        title: `Labour cost breakdown · ${period.label} · ${scopedStores.length === allStores.length ? "all stores" : scopedStores.map(st => st.shortName || st.name).join(", ")}`,
-        columns: ["Employee", "Store", "Date", "Hours", "Gross pay"],
+        title: "Labour cost breakdown",
+        subtitle: `${period.label} · ${scopedStores.length === allStores.length ? "all stores" : scopedStores.map(st => st.shortName || st.name).join(", ")}`,
+        kpis: [
+          { label: "Labour cost", value: fmtCurrency(totCost) },
+          { label: "Hours", value: `${totHours.toFixed(1)}h` },
+          { label: "People", value: String(headcount) },
+          { label: "Cost / hour", value: totHours > 0 ? fmtCurrency(totCost / totHours) : "—" },
+        ],
+        columns: ["Employee", "Store", "Date", "Hours", "Pay"],
         rows,
         footer: ["Total", "", "", `${totHours.toFixed(2)}h`, fmtCurrency(totCost)],
       });
@@ -35019,9 +35032,34 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#3A2E26]/50 backdrop-blur-sm p-4" onClick={() => setDrill(null)}>
           <div className="bg-[#FBF6EC] border border-[#E8DCC6] rounded-2xl max-w-3xl w-full max-h-[80vh] overflow-auto shadow-2xl" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between px-5 py-3.5 border-b border-[#EADFCB] sticky top-0 bg-[#FBF6EC] z-10">
-              <h3 className="text-sm font-bold text-[#3A2E26]">{drill.title}</h3>
-              <button onClick={() => setDrill(null)} className="w-7 h-7 rounded-lg flex items-center justify-center text-[#9A8770] hover:text-[#3A2E26] hover:bg-[#F0E6D5] transition-colors text-lg leading-none">×</button>
+              <div className="min-w-0">
+                <h3 className="text-sm font-bold text-[#3A2E26]">{drill.title}</h3>
+                {drill.subtitle && <div className="text-[11px] text-[#9A8770] truncate">{drill.subtitle}</div>}
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button onClick={() => {
+                  const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+                  const txt = (c) => (c && typeof c === "object") ? [c.text, c.chip, c.sub].filter(Boolean).join(" · ") : (c ?? "");
+                  const out = [drill.columns.map(esc).join(",")];
+                  drill.rows.forEach(r => { const cells = Array.isArray(r) ? r : r.cells; out.push(cells.map(c => esc(txt(c))).join(",")); });
+                  if (drill.footer) out.push(drill.footer.map(esc).join(","));
+                  const blob = new Blob([out.join("\n")], { type: "text/csv" });
+                  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `${(drill.title || "breakdown").toLowerCase().replace(/[^a-z0-9]+/g, "_")}.csv`; a.click();
+                }} className="px-2.5 h-7 rounded-lg text-[11px] font-semibold text-[#844429] bg-[#F0E6D5] hover:bg-[#EADFCB] transition-colors">Export CSV</button>
+                <button onClick={() => setDrill(null)} className="w-7 h-7 rounded-lg flex items-center justify-center text-[#9A8770] hover:text-[#3A2E26] hover:bg-[#F0E6D5] transition-colors text-lg leading-none">×</button>
+              </div>
             </div>
+            {/* LABOUR-UI 2026-10-04a: KPI strip + export */}
+            {drill.kpis && (
+              <div className="grid grid-cols-4 gap-px bg-[#EADFCB] border-b border-[#EADFCB]">
+                {drill.kpis.map((k, i) => (
+                  <div key={i} className="bg-[#FBF6EC] px-4 py-3">
+                    <div className="text-[10px] uppercase tracking-wider text-[#9A8770] font-semibold">{k.label}</div>
+                    <div className="text-lg font-black text-[#3A2E26] tabular-nums leading-tight">{k.value}</div>
+                  </div>
+                ))}
+              </div>
+            )}
             <table className="w-full text-xs">
               <thead><tr className="text-[#9A8770] border-b border-[#EADFCB] bg-[#F6EEDF]">
                 {drill.columns.map((c,i) => <th key={i} className={`px-4 py-2.5 font-semibold uppercase tracking-wider text-[10px] ${i===0?"text-left":"text-right"}`}>{c}</th>)}
@@ -35031,14 +35069,28 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
                 {drill.rows.map((r,ri) => {
                   const cells = Array.isArray(r) ? r : r.cells;
                   const grp = !Array.isArray(r) && r.group;
+                  // LABOUR-UI 2026-10-04a: a cell may be a string or { text, sub, chip, tone }
+                  const chipCls = (tone) => tone === "live" ? "bg-emerald-100 text-emerald-800 border-emerald-300" : tone === "warn" ? "bg-red-100 text-red-800 border-red-300" : "bg-[#EFE3CB] text-[#6B5D4F] border-[#DCCCB0]";
+                  const renderCell = (cell, ci, bold) => {
+                    const o = (cell && typeof cell === "object") ? cell : { text: cell };
+                    return (
+                      <div className={`flex flex-col ${ci===0 ? "items-start" : "items-end"} leading-tight`}>
+                        <span className={`inline-flex items-center gap-1.5 ${bold ? "font-bold" : ""}`}>
+                          {o.text}
+                          {o.chip && <span className={`text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border ${chipCls(o.tone)}`}>{o.chip}</span>}
+                        </span>
+                        {o.sub && <span className="text-[10px] text-[#9A8770] font-normal">{o.sub}</span>}
+                      </div>
+                    );
+                  };
                   if (grp) return (
-                    <tr key={ri} className="border-b border-[#EADFCB] bg-[#F3E9D6]">
-                      {cells.map((cell,ci) => <td key={ci} className={`px-4 py-2 font-bold text-[#844429] ${ci===0?"text-left":"text-right tabular-nums"}`}>{cell}</td>)}
+                    <tr key={ri} className="border-b border-[#EADFCB] bg-[#F3E9D6] sticky top-[52px] z-[5]">
+                      {cells.map((cell,ci) => <td key={ci} className={`px-4 py-2 font-bold text-[#844429] ${ci===0?"text-left":"text-right tabular-nums"}`}>{renderCell(cell, ci, true)}</td>)}
                     </tr>
                   );
                   return (
-                  <tr key={ri} className="border-b border-[#F0E6D5] hover:bg-[#F6EEDF]/60 transition-colors">
-                    {cells.map((cell,ci) => <td key={ci} className={`px-4 py-2.5 ${ci===0?"text-left font-medium text-[#3A2E26]":"text-right text-[#6B5D4F] tabular-nums"}`}>{cell}</td>)}
+                  <tr key={ri} className={`border-b border-[#F0E6D5] hover:bg-[#F6EEDF]/60 transition-colors ${ri % 2 ? "bg-[#FBF6EC]" : "bg-[#FDFAF3]"}`}>
+                    {cells.map((cell,ci) => <td key={ci} className={`px-4 py-2 ${ci===0?"text-left font-medium text-[#3A2E26]":"text-right text-[#6B5D4F] tabular-nums"}`}>{renderCell(cell, ci, false)}</td>)}
                   </tr>
                   );
                 })}
@@ -69012,7 +69064,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: SALARY-PUNCH 2026-10-04a (salaried punches show no hourly pay; pay labels in entity currency)");
+      console.log("CB build: LABOUR-UI 2026-10-04a (labour breakdown polished)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
