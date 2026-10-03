@@ -27555,18 +27555,25 @@ function InvoicesView({ currentUser, categories = [], storeFilter = "all", entit
       finally { setUploading(false); }
       return;
     }
-    let done = 0;
-    for (const f of files) {
-      setBulkProgress(`Processing ${done+1} of ${files.length}…`);
-      try {
-        const inv = await uploadInvoiceFile(f, entity, currentUser.id);
-        await extractInvoice(inv.id);
-      } catch (err) { /* keep going */ }
-      done++;
-      await refreshList();
-    }
+    // BULK-SCAN 2026-10-04a: upload everything first (4 at a time), then let the
+    // server-side queue scan them. Before this the browser uploaded one file,
+    // waited ~45s for its scan, then started the next — 25 bills meant 20
+    // minutes with the tab open, and anything that interrupted it left the rest
+    // unuploaded or stuck on "scanning".
+    let done = 0, failed = 0;
+    const queue = [...files];
+    const worker = async () => {
+      while (queue.length) {
+        const f = queue.shift();
+        try { await uploadInvoiceFile(f, entity, currentUser.id); done++; }
+        catch (err) { failed++; }
+        setBulkProgress(`Uploaded ${done + failed} of ${files.length}${failed ? ` (${failed} failed)` : ""}`);
+      }
+    };
+    await Promise.all([worker(), worker(), worker(), worker()]);
+    await refreshList();
     setBulkProgress("");
-    setNotice(`Bulk upload done — ${done} invoice${done===1?"":"s"} processed. Review each below.`);
+    setNotice(`${done} file${done===1?"":"s"} uploaded${failed ? `, ${failed} failed` : ""} — scanning in the background. You can leave this page; each one appears as "pending review" when it's read (about a minute each, a few at a time).`);
     setUploading(false);
   };
 
@@ -69065,7 +69072,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: INV-TOTAL 2026-10-04a (one invoice total everywhere) + LABOUR-UI 04a");
+      console.log("CB build: BULK-SCAN 2026-10-04a (bulk upload queued server-side) + INV-TOTAL 04a");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
