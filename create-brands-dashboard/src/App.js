@@ -32348,12 +32348,12 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser, select
 // heatmap, top items, payment methods, refunds/cancellations.
 // ANALYTICS-DRILL 2026-10-04a: every tile on Store Analytics opens the sales
 // behind it. One modal, fed a title and the filtered sale rows.
-function SalesDrill({ title, subtitle, rows, basis = "gross", store, onClose, onDrill }) {
+function SalesDrill({ title, subtitle, rows, basis = "gross", store, onClose, panels = ["channel", "daypart", "day", "hour", "categories"] }) {
   const fmtMoneyDec = (n) => ccySym() + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const [q, setQ] = useState("");
   const [sortKey, setSortKey] = useState("time");
   const [open, setOpen] = useState(null);
-  const [view, setView] = useState("category");   // category | sales
+  const [view, setView] = useState("insights");   // insights | category | sales
   const [openCat, setOpenCat] = useState(null);
   const amt = (s) => basis === "net" && s.amountSubtotal != null ? s.amountSubtotal : s.amountTotal;
   // Items rolled up by category → item. Modifiers with a price are counted inside their parent item.
@@ -32375,6 +32375,106 @@ function SalesDrill({ title, subtitle, rows, basis = "gross", store, onClose, on
     return [...cats.values()].map(c => ({ ...c, items: [...c.items.values()].sort((a, b) => b.revenue - a.revenue) })).sort((a, b) => b.revenue - a.revenue);
   }, [rows]);
   const catTotal = byCategory.reduce((a, c) => a + c.revenue, 0);
+
+  // ── ANALYTICS-DRILL 2026-10-04c: insight panels (what an F&B operator asks of this metric) ──
+  const hourOf = (r) => { let h = tzParts(r.saleTime, tz).hour; return h; };
+  const daypartOf = (r) => { let h = hourOf(r); if (h < 6) h += 24; return h < 12 ? "Morning" : h < 17 ? "Afternoon" : h < 21 ? "Evening" : "Late"; };
+  const itemCount = (r) => (r.saleItems || []).reduce((a, it) => a + (Number(it.quantity) || 1), 0);
+  const groupBy = (keyFn, order) => {
+    const m = new Map();
+    rows.forEach(r => { const k = keyFn(r); if (k == null) return; if (!m.has(k)) m.set(k, { name: String(k), orders: 0, revenue: 0, discount: 0, discounted: 0, refunded: 0, items: 0 });
+      const g = m.get(k); g.orders++; g.revenue += amt(r); g.discount += r.amountDiscount || 0; if ((r.amountDiscount || 0) > 0) g.discounted++; if (r.isFullyRefunded) g.refunded++; g.items += itemCount(r); });
+    let out = [...m.values()];
+    out = order ? order.map(k => m.get(k)).filter(Boolean) : out.sort((a, b) => b.revenue - a.revenue);
+    return out;
+  };
+  const totalRev = rows.reduce((a, r) => a + amt(r), 0);
+  const totalDisc = rows.reduce((a, r) => a + (r.amountDiscount || 0), 0);
+  const insight = useMemo(() => {
+    const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const out = {};
+    out.channel = groupBy(r => r.channel || "Other");
+    out.payment = groupBy(r => r.paymentMethod || "Unknown");
+    out.daypart = groupBy(daypartOf, ["Morning", "Afternoon", "Evening", "Late"]);
+    out.day = groupBy(r => r.businessDate).sort((a, b) => a.name.localeCompare(b.name)).map(g => ({ ...g, label: `${dayNames[new Date(g.name + "T00:00:00").getDay()]} ${g.name.slice(5)}` }));
+    out.hour = groupBy(hourOf, Array.from({ length: 24 }, (_, i) => i)).map(g => ({ ...g, label: `${String(g.name).padStart(2, "0")}:00` }));
+    const bands = [[0, 5], [5, 10], [10, 15], [15, 20], [20, 30], [30, 50], [50, 1e9]];
+    out.valueBands = bands.map(([lo, hi]) => { const rs = rows.filter(r => amt(r) >= lo && amt(r) < hi); return { name: hi >= 1e9 ? `${ccySym()}${lo}+` : `${ccySym()}${lo}–${hi}`, orders: rs.length, revenue: rs.reduce((a, r) => a + amt(r), 0) }; });
+    // items/categories inside these sales
+    const itemMap = new Map();
+    rows.forEach(r => (r.saleItems || []).forEach(it => { if (it.isRefunded) return; const k = (it.caption || "Item").trim(); const q = Number(it.quantity) || 1; const rev = ((Number(it.unitPrice) || 0) + (Array.isArray(it.saleItems) ? it.saleItems.reduce((a, m) => a + (Number(m.unitPrice) || 0), 0) : 0)) * q;
+      if (!itemMap.has(k)) itemMap.set(k, { name: k, qty: 0, revenue: 0, orders: 0, category: it.category || "" }); const x = itemMap.get(k); x.qty += q; x.revenue += rev; x.orders++; }));
+    out.topItems = [...itemMap.values()].sort((a, b) => b.revenue - a.revenue).slice(0, 12);
+    out.topItemsByQty = [...itemMap.values()].sort((a, b) => b.qty - a.qty).slice(0, 12);
+    out.categories = byCategory.slice(0, 10);
+    // items that appear most in DISCOUNTED orders (what the discounts are being spent on)
+    const dMap = new Map();
+    rows.filter(r => (r.amountDiscount || 0) > 0).forEach(r => (r.saleItems || []).forEach(it => { const k = (it.caption || "Item").trim(); if (!dMap.has(k)) dMap.set(k, { name: k, orders: 0, qty: 0 }); const x = dMap.get(k); x.orders++; x.qty += Number(it.quantity) || 1; }));
+    out.discountedItems = [...dMap.values()].sort((a, b) => b.orders - a.orders).slice(0, 10);
+    return out;
+  }, [rows, basis, byCategory]);
+  const Panel = ({ title, note, children }) => (
+    <div className="bg-slate-950/50 border border-slate-800 rounded-xl overflow-hidden">
+      <div className="px-3 py-2 border-b border-slate-800 flex items-baseline justify-between"><div className="text-xs font-bold text-white">{title}</div>{note && <div className="text-[10px] text-slate-500">{note}</div>}</div>
+      {children}
+    </div>
+  );
+  const Bar = ({ pct, color = "bg-indigo-500" }) => <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden"><div className={`h-full ${color} rounded-full`} style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}/></div>;
+  const GroupTable = ({ groups, labelKey = "name", mode = "revenue" }) => {
+    const maxRev = Math.max(1, ...groups.map(g => g.revenue)); const maxDisc = Math.max(1, ...groups.map(g => g.discount));
+    return (
+      <table className="w-full text-[11px]">
+        <thead><tr className="text-slate-500">
+          <th className="px-3 py-1.5 text-left font-semibold">{mode === "discount" ? "Where" : ""}</th>
+          {mode === "discount" ? <><th className="px-2 py-1.5 text-right font-semibold">Disc. orders</th><th className="px-2 py-1.5 text-right font-semibold">Given</th><th className="px-2 py-1.5 text-right font-semibold">% of rev</th><th className="px-2 py-1.5 text-right font-semibold">Avg / order</th></>
+            : <><th className="px-2 py-1.5 text-right font-semibold">Orders</th><th className="px-2 py-1.5 text-right font-semibold">Revenue</th><th className="px-2 py-1.5 text-right font-semibold">Share</th><th className="px-2 py-1.5 text-right font-semibold">ATV</th><th className="px-2 py-1.5 text-right font-semibold">Disc %</th></>}
+        </tr></thead>
+        <tbody>{groups.map(g => (
+          <tr key={g.name} className="border-t border-slate-800/60">
+            <td className="px-3 py-1.5 text-slate-200 w-40"><div>{g[labelKey] || g.name}</div><div className="mt-1"><Bar pct={mode === "discount" ? (g.discount / maxDisc) * 100 : (g.revenue / maxRev) * 100} color={mode === "discount" ? "bg-amber-500" : "bg-indigo-500"}/></div></td>
+            {mode === "discount" ? <>
+              <td className="px-2 py-1.5 text-right text-slate-300 tabular-nums">{g.discounted}<span className="text-slate-600"> / {g.orders}</span></td>
+              <td className="px-2 py-1.5 text-right text-amber-300 tabular-nums font-semibold">{fmtMoneyDec(g.discount)}</td>
+              <td className="px-2 py-1.5 text-right text-slate-300 tabular-nums">{g.revenue + g.discount > 0 ? ((g.discount / (g.revenue + g.discount)) * 100).toFixed(1) : "0.0"}%</td>
+              <td className="px-2 py-1.5 text-right text-slate-400 tabular-nums">{g.discounted ? fmtMoneyDec(g.discount / g.discounted) : "—"}</td></>
+            : <>
+              <td className="px-2 py-1.5 text-right text-slate-300 tabular-nums">{g.orders.toLocaleString()}</td>
+              <td className="px-2 py-1.5 text-right text-white tabular-nums font-semibold">{fmtMoneyDec(g.revenue)}</td>
+              <td className="px-2 py-1.5 text-right text-slate-400 tabular-nums">{totalRev > 0 ? ((g.revenue / totalRev) * 100).toFixed(0) : 0}%</td>
+              <td className="px-2 py-1.5 text-right text-slate-400 tabular-nums">{g.orders ? fmtMoneyDec(g.revenue / g.orders) : "—"}</td>
+              <td className="px-2 py-1.5 text-right text-slate-400 tabular-nums">{g.revenue + g.discount > 0 ? ((g.discount / (g.revenue + g.discount)) * 100).toFixed(1) : "0.0"}%</td></>}
+          </tr>))}</tbody>
+      </table>
+    );
+  };
+  const HourStrip = ({ groups, metric = "revenue" }) => { const mx = Math.max(1, ...groups.map(g => g[metric])); return (
+    <div className="px-3 py-2"><div className="flex items-end gap-px h-20">{groups.map(g => <div key={g.name} className="flex-1 flex flex-col justify-end" title={`${g.label}: ${g.orders} orders · ${fmtMoneyDec(g.revenue)}`}><div className="bg-indigo-500/80 rounded-t" style={{ height: `${(g[metric] / mx) * 100}%` }}/></div>)}</div>
+      <div className="flex text-[9px] text-slate-600 mt-1">{groups.map(g => <div key={g.name} className="flex-1 text-center">{Number(g.name) % 3 === 0 ? g.name : ""}</div>)}</div></div>); };
+  const ItemTable = ({ items, qtyFirst }) => (
+    <table className="w-full text-[11px]"><tbody>{items.map((it, i) => (
+      <tr key={it.name} className="border-t border-slate-800/60 first:border-t-0"><td className="px-3 py-1.5 text-slate-500 w-6">{i + 1}</td><td className="px-2 py-1.5 text-slate-200"><div>{it.name}</div>{it.category && <div className="text-[10px] text-slate-600">{it.category}</div>}</td>
+        <td className="px-2 py-1.5 text-right text-slate-400 tabular-nums">{it.qty != null ? `${it.qty} sold` : `${it.orders} orders`}</td><td className="px-2 py-1.5 text-right text-white tabular-nums font-semibold">{it.revenue != null ? fmtMoneyDec(it.revenue) : ""}</td></tr>))}
+      {items.length === 0 && <tr><td className="px-3 py-3 text-slate-600" colSpan={4}>No line items recorded.</td></tr>}</tbody></table>
+  );
+  const renderPanel = (key) => {
+    switch (key) {
+      case "channel":   return <Panel key={key} title="By channel"><GroupTable groups={insight.channel}/></Panel>;
+      case "payment":   return <Panel key={key} title="By payment method"><GroupTable groups={insight.payment}/></Panel>;
+      case "daypart":   return <Panel key={key} title="By time of day" note="store-local"><GroupTable groups={insight.daypart}/></Panel>;
+      case "day":       return <Panel key={key} title="By day"><GroupTable groups={insight.day} labelKey="label"/></Panel>;
+      case "hour":      return <Panel key={key} title="By hour" note="revenue"><HourStrip groups={insight.hour}/></Panel>;
+      case "hourOrders":return <Panel key={key} title="Orders by hour"><HourStrip groups={insight.hour} metric="orders"/></Panel>;
+      case "categories":return <Panel key={key} title="Top categories" note="item price × qty"><ItemTable items={insight.categories}/></Panel>;
+      case "topItems":  return <Panel key={key} title="Top items by revenue"><ItemTable items={insight.topItems}/></Panel>;
+      case "topItemsQty":return <Panel key={key} title="Top items by quantity"><ItemTable items={insight.topItemsByQty}/></Panel>;
+      case "valueBands":return <Panel key={key} title="Order value distribution" note="where the ATV comes from"><GroupTable groups={insight.valueBands.map(b => ({ ...b, discount: 0 }))}/></Panel>;
+      case "discChannel":return <Panel key={key} title="Discounts by channel" note="% = discount ÷ gross before discount"><GroupTable groups={insight.channel} mode="discount"/></Panel>;
+      case "discDaypart":return <Panel key={key} title="Discounts by time of day"><GroupTable groups={insight.daypart} mode="discount"/></Panel>;
+      case "discDay":   return <Panel key={key} title="Discounts by day"><GroupTable groups={insight.day} labelKey="label" mode="discount"/></Panel>;
+      case "discItems": return <Panel key={key} title="Items most often in discounted orders"><ItemTable items={insight.discountedItems}/></Panel>;
+      default: return null;
+    }
+  };
   const tz = store?.timezone;
   const fmtT = (iso) => { try { return new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: tz || undefined }); } catch { return ""; } };
   const fmtD = (d) => { try { return new Date(d + "T00:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }); } catch { return d; } };
@@ -32410,18 +32510,27 @@ function SalesDrill({ title, subtitle, rows, basis = "gross", store, onClose, on
           </div>
           <div className="flex items-center gap-1.5 flex-shrink-0">
             <div className="inline-flex rounded-lg border border-slate-700 overflow-hidden mr-1">
+              <button onClick={() => setView("insights")} className={`px-2.5 h-7 text-[11px] font-semibold ${view === "insights" ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400 hover:text-white"}`}>Insights</button>
               <button onClick={() => setView("category")} className={`px-2.5 h-7 text-[11px] font-semibold ${view === "category" ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400 hover:text-white"}`}>By category</button>
               <button onClick={() => setView("sales")} className={`px-2.5 h-7 text-[11px] font-semibold ${view === "sales" ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400 hover:text-white"}`}>Sales</button>
             </div>
-            <button onClick={view === "category" ? exportCatCsv : exportCsv} className="px-2.5 h-7 rounded-lg text-[11px] font-semibold text-indigo-300 bg-slate-800 hover:bg-slate-700">Export CSV</button>
+            {view !== "insights" && <button onClick={view === "category" ? exportCatCsv : exportCsv} className="px-2.5 h-7 rounded-lg text-[11px] font-semibold text-indigo-300 bg-slate-800 hover:bg-slate-700">Export CSV</button>}
             <button onClick={onClose} className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-500 hover:text-white hover:bg-slate-800 text-lg leading-none">×</button>
           </div>
         </div>
-        <div className="grid grid-cols-4 gap-px bg-slate-800 border-b border-slate-800">
-          {[["Sales", list.length.toLocaleString()], [basis === "net" ? "Net" : "Gross", fmtMoneyDec(total)], ["Avg order", fmtMoneyDec(list.length ? total / list.length : 0)], ["Discounts", fmtMoneyDec(disc)]].map(([l, v]) => (
-            <div key={l} className="bg-slate-900 px-4 py-2.5"><div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">{l}</div><div className="text-base font-black text-white tabular-nums">{v}</div></div>
+        <div className="grid grid-cols-3 md:grid-cols-6 gap-px bg-slate-800 border-b border-slate-800">
+          {[["Orders", rows.length.toLocaleString()], [basis === "net" ? "Net" : "Gross", fmtMoneyDec(totalRev)], ["Avg order", fmtMoneyDec(rows.length ? totalRev / rows.length : 0)],
+            ["Items / order", rows.length ? (rows.reduce((a, r) => a + itemCount(r), 0) / rows.length).toFixed(1) : "—"],
+            ["Discount rate", `${totalRev + totalDisc > 0 ? ((totalDisc / (totalRev + totalDisc)) * 100).toFixed(1) : "0.0"}%`],
+            ["Refunded", `${rows.length ? ((rows.filter(r => r.isFullyRefunded).length / rows.length) * 100).toFixed(1) : "0.0"}%`]].map(([l, v]) => (
+            <div key={l} className="bg-slate-900 px-3 py-2.5"><div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">{l}</div><div className="text-base font-black text-white tabular-nums">{v}</div></div>
           ))}
         </div>
+        {view === "insights" && (
+          <div className="overflow-auto flex-1 p-3 grid grid-cols-1 md:grid-cols-2 gap-3 content-start">
+            {panels.map(renderPanel)}
+          </div>
+        )}
         {view === "category" && (
           <div className="overflow-auto flex-1">
             {byCategory.length === 0 && <div className="px-4 py-8 text-center text-xs text-slate-600">No line items recorded for these sales.</div>}
@@ -32512,7 +32621,7 @@ function SalesDrill({ title, subtitle, rows, basis = "gross", store, onClose, on
           </table>
         </div>
         </>}
-        <div className="px-4 py-2 border-t border-slate-800 text-[10px] text-slate-600">{view === "category" ? "Click a category to see its items. Revenue is item price × quantity (modifiers included), so it won't match the sales total exactly where order-level discounts apply." : "Click a sale to see its items. Sort by clicking When / Channel / Total."}</div>
+        <div className="px-4 py-2 border-t border-slate-800 text-[10px] text-slate-600">{view === "insights" ? "Switch to By category or Sales for the raw rows behind these panels." : view === "category" ? "Click a category to see its items. Revenue is item price × quantity (modifiers included), so it won't match the sales total exactly where order-level discounts apply." : "Click a sale to see its items. Sort by clicking When / Channel / Total."}</div>
       </div>
     </div>
   );
@@ -32530,7 +32639,7 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
   const [basis, setBasis] = useState("gross");   // gross (total) | net (ex-VAT)
   const [heatMetric, setHeatMetric] = useState("orders"); // orders | revenue
   const [drill, setDrill] = useState(null);   // ANALYTICS-DRILL 2026-10-04a: { title, subtitle, rows }
-  const openDrill = (title, rows, subtitle) => setDrill({ title, rows, subtitle: subtitle || `${store?.shortName || store?.name} · ${periodLabel}` });
+  const openDrill = (title, rows, subtitle, panels) => setDrill({ title, rows, panels, subtitle: subtitle || `${store?.shortName || store?.name} · ${periodLabel}` });
   const tileCls = "bg-slate-900 border border-slate-800 rounded-2xl p-4 cursor-pointer hover:border-indigo-500/60 hover:bg-slate-900/80 transition-colors group";
 
   useEffect(() => {
@@ -32720,7 +32829,7 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
 
   return (
     <div className="space-y-5">
-      {drill && <SalesDrill title={drill.title} subtitle={drill.subtitle} rows={drill.rows} basis={basis} store={store} onClose={() => setDrill(null)}/>}
+      {drill && <SalesDrill title={drill.title} subtitle={drill.subtitle} rows={drill.rows} panels={drill.panels} basis={basis} store={store} onClose={() => setDrill(null)}/>}
       {/* Basis toggle */}
       <div className="flex items-center justify-end gap-2">
         <span className="text-[11px] text-slate-500">Showing:</span>
@@ -32738,7 +32847,7 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <div className={tileCls} onClick={() => openDrill("All sales", valid)} title="Click to see every sale">
+        <div className={tileCls} onClick={() => openDrill("Revenue", valid, null, ["channel", "daypart", "day", "hour", "categories", "topItems"])} title="Where the revenue comes from">
           <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">{basis === "net" ? "Net revenue" : "Gross revenue"}</div>
           <div className="text-2xl font-bold text-white mt-1">{fmtMoney(kpis.revenue)}</div>
           <div className="mt-1"><Delta v={kpis.revDelta}/> <span className="text-[10px] text-slate-600">vs prev</span></div>
@@ -32748,17 +32857,17 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
             </div>
           )}
         </div>
-        <div className={tileCls} onClick={() => openDrill("All orders", valid)} title="Click to see every order">
+        <div className={tileCls} onClick={() => openDrill("Orders", valid, null, ["channel", "daypart", "day", "hourOrders", "topItemsQty", "payment"])} title="Where the orders come from">
           <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Orders</div>
           <div className="text-2xl font-bold text-white mt-1">{kpis.orders.toLocaleString()}</div>
           <div className="mt-1"><Delta v={kpis.ordersDelta}/> <span className="text-[10px] text-slate-600">vs prev</span></div>
         </div>
-        <div className={tileCls} onClick={() => openDrill("Orders by value", valid, `${store?.shortName || store?.name} · ${periodLabel} · sorted largest first`)} title="Click to see orders ranked by value">
+        <div className={tileCls} onClick={() => openDrill("Average order value", valid, null, ["valueBands", "channel", "daypart", "topItems"])} title="What shapes the ATV">
           <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Avg order (ATV)</div>
           <div className="text-2xl font-bold text-white mt-1">{fmtMoneyDec(kpis.atv)}</div>
           <div className="mt-1"><Delta v={kpis.atvDelta}/> <span className="text-[10px] text-slate-600">vs prev</span></div>
         </div>
-        <div className={tileCls} onClick={() => openDrill("Discounted sales", valid.filter(s => (s.amountDiscount || 0) > 0))} title="Click to see every discounted sale">
+        <div className={tileCls} onClick={() => openDrill("Discounts", valid, null, ["discChannel", "discDaypart", "discDay", "discItems"])} title="Where the discounting happens">
           <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Discount rate</div>
           <div className="text-2xl font-bold text-white mt-1">{kpis.discountRate.toFixed(1)}%</div>
           <div className="mt-1 text-[10px] text-slate-600">{fmtMoney(kpis.discount)} given · {periodLabel}</div>
@@ -32773,7 +32882,7 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
             <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 11 }}/>
             <YAxis tick={{ fill: "#64748b", fontSize: 11 }}/>
             <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 12 }} formatter={(v, n) => [fmtMoneyDec(v), n === "prevRevenue" ? "Previous" : "This period"]}/>
-            <Bar dataKey="revenue" fill="#844429" radius={[4, 4, 0, 0]} cursor="pointer" onClick={(d) => d && d.date && openDrill(`Sales on ${new Date(d.date + "T00:00:00").toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}`, valid.filter(s => s.businessDate === d.date))}/>
+            <Bar dataKey="revenue" fill="#844429" radius={[4, 4, 0, 0]} cursor="pointer" onClick={(d) => d && d.date && openDrill(`${new Date(d.date + "T00:00:00").toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}`, valid.filter(s => s.businessDate === d.date), null, ["channel", "hour", "daypart", "categories", "topItems", "discChannel"])}/>
             <Line type="monotone" dataKey="prevRevenue" stroke="#64748b" strokeWidth={2} strokeDasharray="4 3" dot={false}/>
           </ComposedChart>
         </ResponsiveContainer>
@@ -32786,7 +32895,7 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
           {dayparts.map(d => {
             const share = kpis.revenue > 0 ? (d.revenue / kpis.revenue) * 100 : 0;
             return (
-              <div key={d.name} onClick={() => openDrill(`${d.name} sales (${d.range})`, valid.filter(s => { let h = tzParts(s.saleTime, store?.timezone).hour; if (h < 6) h += 24; return h >= d.from && h < d.to; }))}
+              <div key={d.name} onClick={() => openDrill(`${d.name} (${d.range})`, valid.filter(s => { let h = tzParts(s.saleTime, store?.timezone).hour; if (h < 6) h += 24; return h >= d.from && h < d.to; }), null, ["channel", "hour", "day", "categories", "topItems", "discChannel"])}
                 className="bg-slate-950 border border-slate-800 rounded-xl p-3 cursor-pointer hover:border-indigo-500/60 transition-colors" title="Click to see these sales">
                 <div className="text-xs font-semibold text-slate-300">{d.name}</div>
                 <div className="text-[10px] text-slate-600 mb-1">{d.range}</div>
@@ -32824,7 +32933,7 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
                 {channels.map((c, i) => {
                   const pct = kpis.revenue > 0 ? (c.revenue / kpis.revenue) * 100 : 0;
                   return (
-                    <tr key={c.name} onClick={() => openDrill(`${c.name} sales`, valid.filter(s => (s.channel || "Other") === c.name))} className="border-t border-slate-800/50 cursor-pointer hover:bg-slate-800/40" title="Click to see these sales">
+                    <tr key={c.name} onClick={() => openDrill(c.name, valid.filter(s => (s.channel || "Other") === c.name), null, ["daypart", "day", "hour", "valueBands", "topItems", "discDaypart"])} className="border-t border-slate-800/50 cursor-pointer hover:bg-slate-800/40" title="Click to see these sales">
                       <td className="py-1.5 text-slate-300"><span className="inline-block w-2.5 h-2.5 rounded-full mr-1.5 align-middle" style={{ background: CH_COLORS[i % CH_COLORS.length] }}/>{c.name}</td>
                       <td className="py-1.5 text-right text-slate-300">{fmtMoneyDec(c.revenue)}</td>
                       <td className="py-1.5 text-right text-slate-400">{c.orders}</td>
@@ -32844,7 +32953,7 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
             {payments.map((p, i) => {
               const pct = kpis.revenue > 0 ? (p.revenue / kpis.revenue) * 100 : 0;
               return (
-                <div key={p.name} onClick={() => openDrill(`${p.name} payments`, valid.filter(s => (s.paymentMethod || "Unknown") === p.name))} className="cursor-pointer rounded-lg -mx-1 px-1 py-0.5 hover:bg-slate-800/40" title="Click to see these sales">
+                <div key={p.name} onClick={() => openDrill(`${p.name} payments`, valid.filter(s => (s.paymentMethod || "Unknown") === p.name), null, ["channel", "daypart", "day", "valueBands"])} className="cursor-pointer rounded-lg -mx-1 px-1 py-0.5 hover:bg-slate-800/40" title="Click to see these sales">
                   <div className="flex items-center justify-between text-xs mb-0.5">
                     <span className="text-slate-300">{p.name}</span>
                     <span className="text-slate-400">{fmtMoneyDec(p.revenue)} · {pct.toFixed(0)}%</span>
@@ -69265,7 +69374,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: ANALYTICS-DRILL 2026-10-04b (drill grouped by category, with item breakdown)");
+      console.log("CB build: ANALYTICS-DRILL 2026-10-04c (metric-specific insight panels behind every tile)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
