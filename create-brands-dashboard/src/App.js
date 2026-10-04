@@ -30959,6 +30959,8 @@ function ForecastPanel({ storeId, stores }) {
   const [history, setHistory] = useState([]);        // last 8 weeks of actuals (for "why this number")
   const [labour, setLabour] = useState([]);          // last 4 weeks labour vs revenue (for staffing guidance)
   const [tab, setTab] = useState("week");            // week | accuracy | drivers | staffing
+  const [compare, setCompare] = useState("lw");      // lw (last week) | lm (4 weeks ago)
+  const [hourly, setHourly] = useState([]);          // store-scoped: last 28 days of sales for hourly profile
   const [openDay, setOpenDay] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -30986,10 +30988,11 @@ function ForecastPanel({ storeId, stores }) {
       storeId ? fetchStoreSalesDetailed({ storeId, from: fmt(base), to: fmt(base) }).catch(() => []) : Promise.resolve([]),
       fetchStoreDayAggregates({ from: fmt(h56), to: fmt(base) }).catch(() => []),
       fetchLabourVsRevenue({ from: fmt(l28), to: fmt(base) }).catch(() => []),
+      storeId ? fetchStoreSalesDetailed({ storeId, from: fmt(l28), to: fmt(base) }).catch(() => []) : Promise.resolve([]),
     ])
-      .then(([f, lw, acc, tf, ts, hist, lab]) => {
+      .then(([f, lw, acc, tf, ts, hist, lab, hs]) => {
         if (cancelled) return;
-        setRows(f); setLastWeek(lw); setAccRows(acc); setHistory(hist); setLabour(lab);
+        setRows(f); setLastWeek(lw); setAccRows(acc); setHistory(hist); setLabour(lab); setHourly(hs || []);
         setRecent(acc.filter(a => a.date >= fmt(r7)));
         const tfs = storeId ? tf.filter(r => r.storeId === storeId) : tf;
         const fc = tfs.reduce((a, r) => a + r.forecastRevenue, 0);
@@ -31001,6 +31004,7 @@ function ForecastPanel({ storeId, stores }) {
     return () => { cancelled = true; };
   }, [storeId]);
 
+  const pct = (v) => v > 1.5 ? v : v * 100;   // the accuracy view may store 0–1 or 0–100
   const shiftDate = (d, n) => { const x = new Date(d + "T00:00:00"); x.setDate(x.getDate() + n); return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,"0")}-${String(x.getDate()).padStart(2,"0")}`; };
 
   const days = useMemo(() => {
@@ -31020,13 +31024,24 @@ function ForecastPanel({ storeId, stores }) {
       const ev = r.factors && (r.factors.event_name || (typeof r.factors.note === "string" && r.factors.note.startsWith("event:") ? r.factors.note.slice(6) : null));
       if (ev) d.events.add(ev);
     });
-    return Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date)).map(d => ({
-      ...d,
-      lastWeek: lwByDate[shiftDate(d.date, -7)] ?? null,
-      level: d.levels.length ? d.levels.reduce((a, x) => a + x, 0) / d.levels.length : null,
-      events: [...d.events],
-    }));
-  }, [rows, lastWeek, storeId]);
+    const hist = storeId ? history.filter(r => r.storeId === storeId) : history;
+    const histByDate = {}; hist.forEach(r => { histByDate[r.date] = (histByDate[r.date] || 0) + (r.revenueNet || 0); });
+    const accScoped = (storeId ? accRows.filter(r => r.storeId === storeId) : accRows).filter(r => r.absPctError != null);
+    const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const errByDow = {}; accScoped.forEach(r => { const k = dayNames[new Date(r.date + "T00:00:00").getDay()]; (errByDow[k] = errByDow[k] || []).push(pct(r.absPctError)); });
+    return Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date)).map(d => {
+      const k = dayNames[new Date(d.date + "T00:00:00").getDay()]; const e = errByDow[k] || [];
+      const medErr = e.length >= 3 ? [...e].sort((a, b) => a - b)[Math.floor(e.length / 2)] : null;
+      return {
+        ...d,
+        lastWeek: lwByDate[shiftDate(d.date, -7)] ?? null,
+        fourWeeksAgo: histByDate[shiftDate(d.date, -28)] ?? null,
+        level: d.levels.length ? d.levels.reduce((a, x) => a + x, 0) / d.levels.length : null,
+        events: [...d.events],
+        band: medErr != null ? { lo: d.revenue * (1 - medErr / 100), hi: d.revenue * (1 + medErr / 100), pct: medErr } : null,
+      };
+    });
+  }, [rows, lastWeek, history, accRows, storeId]);
 
   // Accuracy: median absolute % error over the last 28 days, per-store, excluding thin/closed stores.
   const acc = useMemo(() => {
@@ -31044,7 +31059,6 @@ function ForecastPanel({ storeId, stores }) {
     const within15 = kept.filter(e => e <= 15).length / kept.length;
     return { median: median > 1.5 ? median : median * 100, within15: Math.round(within15 * 100), days: kept.length, excluded };
   }, [accRows, storeId]);
-  const pct = (v) => v > 1.5 ? v : v * 100;   // the view may store 0–1 or 0–100
 
   const total = days.reduce((a, d) => a + d.revenue, 0);
   const totalLw = days.every(d => d.lastWeek != null) ? days.reduce((a, d) => a + (d.lastWeek || 0), 0) : null;
@@ -31087,8 +31101,13 @@ function ForecastPanel({ storeId, stores }) {
     const lab = storeId ? labour.filter(r => r.storeId === storeId) : labour;
     const splhByDow = {}; lab.forEach(r => { if (!r.hours || !r.revenueNet) return; const k = dayNames[new Date(r.date + "T00:00:00").getDay()]; (splhByDow[k] = splhByDow[k] || { rev: 0, hrs: 0, cost: 0 }); splhByDow[k].rev += r.revenueNet; splhByDow[k].hrs += r.hours; splhByDow[k].cost += r.labourCost || 0; });
     const staffing = days.map(d => { const k = dayNames[new Date(d.date + "T00:00:00").getDay()]; const x = splhByDow[k]; const splh = x && x.hrs > 0 ? x.rev / x.hrs : null; const rate = x && x.hrs > 0 ? x.cost / x.hrs : null; return { ...d, splh, hoursNeeded: splh ? d.revenue / splh : null, labourCost: splh && rate ? (d.revenue / splh) * rate : null }; });
-    return { daily, weekday, weekly, overall, misses, storesTbl, drivers, staffing, hasLabour: Object.keys(splhByDow).length > 0 };
-  }, [accRows, rows, lastWeek, history, labour, days, storeId, stores]);
+    // hourly profile per weekday from the last 4 weeks of sales (store scope only)
+    const st = (stores || []).find(x => x.id === storeId);
+    const prof = {};
+    (hourly || []).filter(x => !x.isCancelled).forEach(x => { const dt = new Date(x.saleTime); const k = dayNames[new Date(x.businessDate + "T00:00:00").getDay()]; const h = tzParts(x.saleTime, st?.timezone).hour; (prof[k] = prof[k] || Array(24).fill(0))[h] += x.amountTotal || 0; });
+    const driversH = drivers.map(d => { const k = dayNames[new Date(d.date + "T00:00:00").getDay()]; const p = prof[k]; if (!p) return { ...d, curve: null, peak: null }; const tot = p.reduce((a, v) => a + v, 0); const curve = p.map((v, h) => ({ h, share: tot > 0 ? v / tot : 0, rev: tot > 0 ? d.revenue * (v / tot) : 0 })); let best = 0, bi = 0; for (let h = 0; h < 22; h++) { const w = curve[h].share + curve[h + 1].share + curve[h + 2].share; if (w > best) { best = w; bi = h; } } return { ...d, curve, peak: tot > 0 ? { from: bi, to: bi + 3, share: best } : null }; });
+    return { daily, weekday, weekly, overall, misses, storesTbl, drivers: driversH, staffing, hasLabour: Object.keys(splhByDow).length > 0 };
+  }, [accRows, rows, lastWeek, history, labour, hourly, days, storeId, stores]);
 
   const Tab = ({ id, children }) => <button onClick={() => setTab(id)} className={`px-3 py-1.5 text-xs font-semibold rounded-lg ${tab === id ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white hover:bg-slate-800"}`}>{children}</button>;
   const Spark = ({ pts, med }) => { const mx = Math.max(1, ...pts.map(p => p.v)); return (
@@ -31105,17 +31124,29 @@ function ForecastPanel({ storeId, stores }) {
               <div className="mt-1">
                 <div className="flex items-baseline gap-2">
                   <span className="text-2xl font-black text-white tabular-nums">{fmtMoney(total)}</span>
-                  {totalLw != null && <span className="text-xs text-slate-400">vs {fmtMoney(totalLw)} last week <Delta cur={total} prev={totalLw}/></span>}
+                  {(() => { const cmpTot = compare === "lw" ? totalLw : (days.every(d => d.fourWeeksAgo != null) ? days.reduce((a, d) => a + (d.fourWeeksAgo || 0), 0) : null); return cmpTot != null && <span className="text-xs text-slate-400">vs {fmtMoney(cmpTot)} {compare === "lw" ? "last week" : "4 weeks ago"} <Delta cur={total} prev={cmpTot}/></span>; })()}
                 </div>
                 <div className="text-[11px] text-slate-500 mt-0.5">Busiest <span className="text-slate-300 font-semibold">{dayLabel(best.date).split(" ")[0]}</span> {fmtMoney(best.revenue)} · quietest <span className="text-slate-300 font-semibold">{dayLabel(quiet.date).split(" ")[0]}</span> {fmtMoney(quiet.revenue)}{days.reduce((a, d) => a + d.orders, 0) > 0 && <> · ~{Math.round(days.reduce((a, d) => a + d.orders, 0)).toLocaleString()} orders</>}</div>
               </div>
             );
           })()}
         </div>
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          <div className="inline-flex rounded-lg border border-slate-700 overflow-hidden text-[10px] font-semibold">
+            <button onClick={() => setCompare("lw")} className={`px-2 py-1 ${compare === "lw" ? "bg-slate-700 text-white" : "text-slate-400 hover:text-white"}`}>vs last week</button>
+            <button onClick={() => setCompare("lm")} className={`px-2 py-1 ${compare === "lm" ? "bg-slate-700 text-white" : "text-slate-400 hover:text-white"}`}>vs 4 weeks ago</button>
+          </div>
+          <button onClick={() => {
+            const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+            const out = [["Date", "Forecast", "Low", "High", "Orders", "Last week", "4 weeks ago", "Trend", "Event"].map(esc).join(",")];
+            days.forEach(d => out.push([d.date, d.revenue.toFixed(2), d.band ? d.band.lo.toFixed(2) : "", d.band ? d.band.hi.toFixed(2) : "", Math.round(d.orders), d.lastWeek ?? "", d.fourWeeksAgo ?? "", d.level != null ? d.level.toFixed(3) : "", d.events.join("; ")].map(esc).join(",")));
+            const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([out.join("\n")], { type: "text/csv" })); a.download = `forecast_${storeId || "chain"}_${days[0]?.date || ""}.csv`; a.click();
+          }} className="text-[10px] px-2.5 py-1 rounded-lg border border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200">Export CSV</button>
         <button onClick={() => setShowAccuracy(true)} title={acc ? `Median one-day-ahead error over the last ${acc.days} store-days. ${acc.within15}% of days landed within ±15%.${acc.excluded.length ? ` Excluded: ${acc.excluded.map(e => `${storeName(e.sid)} (${e.reason})`).join(", ")}.` : ""}` : "Accuracy warming up"}
           className="text-[10px] px-2.5 py-1 rounded-full border border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200 text-right">
           {acc ? <>typically within <span className="text-slate-200 font-semibold">±{acc.median.toFixed(0)}%</span> · {acc.within15}% of days inside ±15%{acc.excluded.length ? <span className="text-amber-400/80"> · {acc.excluded.length} excluded</span> : null}</> : "accuracy warming up"}
         </button>
+        </div>
       </div>
       {!loading && !error && todayFc && (
         <div className="mb-3 flex items-center gap-4 rounded-xl border border-slate-800 bg-slate-950/50 px-4 py-2.5">
@@ -31200,6 +31231,13 @@ function ForecastPanel({ storeId, stores }) {
                 </div>
                 <div className="text-right"><div className="text-sm font-bold text-white tabular-nums">{fmtMoney(d.revenue)}</div>{d.lastWeek != null && <div className="text-[10px] text-slate-500">last week {fmtMoney(d.lastWeek)}</div>}</div>
               </div>
+              {d.curve && (
+                <div className="mt-2 pl-24">
+                  <div className="flex items-end gap-px h-10">{d.curve.map(c => <div key={c.h} className={`flex-1 rounded-t ${d.peak && c.h >= d.peak.from && c.h < d.peak.to ? "bg-sky-400/80" : "bg-slate-600/60"}`} style={{ height: `${(c.share / Math.max(...d.curve.map(x => x.share), 0.0001)) * 100}%` }} title={`${String(c.h).padStart(2, "0")}:00 · expected ${fmtMoney(c.rev)} (${(c.share * 100).toFixed(0)}%)`}/>)}</div>
+                  <div className="flex text-[8px] text-slate-600 mt-0.5">{d.curve.map(c => <div key={c.h} className="flex-1 text-center">{c.h % 4 === 0 ? c.h : ""}</div>)}</div>
+                  {d.peak && <div className="text-[10px] text-slate-500 mt-0.5">Expected shape from the last 4 {dayLabel(d.date).split(" ")[0]}s · peak <span className="text-sky-300 font-semibold">{d.peak.from}:00–{d.peak.to}:00</span> ≈ {fmtMoney(d.revenue * d.peak.share)}</div>}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -31228,20 +31266,24 @@ function ForecastPanel({ storeId, stores }) {
         <div className="text-xs text-slate-600">No forecast yet — forecasts generate nightly once sales history exists.</div>
       ) : tab !== "week" ? null : (
         <div className="space-y-1">
-          <div className="flex items-center gap-2 text-[10px] text-slate-600 px-0.5"><div className="w-24"></div><div className="flex-1 flex items-center gap-3"><span className="inline-flex items-center gap-1"><span className="w-3 h-2 rounded-sm bg-indigo-500/80 inline-block"/>forecast</span><span className="inline-flex items-center gap-1"><span className="w-3 h-2 rounded-sm border border-slate-500 inline-block"/>last week actual</span></div><div className="w-20 text-right">forecast</div><div className="w-24 text-right">vs last wk</div><div className="w-28"></div></div>
+          <div className="flex items-center gap-2 text-[10px] text-slate-600 px-0.5"><div className="w-24"></div><div className="flex-1 flex items-center gap-3"><span className="inline-flex items-center gap-1"><span className="w-3 h-2 rounded-sm bg-indigo-500/80 inline-block"/>forecast</span><span className="inline-flex items-center gap-1"><span className="w-3 h-2 rounded-sm border border-slate-500 inline-block"/>{compare === "lw" ? "last week" : "4 weeks ago"} actual</span><span className="inline-flex items-center gap-1"><span className="w-3 h-2 rounded-sm bg-indigo-500/25 inline-block"/>likely range</span></div><div className="w-20 text-right">forecast</div><div className="w-24 text-right">{compare === "lw" ? "vs last wk" : "vs 4 wks ago"}</div><div className="w-28"></div></div>
           {days.map(d => {
             const isWeekend = [0, 6].includes(new Date(d.date + "T00:00:00").getDay());
             return (
             <button key={d.date} onClick={() => setSelectedDate(d.date)}
               className={`w-full flex items-center gap-2 text-xs px-0.5 py-1 rounded-lg hover:bg-slate-800/50 text-left ${isWeekend ? "bg-slate-800/20" : ""}`} title="Click for store-by-store and hourly detail">
               <div className={`w-24 flex-shrink-0 ${isWeekend ? "text-slate-200 font-semibold" : "text-slate-400"}`}>{dayLabel(d.date)}</div>
+              {(() => { const cmp = compare === "lw" ? d.lastWeek : d.fourWeeksAgo; const scale = Math.max(maxRev, d.band ? d.band.hi : 0); return (<>
               <div className="flex-1 relative h-5 bg-slate-800/60 rounded overflow-hidden">
-                <div className="absolute inset-y-0 left-0 bg-indigo-500/80 rounded" style={{ width: `${Math.round(100 * d.revenue / maxRev)}%` }}/>
-                {d.lastWeek != null && <div className="absolute inset-y-0 left-0 border border-slate-400/70 rounded pointer-events-none" style={{ width: `${Math.round(100 * d.lastWeek / maxRev)}%` }} title={`Last week: ${fmtMoney(d.lastWeek)}`}/>}
+                {d.band && <div className="absolute inset-y-0 bg-indigo-500/25" style={{ left: `${Math.round(100 * d.band.lo / scale)}%`, width: `${Math.round(100 * (d.band.hi - d.band.lo) / scale)}%` }} title={`Likely range ${fmtMoney(d.band.lo)} – ${fmtMoney(d.band.hi)} (±${d.band.pct.toFixed(0)}%, this weekday's typical error)`}/>}
+                <div className="absolute inset-y-0 left-0 bg-indigo-500/80 rounded" style={{ width: `${Math.round(100 * d.revenue / scale)}%` }}/>
+                {cmp != null && <div className="absolute inset-y-0 left-0 border border-slate-400/70 rounded pointer-events-none" style={{ width: `${Math.round(100 * cmp / scale)}%` }} title={`${compare === "lw" ? "Last week" : "4 weeks ago"}: ${fmtMoney(cmp)}`}/>}
               </div>
-              <div className="w-20 text-right"><div className="text-slate-100 font-bold tabular-nums">{fmtMoney(d.revenue)}</div>{d.orders > 0 && <div className="text-[9px] text-slate-500 tabular-nums">{Math.round(d.orders)} orders · {fmtMoney(d.revenue / d.orders)}</div>}</div>
-              <div className="w-24 text-right">{d.lastWeek != null ? <><span className="text-slate-500 tabular-nums">{fmtMoney(d.lastWeek)}</span> <Delta cur={d.revenue} prev={d.lastWeek}/></> : <span className="text-slate-700">—</span>}</div>
+              <div className="w-20 text-right"><div className="text-slate-100 font-bold tabular-nums">{fmtMoney(d.revenue)}</div><div className="text-[9px] text-slate-500 tabular-nums">{d.band ? `${fmtMoney(d.band.lo)}–${fmtMoney(d.band.hi)}` : d.orders > 0 ? `${Math.round(d.orders)} orders` : ""}</div></div>
+              <div className="w-24 text-right">{cmp != null ? <><span className="text-slate-500 tabular-nums">{fmtMoney(cmp)}</span> <Delta cur={d.revenue} prev={cmp}/></> : <span className="text-slate-700">—</span>}</div>
+              </>); })()}
               <div className="w-28 flex items-center justify-end gap-1 flex-wrap">
+                {(() => { const dr = analysis.drivers.find(x => x.date === d.date); return dr && dr.peak ? <span className="text-[9px] px-1.5 py-0.5 rounded bg-sky-950/60 border border-sky-800/60 text-sky-300 font-semibold" title={`Busiest window on this weekday: ${dr.peak.from}:00–${dr.peak.to}:00 carries ~${Math.round(dr.peak.share * 100)}% of the day`}>peak {dr.peak.from}–{dr.peak.to}h</span> : null; })()}
                 {d.events.map(ev => <span key={ev} className="text-[9px] px-1.5 py-0.5 rounded bg-fuchsia-950/60 border border-fuchsia-800/60 text-fuchsia-300 font-semibold" title={`Calendar event: ${ev}`}>{ev}</span>)}
                 {d.level != null && Math.abs(d.level - 1) >= 0.03 && <span className={`text-[9px] px-1.5 py-0.5 rounded border font-semibold ${d.level > 1 ? "bg-emerald-950/60 border-emerald-800/60 text-emerald-300" : "bg-amber-950/60 border-amber-800/60 text-amber-300"}`} title="Recent fortnight vs this store's usual level — the forecast is scaled by this">{d.level > 1 ? "▲" : "▼"} trend {Math.abs((d.level - 1) * 100).toFixed(0)}%</span>}
                 {d.thin && <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400 font-semibold" title={`Only ${d.minBasis} same-weekday${d.minBasis === 1 ? "" : "s"} behind this figure — firms up as weeks accrue`}>{d.minBasis} wk{d.minBasis === 1 ? "" : "s"}</span>}
@@ -69706,7 +69748,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: FORECAST-UI 2026-10-04c (full analysis: accuracy, drivers, staffing, by store)");
+      console.log("CB build: FORECAST-UI 2026-10-04d (likely range, compare toggle, peak hours, hourly shape, export)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
