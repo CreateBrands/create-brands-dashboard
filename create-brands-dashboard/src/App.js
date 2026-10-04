@@ -32350,6 +32350,8 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser, select
 // behind it. One modal, fed a title and the filtered sale rows.
 function SalesDrill({ title, subtitle, rows, prevRows = [], basis = "gross", store, onClose, panels = ["channel", "daypart", "day", "hour", "categories"], metric = "revenue" }) {
   const fmtMoneyDec = (n) => ccySym() + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const M = metric;   // revenue | orders | atv | discount — declared first: everything below keys off it
+  const mLabel = M === "revenue" ? (basis === "net" ? "Net revenue" : "Revenue") : M === "orders" ? "Orders" : M === "atv" ? "Average order value" : "Discounts";
   const [q, setQ] = useState("");
   const [sortKey, setSortKey] = useState("time");
   const [open, setOpen] = useState(null);
@@ -32520,8 +32522,6 @@ function SalesDrill({ title, subtitle, rows, prevRows = [], basis = "gross", sto
       {items.length === 0 && <tr><td className="px-3 py-3 text-slate-600" colSpan={4}>No line items recorded.</td></tr>}</tbody></table>
   );
   // ANALYTICS-DRILL 2026-10-04e: every panel is a different cut of THE SAME metric the tile shows.
-  const M = metric;   // revenue | orders | atv | discount
-  const mLabel = M === "revenue" ? (basis === "net" ? "Net revenue" : "Revenue") : M === "orders" ? "Orders" : M === "atv" ? "Average order value" : "Discounts";
   const renderPanel = (key) => {
     switch (key) {
       case "channel":  return <Panel key={key} title={`${mLabel} by channel`}>{M !== "atv" && <ShareDonut groups={insight.channel}/>}<GroupTable groups={insight.channel} mode={M}/></Panel>;
@@ -69449,7 +69449,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: ANALYTICS-DRILL 2026-10-04f (charts in drills, layout fix)");
+      console.log("CB build: ANALYTICS-DRILL 2026-10-04g (charts in drills, layout fix)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
