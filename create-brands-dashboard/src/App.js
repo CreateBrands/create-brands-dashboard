@@ -32415,7 +32415,7 @@ function SalesDrill({ title, subtitle, rows, prevRows = [], basis = "gross", sto
     const iBands = [[1, 1], [2, 2], [3, 3], [4, 5], [6, 99]];
     out.itemBands = iBands.map(([lo, hi]) => { const rs = rows.filter(r => { const n = itemCount(r); return n >= lo && n <= hi; }); return { name: lo === hi ? `${lo} item${lo > 1 ? "s" : ""}` : hi >= 99 ? `${lo}+ items` : `${lo}–${hi} items`, orders: rs.length, revenue: rs.reduce((a, r) => a + amt(r), 0), discount: 0, discounted: 0, refunded: 0, items: rs.reduce((a, r) => a + itemCount(r), 0) }; });
     out.day = groupBy(r => r.businessDate).sort((a, b) => a.name.localeCompare(b.name)).map(g => ({ ...g, label: `${dayNames[new Date(g.name + "T00:00:00").getDay()]} ${g.name.slice(5)}` }));
-    out.hour = groupBy(hourOf, Array.from({ length: 24 }, (_, i) => i)).map(g => ({ ...g, label: `${String(g.name).padStart(2, "0")}:00` }));
+    out.hour = withPrev(groupBy(hourOf, Array.from({ length: 24 }, (_, i) => i)), hourOf, Array.from({ length: 24 }, (_, i) => i)).map(g => ({ ...g, label: `${String(g.name).padStart(2, "0")}:00` }));
     const bands = [[0, 5], [5, 10], [10, 15], [15, 20], [20, 30], [30, 50], [50, 1e9]];
     out.valueBands = bands.map(([lo, hi]) => { const rs = rows.filter(r => amt(r) >= lo && amt(r) < hi); return { name: hi >= 1e9 ? `${ccySym()}${lo}+` : `${ccySym()}${lo}–${hi}`, orders: rs.length, revenue: rs.reduce((a, r) => a + amt(r), 0) }; });
     // items/categories inside these sales
@@ -32431,10 +32431,10 @@ function SalesDrill({ title, subtitle, rows, prevRows = [], basis = "gross", sto
     out.discountedItems = [...dMap.values()].sort((a, b) => b.orders - a.orders).slice(0, 10);
     return out;
   }, [rows, basis, byCategory]);
-  const Panel = ({ title, note, children }) => (
-    <div className="bg-slate-950/50 border border-slate-800 rounded-xl overflow-hidden">
-      <div className="px-3 py-2 border-b border-slate-800 flex items-baseline justify-between"><div className="text-xs font-bold text-white">{title}</div>{note && <div className="text-[10px] text-slate-500">{note}</div>}</div>
-      {children}
+  const Panel = ({ title, note, children, wide }) => (
+    <div className={`bg-slate-950/50 border border-slate-800 rounded-xl ${wide ? "md:col-span-2" : ""}`}>
+      <div className="px-3 py-2 border-b border-slate-800 flex items-baseline justify-between gap-2"><div className="text-xs font-bold text-white">{title}</div>{note && <div className="text-[10px] text-slate-500 text-right">{note}</div>}</div>
+      <div className="overflow-x-auto">{children}</div>
     </div>
   );
   const Bar = ({ pct, color = "bg-indigo-500" }) => <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden"><div className={`h-full ${color} rounded-full`} style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}/></div>;
@@ -32471,9 +32471,48 @@ function SalesDrill({ title, subtitle, rows, prevRows = [], basis = "gross", sto
       </table>
     );
   };
-  const HourStrip = ({ groups, metric = "revenue" }) => { const mx = Math.max(1, ...groups.map(g => g[metric])); return (
-    <div className="px-3 py-2"><div className="flex items-end gap-px h-20">{groups.map(g => <div key={g.name} className="flex-1 flex flex-col justify-end" title={`${g.label}: ${g.orders} orders · ${fmtMoneyDec(g.revenue)}${g.discount ? ` · ${fmtMoneyDec(g.discount)} discount` : ""}`}><div className="bg-indigo-500/80 rounded-t" style={{ height: `${(g[metric] / mx) * 100}%` }}/></div>)}</div>
-      <div className="flex text-[9px] text-slate-600 mt-1">{groups.map(g => <div key={g.name} className="flex-1 text-center">{Number(g.name) % 3 === 0 ? g.name : ""}</div>)}</div></div>); };
+  // Charts (recharts is already in the bundle). Current period = bars, previous = dotted line.
+  const chartMetric = M === "orders" ? "orders" : M === "discount" ? "discount" : M === "atv" ? "atv" : "revenue";
+  const chartVal = (g) => chartMetric === "atv" ? (g && g.orders ? g.revenue / g.orders : 0) : (g ? g[chartMetric] : 0);
+  const fmtTip = (v) => chartMetric === "orders" ? `${Math.round(v)} orders` : fmtMoneyDec(v);
+  const chartColor = M === "discount" ? "#f59e0b" : M === "orders" ? "#38bdf8" : M === "atv" ? "#34d399" : "#818cf8";
+  const SeriesChart = ({ groups, labelKey = "name", height = 150, compact = false, metricOverride = null }) => {
+    const cv = metricOverride ? (g) => (g ? g[metricOverride] : 0) : chartVal;
+    const data = groups.map(g => ({ label: g[labelKey] || g.name, cur: cv(g), prev: g.prev ? cv(g.prev) : null, orders: g.orders }));
+    const hasPrev = data.some(d => d.prev != null);
+    return (
+      <div className="px-2 pt-2" style={{ height }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <ComposedChart data={data} margin={{ top: 4, right: 6, left: -18, bottom: 0 }}>
+            <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" vertical={false}/>
+            <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 9 }} interval={compact ? 2 : 0} axisLine={false} tickLine={false}/>
+            <YAxis tick={{ fill: "#64748b", fontSize: 9 }} axisLine={false} tickLine={false} tickFormatter={v => chartMetric === "orders" ? v : v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v}/>
+            <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 11 }} labelStyle={{ color: "#e2e8f0" }} formatter={(v, n) => [fmtTip(v), n === "cur" ? "This period" : "Previous"]}/>
+            <Bar dataKey="cur" fill={chartColor} radius={[3, 3, 0, 0]}/>
+            {hasPrev && <Line dataKey="prev" stroke="#94a3b8" strokeDasharray="4 3" dot={false} strokeWidth={1.5} type="monotone"/>}
+          </ComposedChart>
+        </ResponsiveContainer>
+      </div>
+    );
+  };
+  const ShareDonut = ({ groups, labelKey = "name" }) => {
+    const data = groups.map(g => ({ name: g[labelKey] || g.name, value: Math.max(0, chartVal(g)) })).filter(d => d.value > 0);
+    const COLORS = ["#818cf8", "#34d399", "#f59e0b", "#38bdf8", "#f472b6", "#a78bfa", "#fb7185", "#4ade80"];
+    const total = data.reduce((a, d) => a + d.value, 0);
+    return (
+      <div className="flex items-center gap-3 px-3 py-2">
+        <div style={{ width: 120, height: 120 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart><Pie data={data} dataKey="value" innerRadius={34} outerRadius={56} paddingAngle={2} stroke="none">{data.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]}/>)}</Pie>
+              <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 11 }} formatter={(v) => fmtTip(v)}/></PieChart>
+          </ResponsiveContainer>
+        </div>
+        <div className="flex-1 min-w-0 space-y-1">{data.slice(0, 6).map((d, i) => (
+          <div key={d.name} className="flex items-center gap-2 text-[11px]"><span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: COLORS[i % COLORS.length] }}/><span className="text-slate-300 truncate flex-1">{d.name}</span><span className="text-slate-500 tabular-nums">{total > 0 ? ((d.value / total) * 100).toFixed(0) : 0}%</span></div>))}</div>
+      </div>
+    );
+  };
+  const HourStrip = ({ groups }) => <SeriesChart groups={groups} labelKey="label" height={140} compact/>;
   const ItemTable = ({ items, qtyFirst }) => (
     <table className="w-full text-[11px]"><tbody>{items.map((it, i) => (
       <tr key={it.name} className="border-t border-slate-800/60 first:border-t-0"><td className="px-3 py-1.5 text-slate-500 w-6">{i + 1}</td><td className="px-2 py-1.5 text-slate-200"><div>{it.name}</div>{it.category && <div className="text-[10px] text-slate-600">{it.category}</div>}</td>
@@ -32485,13 +32524,13 @@ function SalesDrill({ title, subtitle, rows, prevRows = [], basis = "gross", sto
   const mLabel = M === "revenue" ? (basis === "net" ? "Net revenue" : "Revenue") : M === "orders" ? "Orders" : M === "atv" ? "Average order value" : "Discounts";
   const renderPanel = (key) => {
     switch (key) {
-      case "channel":  return <Panel key={key} title={`${mLabel} by channel`}><GroupTable groups={insight.channel} mode={M}/></Panel>;
-      case "payment":  return <Panel key={key} title={`${mLabel} by payment method`}><GroupTable groups={insight.payment} mode={M}/></Panel>;
-      case "daypart":  return <Panel key={key} title={`${mLabel} by time of day`} note="store-local"><GroupTable groups={insight.daypart} mode={M}/></Panel>;
-      case "day":      return <Panel key={key} title={`${mLabel} by day`}><GroupTable groups={insight.day} labelKey="label" mode={M}/></Panel>;
-      case "weekday":  return <Panel key={key} title={`${mLabel} by weekday`} note="vs same weekdays last period"><GroupTable groups={insight.weekday} mode={M}/></Panel>;
-      case "hour":     return <Panel key={key} title={`${mLabel} by hour`}><HourStrip groups={insight.hour} metric={M === "orders" ? "orders" : M === "discount" ? "discount" : "revenue"}/></Panel>;
-      case "valueBands":return <Panel key={key} title="Order value distribution" note="how many orders fall in each band"><GroupTable groups={insight.valueBands.map(b => ({ ...b, discount: 0, discounted: 0 }))} mode="orders"/></Panel>;
+      case "channel":  return <Panel key={key} title={`${mLabel} by channel`}>{M !== "atv" && <ShareDonut groups={insight.channel}/>}<GroupTable groups={insight.channel} mode={M}/></Panel>;
+      case "payment":  return <Panel key={key} title={`${mLabel} by payment method`}>{M !== "atv" && <ShareDonut groups={insight.payment}/>}<GroupTable groups={insight.payment} mode={M}/></Panel>;
+      case "daypart":  return <Panel key={key} title={`${mLabel} by time of day`} note="store-local · dotted = previous"><SeriesChart groups={insight.daypart} height={130}/><GroupTable groups={insight.daypart} mode={M}/></Panel>;
+      case "day":      return <Panel key={key} title={`${mLabel} by day`} note="bars = this period · dotted = previous" wide={insight.day.length > 8}><SeriesChart groups={insight.day} labelKey="label" height={160} compact={insight.day.length > 14}/><GroupTable groups={insight.day} labelKey="label" mode={M}/></Panel>;
+      case "weekday":  return <Panel key={key} title={`${mLabel} by weekday`} note="vs same weekdays last period"><SeriesChart groups={insight.weekday} height={130}/><GroupTable groups={insight.weekday} mode={M}/></Panel>;
+      case "hour":     return <Panel key={key} title={`${mLabel} by hour`} note="store-local" wide><HourStrip groups={insight.hour}/></Panel>;
+      case "valueBands":return <Panel key={key} title="Order value distribution" note="how many orders fall in each band"><SeriesChart groups={insight.valueBands.map(b => ({ ...b, discount: 0 }))} height={130} metricOverride="orders"/><GroupTable groups={insight.valueBands.map(b => ({ ...b, discount: 0, discounted: 0 }))} mode="orders"/></Panel>;
       case "itemBands": return <Panel key={key} title="ATV by basket size" note="more items per order lifts ATV"><GroupTable groups={insight.itemBands} mode="atv"/></Panel>;
       case "discBands": return <Panel key={key} title="Discount size" note="how big each discount was"><GroupTable groups={insight.discBands} mode="orders"/></Panel>;
       case "discItems": return <Panel key={key} title="Items most often in discounted orders"><ItemTable items={insight.discountedItems}/></Panel>;
@@ -32528,7 +32567,7 @@ function SalesDrill({ title, subtitle, rows, prevRows = [], basis = "gross", sto
   const Th = ({ k, children, right }) => <th onClick={() => k && setSortKey(k)} className={`px-3 py-2 font-semibold uppercase tracking-wider text-[10px] ${right ? "text-right" : "text-left"} ${k ? "cursor-pointer hover:text-white" : ""} ${sortKey === k ? "text-indigo-300" : ""}`}>{children}</th>;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={onClose}>
-      <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-4xl w-full max-h-[85vh] flex flex-col shadow-2xl" onClick={e => e.stopPropagation()}>
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-5xl w-full h-[88vh] flex flex-col shadow-2xl overflow-hidden" onClick={e => e.stopPropagation()}>
         <div className="flex items-start justify-between gap-3 px-5 py-3.5 border-b border-slate-800">
           <div className="min-w-0">
             <h3 className="text-sm font-bold text-white">{title}</h3>
@@ -32561,12 +32600,14 @@ function SalesDrill({ title, subtitle, rows, prevRows = [], basis = "gross", sto
           );
         })()}
         {view === "insights" && (
-          <div className="overflow-auto flex-1 p-3 grid grid-cols-1 md:grid-cols-2 gap-3 content-start">
-            {panels.map(renderPanel)}
+          <div className="overflow-y-auto flex-1 min-h-0 p-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-start">
+              {panels.map(renderPanel)}
+            </div>
           </div>
         )}
         {view === "category" && (
-          <div className="overflow-auto flex-1">
+          <div className="overflow-auto flex-1 min-h-0">
             {byCategory.length === 0 && <div className="px-4 py-8 text-center text-xs text-slate-600">No line items recorded for these sales.</div>}
             <table className="w-full text-xs">
               <thead className="sticky top-0 bg-slate-900 z-10"><tr className="text-slate-500 border-b border-slate-800">
@@ -32612,7 +32653,7 @@ function SalesDrill({ title, subtitle, rows, prevRows = [], basis = "gross", sto
           <Search size={13} className="text-slate-500"/>
           <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search sale id, channel, payment or item…" className="flex-1 bg-transparent text-xs text-white focus:outline-none placeholder:text-slate-600"/>
         </div>
-        <div className="overflow-auto flex-1">
+        <div className="overflow-auto flex-1 min-h-0">
           <table className="w-full text-xs">
             <thead className="sticky top-0 bg-slate-900 z-10"><tr className="text-slate-500 border-b border-slate-800">
               <Th k="time">When</Th><Th>Sale</Th><Th k="channel">Channel</Th><Th>Payment</Th><Th right>Items</Th><Th right>Discount</Th><Th k="amount" right>{basis === "net" ? "Net" : "Total"}</Th>
@@ -69408,7 +69449,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: ANALYTICS-DRILL 2026-10-04e (each tile drills into its own metric only, with vs-previous)");
+      console.log("CB build: ANALYTICS-DRILL 2026-10-04f (charts in drills, layout fix)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
