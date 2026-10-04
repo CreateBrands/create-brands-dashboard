@@ -30954,6 +30954,8 @@ function ForecastPanel({ storeId, stores }) {
   const [rows, setRows] = useState([]);
   const [lastWeek, setLastWeek] = useState([]);      // actuals for the same weekdays, 7 days earlier
   const [accRows, setAccRows] = useState([]);        // last 28 days of 1-day-ahead accuracy
+  const [todayFc, setTodayFc] = useState(null);      // { forecast, soFar } for the selected store
+  const [recent, setRecent] = useState([]);          // last 7 days: forecast vs actual
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedDate, setSelectedDate] = useState(null);
@@ -30969,12 +30971,23 @@ function ForecastPanel({ storeId, stores }) {
     const lwTo   = new Date(to);   lwTo.setDate(lwTo.getDate() - 7);
     const accFrom = new Date(base); accFrom.setDate(base.getDate() - 28);
     setLoading(true); setError(null);
+    const r7 = new Date(base); r7.setDate(base.getDate() - 7);
     Promise.all([
       fetchStoreDayForecasts({ from: fmt(from), to: fmt(to) }),
       fetchStoreDayAggregates({ from: fmt(lwFrom), to: fmt(lwTo) }),
       fetchForecastAccuracyRows({ from: fmt(accFrom), to: fmt(base), horizon: 1 }),
+      fetchStoreDayForecasts({ from: fmt(base), to: fmt(base) }),
+      storeId ? fetchStoreSalesDetailed({ storeId, from: fmt(base), to: fmt(base) }).catch(() => []) : Promise.resolve([]),
     ])
-      .then(([f, lw, acc]) => { if (cancelled) return; setRows(f); setLastWeek(lw); setAccRows(acc); })
+      .then(([f, lw, acc, tf, ts]) => {
+        if (cancelled) return;
+        setRows(f); setLastWeek(lw); setAccRows(acc);
+        setRecent(acc.filter(a => a.date >= fmt(r7)));
+        const tfs = storeId ? tf.filter(r => r.storeId === storeId) : tf;
+        const fc = tfs.reduce((a, r) => a + r.forecastRevenue, 0);
+        const soFar = (ts || []).filter(x => !x.isCancelled).reduce((a, x) => a + (x.amountTotal || 0), 0);
+        setTodayFc(tfs.length ? { forecast: fc, soFar: storeId ? soFar : null, orders: (ts || []).filter(x => !x.isCancelled).length } : null);
+      })
       .catch(e => { if (!cancelled) setError(e?.message || String(e)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -31038,18 +31051,47 @@ function ForecastPanel({ storeId, stores }) {
       <div className="flex items-start justify-between mb-3 gap-3 flex-wrap">
         <div>
           <h3 className="text-sm font-bold text-white flex items-center gap-2"><TrendingUp size={15}/> Forecast — next 7 days</h3>
-          {!loading && !error && days.length > 0 && (
-            <div className="mt-1 flex items-baseline gap-2">
-              <span className="text-2xl font-black text-white tabular-nums">{fmtMoney(total)}</span>
-              {totalLw != null && <span className="text-xs text-slate-400">vs {fmtMoney(totalLw)} last week <Delta cur={total} prev={totalLw}/></span>}
-            </div>
-          )}
+          {!loading && !error && days.length > 0 && (() => {
+            const best = [...days].sort((a, b) => b.revenue - a.revenue)[0]; const quiet = [...days].sort((a, b) => a.revenue - b.revenue)[0];
+            return (
+              <div className="mt-1">
+                <div className="flex items-baseline gap-2">
+                  <span className="text-2xl font-black text-white tabular-nums">{fmtMoney(total)}</span>
+                  {totalLw != null && <span className="text-xs text-slate-400">vs {fmtMoney(totalLw)} last week <Delta cur={total} prev={totalLw}/></span>}
+                </div>
+                <div className="text-[11px] text-slate-500 mt-0.5">Busiest <span className="text-slate-300 font-semibold">{dayLabel(best.date).split(" ")[0]}</span> {fmtMoney(best.revenue)} · quietest <span className="text-slate-300 font-semibold">{dayLabel(quiet.date).split(" ")[0]}</span> {fmtMoney(quiet.revenue)}{days.reduce((a, d) => a + d.orders, 0) > 0 && <> · ~{Math.round(days.reduce((a, d) => a + d.orders, 0)).toLocaleString()} orders</>}</div>
+              </div>
+            );
+          })()}
         </div>
         <button onClick={() => setShowAccuracy(true)} title={acc ? `Median one-day-ahead error over the last ${acc.days} store-days. ${acc.within15}% of days landed within ±15%.${acc.excluded.length ? ` Excluded: ${acc.excluded.map(e => `${storeName(e.sid)} (${e.reason})`).join(", ")}.` : ""}` : "Accuracy warming up"}
           className="text-[10px] px-2.5 py-1 rounded-full border border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200 text-right">
           {acc ? <>typically within <span className="text-slate-200 font-semibold">±{acc.median.toFixed(0)}%</span> · {acc.within15}% of days inside ±15%{acc.excluded.length ? <span className="text-amber-400/80"> · {acc.excluded.length} excluded</span> : null}</> : "accuracy warming up"}
         </button>
       </div>
+      {!loading && !error && todayFc && (
+        <div className="mb-3 flex items-center gap-4 rounded-xl border border-slate-800 bg-slate-950/50 px-4 py-2.5">
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">Today</div>
+            <div className="text-sm font-bold text-white tabular-nums">{fmtMoney(todayFc.forecast)} <span className="text-[11px] font-normal text-slate-500">forecast</span></div>
+          </div>
+          {todayFc.soFar != null && (() => {
+            const pctOf = todayFc.forecast > 0 ? (todayFc.soFar / todayFc.forecast) * 100 : 0;
+            const h = new Date().getHours(); const expectedShare = Math.min(100, Math.max(0, ((h - 8) / 14) * 100));   // crude: trading 8am–10pm
+            const pace = pctOf - expectedShare;
+            return (
+              <div className="flex-1">
+                <div className="flex items-center justify-between text-[11px]"><span className="text-slate-400">So far <span className="text-slate-100 font-semibold tabular-nums">{fmtMoney(todayFc.soFar)}</span> · {todayFc.orders} orders</span>
+                  <span className={`font-semibold ${pace > 8 ? "text-emerald-400" : pace < -8 ? "text-red-400" : "text-slate-400"}`}>{pctOf.toFixed(0)}% of forecast{h >= 8 && h < 22 ? ` · ${pace > 8 ? "ahead of" : pace < -8 ? "behind" : "on"} pace` : ""}</span></div>
+                <div className="relative h-2 mt-1.5 bg-slate-800 rounded-full overflow-hidden">
+                  <div className="absolute inset-y-0 left-0 bg-indigo-500 rounded-full" style={{ width: `${Math.min(100, pctOf)}%` }}/>
+                  {h >= 8 && h < 22 && <div className="absolute inset-y-0 w-px bg-slate-300/70" style={{ left: `${expectedShare}%` }} title="where you'd expect to be at this time of day"/>}
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
       {loading ? (
         <div className="text-xs text-slate-600">Loading forecast…</div>
       ) : error ? (
@@ -31069,7 +31111,7 @@ function ForecastPanel({ storeId, stores }) {
                 <div className="absolute inset-y-0 left-0 bg-indigo-500/80 rounded" style={{ width: `${Math.round(100 * d.revenue / maxRev)}%` }}/>
                 {d.lastWeek != null && <div className="absolute inset-y-0 left-0 border border-slate-400/70 rounded pointer-events-none" style={{ width: `${Math.round(100 * d.lastWeek / maxRev)}%` }} title={`Last week: ${fmtMoney(d.lastWeek)}`}/>}
               </div>
-              <div className="w-20 text-right text-slate-100 font-bold tabular-nums">{fmtMoney(d.revenue)}</div>
+              <div className="w-20 text-right"><div className="text-slate-100 font-bold tabular-nums">{fmtMoney(d.revenue)}</div>{d.orders > 0 && <div className="text-[9px] text-slate-500 tabular-nums">{Math.round(d.orders)} orders · {fmtMoney(d.revenue / d.orders)}</div>}</div>
               <div className="w-24 text-right">{d.lastWeek != null ? <><span className="text-slate-500 tabular-nums">{fmtMoney(d.lastWeek)}</span> <Delta cur={d.revenue} prev={d.lastWeek}/></> : <span className="text-slate-700">—</span>}</div>
               <div className="w-28 flex items-center justify-end gap-1 flex-wrap">
                 {d.events.map(ev => <span key={ev} className="text-[9px] px-1.5 py-0.5 rounded bg-fuchsia-950/60 border border-fuchsia-800/60 text-fuchsia-300 font-semibold" title={`Calendar event: ${ev}`}>{ev}</span>)}
@@ -31081,6 +31123,35 @@ function ForecastPanel({ storeId, stores }) {
             );
           })}
           <div className="text-[10px] text-slate-600 pt-2 leading-relaxed">Each day is a weighted average of recent same weekdays (closures and odd days excluded), scaled by the store's recent trend and any calendar event. Regenerated nightly. Click a day for store-by-store and hourly detail.</div>
+          {(() => {
+            const scoped = storeId ? recent.filter(r => r.storeId === storeId) : recent;
+            const byDate = {};
+            scoped.forEach(r => { if (r.actualRevenue == null) return; if (!byDate[r.date]) byDate[r.date] = { date: r.date, f: 0, a: 0 }; byDate[r.date].f += r.forecastRevenue; byDate[r.date].a += r.actualRevenue; });
+            const data = Object.values(byDate).sort((x, y) => x.date.localeCompare(y.date)).map(x => ({ ...x, label: dayLabel(x.date).split(" ")[0], err: x.a > 0 ? ((x.f - x.a) / x.a) * 100 : null }));
+            if (data.length < 3) return null;
+            const hits = data.filter(x => x.err != null && Math.abs(x.err) <= 15).length;
+            return (
+              <div className="mt-3 pt-3 border-t border-slate-800">
+                <div className="flex items-baseline justify-between mb-1">
+                  <div className="text-xs font-bold text-white">How last week went <span className="text-[10px] font-normal text-slate-500">forecast (outline) vs actual (bar)</span></div>
+                  <div className="text-[11px] text-slate-400">{hits} of {data.length} days within ±15%</div>
+                </div>
+                <div style={{ height: 120 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={data} margin={{ top: 4, right: 4, left: -18, bottom: 0 }}>
+                      <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" vertical={false}/>
+                      <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 10 }} axisLine={false} tickLine={false}/>
+                      <YAxis tick={{ fill: "#64748b", fontSize: 9 }} axisLine={false} tickLine={false} tickFormatter={v => v >= 1000 ? `${(v / 1000).toFixed(1)}k` : v}/>
+                      <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 11 }} labelStyle={{ color: "#e2e8f0" }} formatter={(v, n) => [fmtMoney(v), n === "a" ? "Actual" : "Forecast"]}/>
+                      <Bar dataKey="a" fill="#818cf8" radius={[3, 3, 0, 0]}/>
+                      <Bar dataKey="f" fill="transparent" stroke="#94a3b8" strokeDasharray="3 2" radius={[3, 3, 0, 0]}/>
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="flex gap-1 mt-1">{data.map(x => <div key={x.date} className={`flex-1 text-center text-[9px] font-semibold tabular-nums rounded py-0.5 ${x.err == null ? "text-slate-600" : Math.abs(x.err) <= 15 ? "bg-emerald-950/50 text-emerald-300" : "bg-red-950/50 text-red-300"}`}>{x.err == null ? "—" : `${x.err > 0 ? "+" : ""}${x.err.toFixed(0)}%`}</div>)}</div>
+              </div>
+            );
+          })()}
         </div>
       )}
       {selectedDate && (
@@ -69507,7 +69578,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: FORECAST-UI 2026-10-04a (forecast panel: week total vs last week, ghost bars, trend/event badges, median chip)");
+      console.log("CB build: FORECAST-UI 2026-10-04b (today pace, busiest/quietest, orders per day, last-week review strip)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
