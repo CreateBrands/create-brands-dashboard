@@ -32377,7 +32377,7 @@ function SalesDrill({ title, subtitle, rows, basis = "gross", store, onClose, pa
   const catTotal = byCategory.reduce((a, c) => a + c.revenue, 0);
 
   // ── ANALYTICS-DRILL 2026-10-04c: insight panels (what an F&B operator asks of this metric) ──
-  const hourOf = (r) => { let h = tzParts(r.saleTime, tz).hour; return h; };
+  const hourOf = (r) => tzParts(r.saleTime, store?.timezone).hour;
   const daypartOf = (r) => { let h = hourOf(r); if (h < 6) h += 24; return h < 12 ? "Morning" : h < 17 ? "Afternoon" : h < 21 ? "Evening" : "Late"; };
   const itemCount = (r) => (r.saleItems || []).reduce((a, it) => a + (Number(it.quantity) || 1), 0);
   const groupBy = (keyFn, order) => {
@@ -69374,7 +69374,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: ANALYTICS-DRILL 2026-10-04c (metric-specific insight panels behind every tile)");
+      console.log("CB build: ANALYTICS-DRILL 2026-10-04d (metric-specific insight panels behind every tile)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
