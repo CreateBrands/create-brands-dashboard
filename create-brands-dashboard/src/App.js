@@ -30956,6 +30956,10 @@ function ForecastPanel({ storeId, stores }) {
   const [accRows, setAccRows] = useState([]);        // last 28 days of 1-day-ahead accuracy
   const [todayFc, setTodayFc] = useState(null);      // { forecast, soFar } for the selected store
   const [recent, setRecent] = useState([]);          // last 7 days: forecast vs actual
+  const [history, setHistory] = useState([]);        // last 8 weeks of actuals (for "why this number")
+  const [labour, setLabour] = useState([]);          // last 4 weeks labour vs revenue (for staffing guidance)
+  const [tab, setTab] = useState("week");            // week | accuracy | drivers | staffing
+  const [openDay, setOpenDay] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedDate, setSelectedDate] = useState(null);
@@ -30972,16 +30976,20 @@ function ForecastPanel({ storeId, stores }) {
     const accFrom = new Date(base); accFrom.setDate(base.getDate() - 28);
     setLoading(true); setError(null);
     const r7 = new Date(base); r7.setDate(base.getDate() - 7);
+    const h56 = new Date(base); h56.setDate(base.getDate() - 56);
+    const l28 = new Date(base); l28.setDate(base.getDate() - 28);
     Promise.all([
       fetchStoreDayForecasts({ from: fmt(from), to: fmt(to) }),
       fetchStoreDayAggregates({ from: fmt(lwFrom), to: fmt(lwTo) }),
       fetchForecastAccuracyRows({ from: fmt(accFrom), to: fmt(base), horizon: 1 }),
       fetchStoreDayForecasts({ from: fmt(base), to: fmt(base) }),
       storeId ? fetchStoreSalesDetailed({ storeId, from: fmt(base), to: fmt(base) }).catch(() => []) : Promise.resolve([]),
+      fetchStoreDayAggregates({ from: fmt(h56), to: fmt(base) }).catch(() => []),
+      fetchLabourVsRevenue({ from: fmt(l28), to: fmt(base) }).catch(() => []),
     ])
-      .then(([f, lw, acc, tf, ts]) => {
+      .then(([f, lw, acc, tf, ts, hist, lab]) => {
         if (cancelled) return;
-        setRows(f); setLastWeek(lw); setAccRows(acc);
+        setRows(f); setLastWeek(lw); setAccRows(acc); setHistory(hist); setLabour(lab);
         setRecent(acc.filter(a => a.date >= fmt(r7)));
         const tfs = storeId ? tf.filter(r => r.storeId === storeId) : tf;
         const fc = tfs.reduce((a, r) => a + r.forecastRevenue, 0);
@@ -31046,6 +31054,46 @@ function ForecastPanel({ storeId, stores }) {
   const Delta = ({ cur, prev }) => prev == null || prev <= 0 ? null : (() => { const p = ((cur - prev) / prev) * 100; const up = p >= 0; return <span className={`text-[10px] font-semibold tabular-nums ${Math.abs(p) < 3 ? "text-slate-500" : up ? "text-emerald-400" : "text-red-400"}`}>{up ? "▲" : "▼"} {Math.abs(p).toFixed(0)}%</span>; })();
   const storeName = (sid) => { const st = (stores || []).find(x => x.id === sid); return st ? (st.shortName || st.name) : sid; };
 
+  // ── FORECAST-UI 2026-10-04c: the analysis behind the numbers ──────────────
+  const analysis = useMemo(() => {
+    const scopedAcc = (storeId ? accRows.filter(r => r.storeId === storeId) : accRows).filter(r => r.actualRevenue != null && r.actualRevenue > 0);
+    const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    // daily (chain-summed) forecast vs actual over 28 days
+    const byDate = {};
+    scopedAcc.forEach(r => { if (!byDate[r.date]) byDate[r.date] = { date: r.date, f: 0, a: 0, stores: new Set() }; byDate[r.date].f += r.forecastRevenue; byDate[r.date].a += r.actualRevenue; byDate[r.date].stores.add(r.storeId); });
+    const daily = Object.values(byDate).sort((x, y) => x.date.localeCompare(y.date)).map(x => ({ ...x, label: x.date.slice(5), err: x.a > 0 ? ((x.f - x.a) / x.a) * 100 : null, dow: dayNames[new Date(x.date + "T00:00:00").getDay()] }));
+    // per-weekday: how accurate, and which way we lean
+    const byDow = {};
+    daily.forEach(d => { if (d.err == null) return; (byDow[d.dow] = byDow[d.dow] || []).push(d.err); });
+    const weekday = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].filter(k => byDow[k]).map(k => { const e = byDow[k]; const abs = e.map(Math.abs); return { dow: k, n: e.length, mape: abs.reduce((a, x) => a + x, 0) / abs.length, bias: e.reduce((a, x) => a + x, 0) / e.length, hit: abs.filter(x => x <= 15).length }; });
+    // weekly MAPE trend (is it getting better?)
+    const byWeek = {};
+    daily.forEach(d => { if (d.err == null) return; const dt = new Date(d.date + "T00:00:00"); const wk = new Date(dt); wk.setDate(dt.getDate() - ((dt.getDay() + 6) % 7)); const key = wk.toISOString().slice(0, 10); (byWeek[key] = byWeek[key] || []).push(Math.abs(d.err)); });
+    const weekly = Object.entries(byWeek).sort().map(([k, e]) => ({ week: `w/c ${k.slice(5)}`, mape: e.reduce((a, x) => a + x, 0) / e.length, n: e.length }));
+    const errs = daily.filter(d => d.err != null).map(d => d.err);
+    const overall = errs.length ? { mape: errs.reduce((a, x) => a + Math.abs(x), 0) / errs.length, bias: errs.reduce((a, x) => a + x, 0) / errs.length, hit: errs.filter(x => Math.abs(x) <= 15).length, n: errs.length } : null;
+    const misses = [...daily].filter(d => d.err != null).sort((a, b) => Math.abs(b.err) - Math.abs(a.err)).slice(0, 5);
+    // per-store (chain view): next-7 total, vs last week, accuracy
+    const perStore = {};
+    (storeId ? [] : rows).forEach(r => { if (!perStore[r.storeId]) perStore[r.storeId] = { storeId: r.storeId, next7: 0, lw: 0, errs: [] }; perStore[r.storeId].next7 += r.forecastRevenue; });
+    lastWeek.forEach(r => { if (perStore[r.storeId]) perStore[r.storeId].lw += r.revenueNet || 0; });
+    accRows.forEach(r => { if (perStore[r.storeId] && r.absPctError != null) perStore[r.storeId].errs.push(pct(r.absPctError)); });
+    const storesTbl = Object.values(perStore).map(x => { const srt = [...x.errs].sort((a, b) => a - b); return { ...x, name: storeName(x.storeId), median: srt.length ? srt[Math.floor(srt.length / 2)] : null, n: srt.length }; }).sort((a, b) => b.next7 - a.next7);
+    // drivers: last 8 same-weekday actuals for each forecast day
+    const hist = storeId ? history.filter(r => r.storeId === storeId) : history;
+    const histByDate = {}; hist.forEach(r => { histByDate[r.date] = (histByDate[r.date] || 0) + (r.revenueNet || 0); });
+    const drivers = days.map(d => { const pts = []; for (let k = 1; k <= 8; k++) { const dd = shiftDate(d.date, -7 * k); if (histByDate[dd] != null) pts.push({ date: dd, v: histByDate[dd] }); } const vals = pts.map(x => x.v); const med = vals.length ? [...vals].sort((a, b) => a - b)[Math.floor(vals.length / 2)] : 0; return { ...d, pts: pts.reverse(), med, outliers: pts.filter(x => med > 0 && x.v < 0.4 * med).length }; });
+    // staffing: revenue per labour hour over the last 4 weeks, by weekday
+    const lab = storeId ? labour.filter(r => r.storeId === storeId) : labour;
+    const splhByDow = {}; lab.forEach(r => { if (!r.hours || !r.revenueNet) return; const k = dayNames[new Date(r.date + "T00:00:00").getDay()]; (splhByDow[k] = splhByDow[k] || { rev: 0, hrs: 0, cost: 0 }); splhByDow[k].rev += r.revenueNet; splhByDow[k].hrs += r.hours; splhByDow[k].cost += r.labourCost || 0; });
+    const staffing = days.map(d => { const k = dayNames[new Date(d.date + "T00:00:00").getDay()]; const x = splhByDow[k]; const splh = x && x.hrs > 0 ? x.rev / x.hrs : null; const rate = x && x.hrs > 0 ? x.cost / x.hrs : null; return { ...d, splh, hoursNeeded: splh ? d.revenue / splh : null, labourCost: splh && rate ? (d.revenue / splh) * rate : null }; });
+    return { daily, weekday, weekly, overall, misses, storesTbl, drivers, staffing, hasLabour: Object.keys(splhByDow).length > 0 };
+  }, [accRows, rows, lastWeek, history, labour, days, storeId, stores]);
+
+  const Tab = ({ id, children }) => <button onClick={() => setTab(id)} className={`px-3 py-1.5 text-xs font-semibold rounded-lg ${tab === id ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white hover:bg-slate-800"}`}>{children}</button>;
+  const Spark = ({ pts, med }) => { const mx = Math.max(1, ...pts.map(p => p.v)); return (
+    <div className="flex items-end gap-px h-8">{pts.map(p => <div key={p.date} className={`flex-1 rounded-t ${med > 0 && p.v < 0.4 * med ? "bg-red-500/70" : "bg-indigo-500/70"}`} style={{ height: `${(p.v / mx) * 100}%` }} title={`${dayLabel(p.date)}: ${fmtMoney(p.v)}${med > 0 && p.v < 0.4 * med ? " · excluded (closure/odd day)" : ""}`}/>)}</div>); };
+
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
       <div className="flex items-start justify-between mb-3 gap-3 flex-wrap">
@@ -31092,13 +31140,93 @@ function ForecastPanel({ storeId, stores }) {
           })()}
         </div>
       )}
+      {!loading && !error && days.length > 0 && (
+        <div className="flex items-center gap-1 mb-3 border-b border-slate-800 pb-2">
+          <Tab id="week">Week ahead</Tab><Tab id="accuracy">Accuracy</Tab><Tab id="drivers">Why these numbers</Tab><Tab id="staffing">Staffing</Tab>{!storeId && <Tab id="stores">By store</Tab>}
+        </div>
+      )}
+      {!loading && !error && days.length > 0 && tab === "accuracy" && (
+        <div className="space-y-4">
+          {analysis.overall ? (
+            <>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                {[["Mean error (28d)", `±${analysis.overall.mape.toFixed(1)}%`], ["Lean", `${analysis.overall.bias > 0 ? "+" : ""}${analysis.overall.bias.toFixed(1)}%`, analysis.overall.bias > 3 ? "over-forecasting" : analysis.overall.bias < -3 ? "under-forecasting" : "balanced"], ["Days inside ±15%", `${analysis.overall.hit} / ${analysis.overall.n}`], ["Best weekday", analysis.weekday.length ? [...analysis.weekday].sort((a, b) => a.mape - b.mape)[0].dow : "—"]].map(([l, v, sub]) => (
+                  <div key={l} className="bg-slate-950/50 border border-slate-800 rounded-xl px-3 py-2"><div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">{l}</div><div className="text-lg font-black text-white tabular-nums leading-tight">{v}</div>{sub && <div className="text-[10px] text-slate-500">{sub}</div>}</div>
+                ))}
+              </div>
+              <div className="bg-slate-950/50 border border-slate-800 rounded-xl p-3">
+                <div className="text-xs font-bold text-white mb-1">Forecast vs actual · last 28 days <span className="text-[10px] font-normal text-slate-500">bars = actual · dotted = forecast made the day before</span></div>
+                <div style={{ height: 160 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <ComposedChart data={analysis.daily} margin={{ top: 4, right: 4, left: -18, bottom: 0 }}>
+                      <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" vertical={false}/>
+                      <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 9 }} interval={3} axisLine={false} tickLine={false}/>
+                      <YAxis tick={{ fill: "#64748b", fontSize: 9 }} axisLine={false} tickLine={false} tickFormatter={v => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : v}/>
+                      <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 11 }} labelStyle={{ color: "#e2e8f0" }} formatter={(v, n) => [fmtMoney(v), n === "a" ? "Actual" : "Forecast"]}/>
+                      <Bar dataKey="a" fill="#818cf8" radius={[2, 2, 0, 0]}/>
+                      <Line dataKey="f" stroke="#e2e8f0" strokeDasharray="4 3" dot={false} strokeWidth={1.5} type="monotone"/>
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="bg-slate-950/50 border border-slate-800 rounded-xl p-3">
+                  <div className="text-xs font-bold text-white mb-2">By weekday <span className="text-[10px] font-normal text-slate-500">where the model struggles</span></div>
+                  <table className="w-full text-[11px]"><thead><tr className="text-slate-500"><th className="text-left font-semibold py-1">Day</th><th className="text-right font-semibold">Error</th><th className="text-right font-semibold">Lean</th><th className="text-right font-semibold">Inside ±15%</th></tr></thead>
+                    <tbody>{analysis.weekday.map(w => <tr key={w.dow} className="border-t border-slate-800/60"><td className="py-1 text-slate-200">{w.dow}</td><td className={`text-right tabular-nums font-semibold ${w.mape <= 12 ? "text-emerald-300" : w.mape <= 20 ? "text-slate-200" : "text-red-300"}`}>±{w.mape.toFixed(0)}%</td><td className={`text-right tabular-nums ${Math.abs(w.bias) < 4 ? "text-slate-500" : w.bias > 0 ? "text-amber-300" : "text-sky-300"}`}>{w.bias > 0 ? "+" : ""}{w.bias.toFixed(0)}%</td><td className="text-right text-slate-400 tabular-nums">{w.hit}/{w.n}</td></tr>)}</tbody></table>
+                </div>
+                <div className="bg-slate-950/50 border border-slate-800 rounded-xl p-3">
+                  <div className="text-xs font-bold text-white mb-2">Week by week <span className="text-[10px] font-normal text-slate-500">is it improving?</span></div>
+                  {analysis.weekly.map(w => <div key={w.week} className="flex items-center gap-2 text-[11px] py-0.5"><span className="w-16 text-slate-400">{w.week}</span><div className="flex-1 h-2 bg-slate-800 rounded-full overflow-hidden"><div className={`h-full rounded-full ${w.mape <= 12 ? "bg-emerald-500" : w.mape <= 20 ? "bg-indigo-500" : "bg-red-500"}`} style={{ width: `${Math.min(100, w.mape * 2.5)}%` }}/></div><span className="w-12 text-right text-slate-200 tabular-nums font-semibold">±{w.mape.toFixed(0)}%</span></div>)}
+                  <div className="text-xs font-bold text-white mt-3 mb-1">Biggest misses</div>
+                  {analysis.misses.map(m => <div key={m.date} className="flex items-center justify-between text-[11px] py-0.5 border-t border-slate-800/60"><span className="text-slate-300">{dayLabel(m.date)}</span><span className="text-slate-500">{fmtMoney(m.f)} vs {fmtMoney(m.a)}</span><span className={`font-semibold tabular-nums ${m.err > 0 ? "text-amber-300" : "text-sky-300"}`}>{m.err > 0 ? "+" : ""}{m.err.toFixed(0)}%</span></div>)}
+                  <div className="text-[10px] text-slate-600 mt-2">Positive = forecast was above actual. A big miss with no calendar event usually means a closure, half-day or till issue nobody logged — add it under Setup → Events and the model stops learning from it.</div>
+                </div>
+              </div>
+            </>
+          ) : <div className="text-xs text-slate-600">Not enough scored days yet — accuracy appears after a couple of weeks of trading.</div>}
+        </div>
+      )}
+      {!loading && !error && days.length > 0 && tab === "drivers" && (
+        <div className="space-y-2">
+          <div className="text-[11px] text-slate-500 mb-1">Each forecast = weighted average of the last 8 same weekdays (red bars were excluded as closures or odd days) × the store's recent trend × any calendar event.</div>
+          {analysis.drivers.map(d => (
+            <div key={d.date} className="bg-slate-950/50 border border-slate-800 rounded-xl px-3 py-2">
+              <div className="flex items-center gap-3">
+                <div className="w-24 text-xs text-slate-200 font-semibold">{dayLabel(d.date)}</div>
+                <div className="w-40"><Spark pts={d.pts} med={d.med}/></div>
+                <div className="flex-1 text-[11px] text-slate-400">
+                  {d.pts.length ? <>Same-weekday median <span className="text-slate-200 font-semibold">{fmtMoney(d.med)}</span>{d.outliers > 0 && <span className="text-red-300"> · {d.outliers} day{d.outliers > 1 ? "s" : ""} excluded</span>}{d.level != null && Math.abs(d.level - 1) >= 0.03 && <> · trend <span className={d.level > 1 ? "text-emerald-300" : "text-amber-300"}>{d.level > 1 ? "+" : "−"}{Math.abs((d.level - 1) * 100).toFixed(0)}%</span></>}{d.events.map(ev => <span key={ev} className="text-fuchsia-300"> · event: {ev}</span>)}</> : "No same-weekday history yet"}
+                </div>
+                <div className="text-right"><div className="text-sm font-bold text-white tabular-nums">{fmtMoney(d.revenue)}</div>{d.lastWeek != null && <div className="text-[10px] text-slate-500">last week {fmtMoney(d.lastWeek)}</div>}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {!loading && !error && days.length > 0 && tab === "staffing" && (
+        <div className="space-y-2">
+          {analysis.hasLabour ? (
+            <>
+              <div className="text-[11px] text-slate-500 mb-1">Hours needed = forecast revenue ÷ this store's usual revenue per labour hour on that weekday (last 4 weeks). A guide for the rota, not a rule.</div>
+              <table className="w-full text-xs"><thead><tr className="text-slate-500 text-[10px] uppercase tracking-wider"><th className="text-left font-semibold py-1.5">Day</th><th className="text-right font-semibold">Forecast</th><th className="text-right font-semibold">Usual £/labour hr</th><th className="text-right font-semibold">Hours needed</th><th className="text-right font-semibold">≈ labour cost</th><th className="text-right font-semibold">≈ labour %</th></tr></thead>
+                <tbody>{analysis.staffing.map(d => <tr key={d.date} className="border-t border-slate-800/60"><td className="py-1.5 text-slate-200">{dayLabel(d.date)}</td><td className="text-right text-white font-semibold tabular-nums">{fmtMoney(d.revenue)}</td><td className="text-right text-slate-400 tabular-nums">{d.splh ? fmtMoney(d.splh) : "—"}</td><td className="text-right text-indigo-300 font-bold tabular-nums">{d.hoursNeeded ? `${d.hoursNeeded.toFixed(1)}h` : "—"}</td><td className="text-right text-slate-300 tabular-nums">{d.labourCost ? fmtMoney(d.labourCost) : "—"}</td><td className={`text-right tabular-nums font-semibold ${d.labourCost && d.revenue > 0 ? ((d.labourCost / d.revenue) > 0.35 ? "text-red-300" : (d.labourCost / d.revenue) > 0.28 ? "text-amber-300" : "text-emerald-300") : "text-slate-600"}`}>{d.labourCost && d.revenue > 0 ? `${((d.labourCost / d.revenue) * 100).toFixed(0)}%` : "—"}</td></tr>)}</tbody>
+                <tfoot><tr className="border-t-2 border-slate-700 font-bold text-white"><td className="py-1.5">Week</td><td className="text-right tabular-nums">{fmtMoney(total)}</td><td></td><td className="text-right text-indigo-300 tabular-nums">{analysis.staffing.reduce((a, d) => a + (d.hoursNeeded || 0), 0).toFixed(0)}h</td><td className="text-right tabular-nums">{fmtMoney(analysis.staffing.reduce((a, d) => a + (d.labourCost || 0), 0))}</td><td className="text-right tabular-nums">{total > 0 ? `${((analysis.staffing.reduce((a, d) => a + (d.labourCost || 0), 0) / total) * 100).toFixed(0)}%` : "—"}</td></tr></tfoot></table>
+            </>
+          ) : <div className="text-xs text-slate-600">No labour data for this scope in the last 4 weeks — staffing guidance needs punches to compare against.</div>}
+        </div>
+      )}
+      {!loading && !error && days.length > 0 && tab === "stores" && !storeId && (
+        <table className="w-full text-xs"><thead><tr className="text-slate-500 text-[10px] uppercase tracking-wider"><th className="text-left font-semibold py-1.5">Store</th><th className="text-right font-semibold">Next 7 days</th><th className="text-right font-semibold">Last week</th><th className="text-right font-semibold">Change</th><th className="text-right font-semibold">Typical error</th></tr></thead>
+          <tbody>{analysis.storesTbl.map(x => <tr key={x.storeId} className="border-t border-slate-800/60"><td className="py-1.5 text-slate-200">{x.name}</td><td className="text-right text-white font-semibold tabular-nums">{fmtMoney(x.next7)}</td><td className="text-right text-slate-400 tabular-nums">{x.lw ? fmtMoney(x.lw) : "—"}</td><td className="text-right"><Delta cur={x.next7} prev={x.lw || null}/></td><td className={`text-right tabular-nums ${x.median == null ? "text-slate-600" : x.median <= 12 ? "text-emerald-300" : x.median <= 20 ? "text-slate-300" : "text-red-300"}`}>{x.median == null ? "—" : `±${x.median.toFixed(0)}%`}{x.n > 0 && x.n < 14 && <span className="text-slate-600"> · new</span>}</td></tr>)}</tbody></table>
+      )}
       {loading ? (
         <div className="text-xs text-slate-600">Loading forecast…</div>
       ) : error ? (
         <div className="text-xs text-amber-300">Forecast unavailable: {error}</div>
       ) : days.length === 0 ? (
         <div className="text-xs text-slate-600">No forecast yet — forecasts generate nightly once sales history exists.</div>
-      ) : (
+      ) : tab !== "week" ? null : (
         <div className="space-y-1">
           <div className="flex items-center gap-2 text-[10px] text-slate-600 px-0.5"><div className="w-24"></div><div className="flex-1 flex items-center gap-3"><span className="inline-flex items-center gap-1"><span className="w-3 h-2 rounded-sm bg-indigo-500/80 inline-block"/>forecast</span><span className="inline-flex items-center gap-1"><span className="w-3 h-2 rounded-sm border border-slate-500 inline-block"/>last week actual</span></div><div className="w-20 text-right">forecast</div><div className="w-24 text-right">vs last wk</div><div className="w-28"></div></div>
           {days.map(d => {
@@ -69578,7 +69706,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: FORECAST-UI 2026-10-04b (today pace, busiest/quietest, orders per day, last-week review strip)");
+      console.log("CB build: FORECAST-UI 2026-10-04c (full analysis: accuracy, drivers, staffing, by store)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
