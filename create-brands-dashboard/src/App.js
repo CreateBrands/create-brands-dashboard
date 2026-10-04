@@ -30960,6 +30960,7 @@ function ForecastPanel({ storeId, stores }) {
   const [labour, setLabour] = useState([]);          // last 4 weeks labour vs revenue (for staffing guidance)
   const [tab, setTab] = useState("week");            // week | accuracy | drivers | staffing
   const [compare, setCompare] = useState("lw");      // lw (last week) | lm (4 weeks ago)
+  const [adjust, setAdjust] = useState(0);           // what-if: % applied to the whole week (staffing tab)
   const [hourly, setHourly] = useState([]);          // store-scoped: last 28 days of sales for hourly profile
   const [openDay, setOpenDay] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -31109,6 +31110,28 @@ function ForecastPanel({ storeId, stores }) {
     return { daily, weekday, weekly, overall, misses, storesTbl, drivers: driversH, staffing, hasLabour: Object.keys(splhByDow).length > 0 };
   }, [accRows, rows, lastWeek, history, labour, hourly, days, storeId, stores]);
 
+  // ── FORECAST-UI 2026-10-04e: the week in plain English (rule-based, no model guesswork) ──
+  const briefing = useMemo(() => {
+    if (!days.length) return [];
+    const out = [];
+    const dow = (d) => dayLabel(d).split(" ")[0];
+    const sorted = [...days].sort((a, b) => b.revenue - a.revenue);
+    const big = sorted[0], small = sorted[sorted.length - 1];
+    if (big && small && big !== small) out.push({ tone: "info", text: `${dow(big.date)} is the big day (${fmtMoney(big.revenue)}, ${Math.round(big.revenue / Math.max(1, small.revenue) * 10) / 10}× ${dow(small.date)}). Stock and staff for it.` });
+    // week vs last week
+    if (totalLw != null && totalLw > 0) { const p = ((total - totalLw) / totalLw) * 100; if (Math.abs(p) >= 5) out.push({ tone: p > 0 ? "good" : "warn", text: `Week forecast ${p > 0 ? "up" : "down"} ${Math.abs(p).toFixed(0)}% on last week (${fmtMoney(total)} vs ${fmtMoney(totalLw)}).` }); else out.push({ tone: "info", text: `Week forecast in line with last week (${fmtMoney(total)}).` }); }
+    // days that move a lot vs last week
+    days.forEach(d => { if (d.lastWeek != null && d.lastWeek > 0) { const p = ((d.revenue - d.lastWeek) / d.lastWeek) * 100; if (Math.abs(p) >= 20) out.push({ tone: p > 0 ? "good" : "warn", text: `${dow(d.date)} forecast ${p > 0 ? "up" : "down"} ${Math.abs(p).toFixed(0)}% vs last ${dow(d.date)}${d.events.length ? ` — calendar: ${d.events.join(", ")}` : d.level != null && Math.abs(d.level - 1) >= 0.05 ? ` — recent trend ${d.level > 1 ? "up" : "down"} ${Math.abs((d.level - 1) * 100).toFixed(0)}%` : " — last week looks like the odd one, not this forecast"}.` }); } });
+    // model lean by weekday: warn where it has under/over-called repeatedly
+    (analysis.weekday || []).forEach(w => { if (w.n >= 3 && Math.abs(w.bias) >= 10) { const target = days.find(d => dow(d.date) === w.dow); if (target) out.push({ tone: "warn", text: `Model has ${w.bias < 0 ? "under" : "over"}-called ${w.dow}s by ~${Math.abs(w.bias).toFixed(0)}% recently — treat ${dow(target.date)}'s ${fmtMoney(target.revenue)} as a ${w.bias < 0 ? "floor" : "ceiling"}.` }); } });
+    // thin / excluded history
+    const thin = days.filter(d => d.thin); if (thin.length) out.push({ tone: "muted", text: `${thin.map(d => dow(d.date)).join(", ")} ${thin.length > 1 ? "rest" : "rests"} on under 3 weeks of history — expect wider misses until it firms up.` });
+    const excl = (analysis.drivers || []).filter(d => d.outliers > 0); if (excl.length) out.push({ tone: "muted", text: `Odd days were excluded from ${excl.map(d => dow(d.date)).join(", ")} (closures or part-days). If any was a real trading day, log it under Setup → Events so it's not ignored next time.` });
+    // staffing hint
+    if (analysis.hasLabour) { const tot = analysis.staffing.reduce((a, d) => a + (d.hoursNeeded || 0), 0); const cost = analysis.staffing.reduce((a, d) => a + (d.labourCost || 0), 0); if (tot > 0) out.push({ tone: "info", text: `At your usual productivity this week needs ≈ ${tot.toFixed(0)} labour hours (${fmtMoney(cost)}, ${total > 0 ? ((cost / total) * 100).toFixed(0) : "—"}% of forecast). See Staffing for the day split.` }); }
+    return out.slice(0, 7);
+  }, [days, analysis, total, totalLw]);
+
   const Tab = ({ id, children }) => <button onClick={() => setTab(id)} className={`px-3 py-1.5 text-xs font-semibold rounded-lg ${tab === id ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white hover:bg-slate-800"}`}>{children}</button>;
   const Spark = ({ pts, med }) => { const mx = Math.max(1, ...pts.map(p => p.v)); return (
     <div className="flex items-end gap-px h-8">{pts.map(p => <div key={p.date} className={`flex-1 rounded-t ${med > 0 && p.v < 0.4 * med ? "bg-red-500/70" : "bg-indigo-500/70"}`} style={{ height: `${(p.v / mx) * 100}%` }} title={`${dayLabel(p.date)}: ${fmtMoney(p.v)}${med > 0 && p.v < 0.4 * med ? " · excluded (closure/odd day)" : ""}`}/>)}</div>); };
@@ -31247,16 +31270,42 @@ function ForecastPanel({ storeId, stores }) {
           {analysis.hasLabour ? (
             <>
               <div className="text-[11px] text-slate-500 mb-1">Hours needed = forecast revenue ÷ this store's usual revenue per labour hour on that weekday (last 4 weeks). A guide for the rota, not a rule.</div>
+              <div className="flex items-center gap-3 mb-2 rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2">
+                <span className="text-[11px] text-slate-400 whitespace-nowrap">What if the week runs</span>
+                <input type="range" min={-30} max={30} step={5} value={adjust} onChange={e => setAdjust(Number(e.target.value))} className="flex-1 accent-indigo-500"/>
+                <span className={`text-xs font-bold tabular-nums w-14 text-right ${adjust > 0 ? "text-emerald-300" : adjust < 0 ? "text-amber-300" : "text-slate-300"}`}>{adjust > 0 ? "+" : ""}{adjust}%</span>
+                {adjust !== 0 && <button onClick={() => setAdjust(0)} className="text-[10px] text-slate-500 hover:text-white">reset</button>}
+              </div>
               <table className="w-full text-xs"><thead><tr className="text-slate-500 text-[10px] uppercase tracking-wider"><th className="text-left font-semibold py-1.5">Day</th><th className="text-right font-semibold">Forecast</th><th className="text-right font-semibold">Usual £/labour hr</th><th className="text-right font-semibold">Hours needed</th><th className="text-right font-semibold">≈ labour cost</th><th className="text-right font-semibold">≈ labour %</th></tr></thead>
-                <tbody>{analysis.staffing.map(d => <tr key={d.date} className="border-t border-slate-800/60"><td className="py-1.5 text-slate-200">{dayLabel(d.date)}</td><td className="text-right text-white font-semibold tabular-nums">{fmtMoney(d.revenue)}</td><td className="text-right text-slate-400 tabular-nums">{d.splh ? fmtMoney(d.splh) : "—"}</td><td className="text-right text-indigo-300 font-bold tabular-nums">{d.hoursNeeded ? `${d.hoursNeeded.toFixed(1)}h` : "—"}</td><td className="text-right text-slate-300 tabular-nums">{d.labourCost ? fmtMoney(d.labourCost) : "—"}</td><td className={`text-right tabular-nums font-semibold ${d.labourCost && d.revenue > 0 ? ((d.labourCost / d.revenue) > 0.35 ? "text-red-300" : (d.labourCost / d.revenue) > 0.28 ? "text-amber-300" : "text-emerald-300") : "text-slate-600"}`}>{d.labourCost && d.revenue > 0 ? `${((d.labourCost / d.revenue) * 100).toFixed(0)}%` : "—"}</td></tr>)}</tbody>
-                <tfoot><tr className="border-t-2 border-slate-700 font-bold text-white"><td className="py-1.5">Week</td><td className="text-right tabular-nums">{fmtMoney(total)}</td><td></td><td className="text-right text-indigo-300 tabular-nums">{analysis.staffing.reduce((a, d) => a + (d.hoursNeeded || 0), 0).toFixed(0)}h</td><td className="text-right tabular-nums">{fmtMoney(analysis.staffing.reduce((a, d) => a + (d.labourCost || 0), 0))}</td><td className="text-right tabular-nums">{total > 0 ? `${((analysis.staffing.reduce((a, d) => a + (d.labourCost || 0), 0) / total) * 100).toFixed(0)}%` : "—"}</td></tr></tfoot></table>
+                <tbody>{analysis.staffing.map(d => { const k = 1 + adjust / 100; const rev = d.revenue * k, hrs = d.hoursNeeded ? d.hoursNeeded * k : null, cost = d.labourCost ? d.labourCost * k : null; return (<tr key={d.date} className="border-t border-slate-800/60"><td className="py-1.5 text-slate-200">{dayLabel(d.date)}</td><td className="text-right text-white font-semibold tabular-nums">{fmtMoney(rev)}</td><td className="text-right text-slate-400 tabular-nums">{d.splh ? fmtMoney(d.splh) : "—"}</td><td className="text-right text-indigo-300 font-bold tabular-nums">{hrs ? `${hrs.toFixed(1)}h` : "—"}{hrs && d.hoursNeeded && adjust !== 0 && <span className="text-[9px] text-slate-500 font-normal"> ({adjust > 0 ? "+" : ""}{(hrs - d.hoursNeeded).toFixed(1)})</span>}</td><td className="text-right text-slate-300 tabular-nums">{cost ? fmtMoney(cost) : "—"}</td><td className={`text-right tabular-nums font-semibold ${cost && rev > 0 ? ((cost / rev) > 0.35 ? "text-red-300" : (cost / rev) > 0.28 ? "text-amber-300" : "text-emerald-300") : "text-slate-600"}`}>{cost && rev > 0 ? `${((cost / rev) * 100).toFixed(0)}%` : "—"}</td></tr>); })}</tbody>
+                <tfoot>{(() => { const k = 1 + adjust / 100; const hrs = analysis.staffing.reduce((a, d) => a + (d.hoursNeeded || 0), 0) * k; const cost = analysis.staffing.reduce((a, d) => a + (d.labourCost || 0), 0) * k; const rev = total * k; return (<tr className="border-t-2 border-slate-700 font-bold text-white"><td className="py-1.5">Week</td><td className="text-right tabular-nums">{fmtMoney(rev)}</td><td></td><td className="text-right text-indigo-300 tabular-nums">{hrs.toFixed(0)}h</td><td className="text-right tabular-nums">{fmtMoney(cost)}</td><td className="text-right tabular-nums">{rev > 0 ? `${((cost / rev) * 100).toFixed(0)}%` : "—"}</td></tr>); })()}</tfoot></table>
             </>
           ) : <div className="text-xs text-slate-600">No labour data for this scope in the last 4 weeks — staffing guidance needs punches to compare against.</div>}
         </div>
       )}
+      {!loading && !error && days.length > 0 && tab === "stores" && !storeId && (() => {
+        const dates = days.map(d => d.date);
+        const grid = {}; rows.forEach(r => { (grid[r.storeId] = grid[r.storeId] || {})[r.date] = r.forecastRevenue; });
+        const lwGrid = {}; lastWeek.forEach(r => { (lwGrid[r.storeId] = lwGrid[r.storeId] || {})[r.date] = (lwGrid[r.storeId]?.[r.date] || 0) + (r.revenueNet || 0); });
+        return (
+          <div className="mb-4 overflow-x-auto">
+            <div className="text-xs font-bold text-white mb-1">Week at a glance <span className="text-[10px] font-normal text-slate-500">colour = change vs last week · green up, red down</span></div>
+            <table className="text-[11px] min-w-full"><thead><tr className="text-slate-500"><th className="text-left font-semibold py-1 pr-2">Store</th>{dates.map(d => <th key={d} className="text-right font-semibold px-1">{dayLabel(d).split(" ")[0]}</th>)}<th className="text-right font-semibold pl-2">Week</th></tr></thead>
+              <tbody>{analysis.storesTbl.map(x => <tr key={x.storeId} className="border-t border-slate-800/60"><td className="py-1 pr-2 text-slate-200 whitespace-nowrap">{x.name}</td>{dates.map(d => { const v = grid[x.storeId]?.[d]; const lw = lwGrid[x.storeId]?.[shiftDate(d, -7)]; const p = v != null && lw ? ((v - lw) / lw) * 100 : null; const bg = p == null ? "" : p > 10 ? "bg-emerald-900/50" : p > 3 ? "bg-emerald-950/40" : p < -10 ? "bg-red-900/50" : p < -3 ? "bg-red-950/40" : "bg-slate-800/40"; return <td key={d} className={`text-right px-1 py-1 tabular-nums ${bg} ${v == null ? "text-slate-700" : "text-slate-200"}`} title={p == null ? "" : `${p > 0 ? "+" : ""}${p.toFixed(0)}% vs last ${dayLabel(d).split(" ")[0]}`}>{v == null ? "—" : fmtMoney(v)}</td>; })}<td className="text-right pl-2 py-1 font-bold text-white tabular-nums">{fmtMoney(x.next7)}</td></tr>)}</tbody></table>
+          </div>
+        );
+      })()}
       {!loading && !error && days.length > 0 && tab === "stores" && !storeId && (
         <table className="w-full text-xs"><thead><tr className="text-slate-500 text-[10px] uppercase tracking-wider"><th className="text-left font-semibold py-1.5">Store</th><th className="text-right font-semibold">Next 7 days</th><th className="text-right font-semibold">Last week</th><th className="text-right font-semibold">Change</th><th className="text-right font-semibold">Typical error</th></tr></thead>
           <tbody>{analysis.storesTbl.map(x => <tr key={x.storeId} className="border-t border-slate-800/60"><td className="py-1.5 text-slate-200">{x.name}</td><td className="text-right text-white font-semibold tabular-nums">{fmtMoney(x.next7)}</td><td className="text-right text-slate-400 tabular-nums">{x.lw ? fmtMoney(x.lw) : "—"}</td><td className="text-right"><Delta cur={x.next7} prev={x.lw || null}/></td><td className={`text-right tabular-nums ${x.median == null ? "text-slate-600" : x.median <= 12 ? "text-emerald-300" : x.median <= 20 ? "text-slate-300" : "text-red-300"}`}>{x.median == null ? "—" : `±${x.median.toFixed(0)}%`}{x.n > 0 && x.n < 14 && <span className="text-slate-600"> · new</span>}</td></tr>)}</tbody></table>
+      )}
+      {!loading && !error && days.length > 0 && tab === "week" && briefing.length > 0 && (
+        <div className="mb-3 rounded-xl border border-slate-800 bg-slate-950/50 px-4 py-3">
+          <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1.5">This week in brief</div>
+          <ul className="space-y-1">
+            {briefing.map((b, i) => <li key={i} className="flex items-start gap-2 text-[12px] leading-snug"><span className={`mt-1.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${b.tone === "good" ? "bg-emerald-400" : b.tone === "warn" ? "bg-amber-400" : b.tone === "muted" ? "bg-slate-600" : "bg-indigo-400"}`}/><span className={b.tone === "muted" ? "text-slate-500" : "text-slate-200"}>{b.text}</span></li>)}
+          </ul>
+        </div>
       )}
       {loading ? (
         <div className="text-xs text-slate-600">Loading forecast…</div>
@@ -69748,7 +69797,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: FORECAST-UI 2026-10-04d (likely range, compare toggle, peak hours, hourly shape, export)");
+      console.log("CB build: FORECAST-UI 2026-10-04e (plain-English briefing, what-if staffing, chain heat grid)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
