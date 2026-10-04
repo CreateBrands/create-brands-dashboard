@@ -30949,8 +30949,11 @@ function ForecastDayModal({ date, rows, stores, scopedStoreId, onClose }) {
 // is labelled per day; the accuracy badge says "warming up" until at least 14
 // scored days exist, then reports real 1-day-out MAPE.
 function ForecastPanel({ storeId, stores }) {
+  // FORECAST-UI 2026-10-04a: week total vs last week, last-week ghost per day, trend/basis/event badges,
+  // median-based accuracy chip with named exclusions. Model notes come from factors (v3) when present.
   const [rows, setRows] = useState([]);
-  const [accuracy, setAccuracy] = useState(null);
+  const [lastWeek, setLastWeek] = useState([]);      // actuals for the same weekdays, 7 days earlier
+  const [accRows, setAccRows] = useState([]);        // last 28 days of 1-day-ahead accuracy
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [selectedDate, setSelectedDate] = useState(null);
@@ -30962,45 +30965,89 @@ function ForecastPanel({ storeId, stores }) {
     const base = new Date();
     const from = new Date(base); from.setDate(base.getDate() + 1);
     const to   = new Date(base); to.setDate(base.getDate() + 7);
+    const lwFrom = new Date(from); lwFrom.setDate(lwFrom.getDate() - 7);
+    const lwTo   = new Date(to);   lwTo.setDate(lwTo.getDate() - 7);
+    const accFrom = new Date(base); accFrom.setDate(base.getDate() - 28);
     setLoading(true); setError(null);
     Promise.all([
       fetchStoreDayForecasts({ from: fmt(from), to: fmt(to) }),
-      fetchForecastAccuracySummary(),
+      fetchStoreDayAggregates({ from: fmt(lwFrom), to: fmt(lwTo) }),
+      fetchForecastAccuracyRows({ from: fmt(accFrom), to: fmt(base), horizon: 1 }),
     ])
-      .then(([f, acc]) => {
-        if (cancelled) return;
-        setRows(f);
-        setAccuracy(acc.find(a => a.horizonDays === 1) || null);
-      })
+      .then(([f, lw, acc]) => { if (cancelled) return; setRows(f); setLastWeek(lw); setAccRows(acc); })
       .catch(e => { if (!cancelled) setError(e?.message || String(e)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [storeId]);
 
+  const shiftDate = (d, n) => { const x = new Date(d + "T00:00:00"); x.setDate(x.getDate() + n); return `${x.getFullYear()}-${String(x.getMonth()+1).padStart(2,"0")}-${String(x.getDate()).padStart(2,"0")}`; };
+
   const days = useMemo(() => {
     const scoped = storeId ? rows.filter(r => r.storeId === storeId) : rows;
+    const lwScoped = storeId ? lastWeek.filter(r => r.storeId === storeId) : lastWeek;
+    const lwByDate = {};
+    lwScoped.forEach(r => { lwByDate[r.date] = (lwByDate[r.date] || 0) + (r.revenueNet || 0); });
     const byDate = {};
     scoped.forEach(r => {
-      if (!byDate[r.date]) byDate[r.date] = { date: r.date, revenue: 0, thin: false };
-      byDate[r.date].revenue += r.forecastRevenue;
-      if ((r.basisPoints || 0) < 3) byDate[r.date].thin = true;
+      if (!byDate[r.date]) byDate[r.date] = { date: r.date, revenue: 0, orders: 0, thin: false, stores: 0, levels: [], events: new Set(), minBasis: 99 };
+      const d = byDate[r.date];
+      d.revenue += r.forecastRevenue; d.orders += r.forecastOrders || 0; d.stores++;
+      if ((r.basisPoints || 0) < 3) d.thin = true;
+      d.minBasis = Math.min(d.minBasis, r.basisPoints || 0);
+      const lf = r.factors && r.factors.level_factor != null ? Number(r.factors.level_factor) : null;
+      if (lf != null) d.levels.push(lf);
+      const ev = r.factors && (r.factors.event_name || (typeof r.factors.note === "string" && r.factors.note.startsWith("event:") ? r.factors.note.slice(6) : null));
+      if (ev) d.events.add(ev);
     });
-    return Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date));
-  }, [rows, storeId]);
+    return Object.values(byDate).sort((a, b) => a.date.localeCompare(b.date)).map(d => ({
+      ...d,
+      lastWeek: lwByDate[shiftDate(d.date, -7)] ?? null,
+      level: d.levels.length ? d.levels.reduce((a, x) => a + x, 0) / d.levels.length : null,
+      events: [...d.events],
+    }));
+  }, [rows, lastWeek, storeId]);
 
-  const maxRev = Math.max(...days.map(d => d.revenue), 1);
+  // Accuracy: median absolute % error over the last 28 days, per-store, excluding thin/closed stores.
+  const acc = useMemo(() => {
+    const scoped = storeId ? accRows.filter(r => r.storeId === storeId) : accRows;
+    const byStore = {};
+    scoped.forEach(r => { if (r.absPctError == null || r.actualRevenue == null || r.actualRevenue <= 0) return; (byStore[r.storeId] = byStore[r.storeId] || []).push(r.absPctError); });
+    const kept = [], excluded = [];
+    Object.entries(byStore).forEach(([sid, errs]) => {
+      const med = [...errs].sort((a, b) => a - b)[Math.floor(errs.length / 2)];
+      if (errs.length < 14 || med > 40) excluded.push({ sid, reason: errs.length < 14 ? "new" : "data issue" }); else kept.push(...errs);
+    });
+    if (!kept.length) return null;
+    const sorted = [...kept].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    const within15 = kept.filter(e => e <= 15).length / kept.length;
+    return { median: median > 1.5 ? median : median * 100, within15: Math.round(within15 * 100), days: kept.length, excluded };
+  }, [accRows, storeId]);
+  const pct = (v) => v > 1.5 ? v : v * 100;   // the view may store 0–1 or 0–100
+
+  const total = days.reduce((a, d) => a + d.revenue, 0);
+  const totalLw = days.every(d => d.lastWeek != null) ? days.reduce((a, d) => a + (d.lastWeek || 0), 0) : null;
+  const maxRev = Math.max(...days.map(d => Math.max(d.revenue, d.lastWeek || 0)), 1);
   const fmtMoney = (n) => ccySym() + (n || 0).toLocaleString("en-GB", { maximumFractionDigits: 0 });
   const dayLabel = (d) => new Date(d + "T00:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" });
+  const Delta = ({ cur, prev }) => prev == null || prev <= 0 ? null : (() => { const p = ((cur - prev) / prev) * 100; const up = p >= 0; return <span className={`text-[10px] font-semibold tabular-nums ${Math.abs(p) < 3 ? "text-slate-500" : up ? "text-emerald-400" : "text-red-400"}`}>{up ? "▲" : "▼"} {Math.abs(p).toFixed(0)}%</span>; })();
+  const storeName = (sid) => { const st = (stores || []).find(x => x.id === sid); return st ? (st.shortName || st.name) : sid; };
 
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-      <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
-        <h3 className="text-sm font-bold text-white flex items-center gap-2"><TrendingUp size={15}/> Forecast — next 7 days</h3>
-        <button onClick={() => setShowAccuracy(true)} title="View the full accuracy scoreboard"
-          className="text-[10px] px-2 py-0.5 rounded-full border border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200">
-          {accuracy && accuracy.daysScored >= 14 && accuracy.mapePct != null
-            ? `typically ±${accuracy.mapePct}% one day out`
-            : "accuracy warming up"}
+      <div className="flex items-start justify-between mb-3 gap-3 flex-wrap">
+        <div>
+          <h3 className="text-sm font-bold text-white flex items-center gap-2"><TrendingUp size={15}/> Forecast — next 7 days</h3>
+          {!loading && !error && days.length > 0 && (
+            <div className="mt-1 flex items-baseline gap-2">
+              <span className="text-2xl font-black text-white tabular-nums">{fmtMoney(total)}</span>
+              {totalLw != null && <span className="text-xs text-slate-400">vs {fmtMoney(totalLw)} last week <Delta cur={total} prev={totalLw}/></span>}
+            </div>
+          )}
+        </div>
+        <button onClick={() => setShowAccuracy(true)} title={acc ? `Median one-day-ahead error over the last ${acc.days} store-days. ${acc.within15}% of days landed within ±15%.${acc.excluded.length ? ` Excluded: ${acc.excluded.map(e => `${storeName(e.sid)} (${e.reason})`).join(", ")}.` : ""}` : "Accuracy warming up"}
+          className="text-[10px] px-2.5 py-1 rounded-full border border-slate-700 text-slate-400 hover:border-slate-500 hover:text-slate-200 text-right">
+          {acc ? <>typically within <span className="text-slate-200 font-semibold">±{acc.median.toFixed(0)}%</span> · {acc.within15}% of days inside ±15%{acc.excluded.length ? <span className="text-amber-400/80"> · {acc.excluded.length} excluded</span> : null}</> : "accuracy warming up"}
         </button>
       </div>
       {loading ? (
@@ -31010,20 +31057,30 @@ function ForecastPanel({ storeId, stores }) {
       ) : days.length === 0 ? (
         <div className="text-xs text-slate-600">No forecast yet — forecasts generate nightly once sales history exists.</div>
       ) : (
-        <div className="space-y-1.5">
-          {days.map(d => (
+        <div className="space-y-1">
+          <div className="flex items-center gap-2 text-[10px] text-slate-600 px-0.5"><div className="w-24"></div><div className="flex-1 flex items-center gap-3"><span className="inline-flex items-center gap-1"><span className="w-3 h-2 rounded-sm bg-indigo-500/80 inline-block"/>forecast</span><span className="inline-flex items-center gap-1"><span className="w-3 h-2 rounded-sm border border-slate-500 inline-block"/>last week actual</span></div><div className="w-20 text-right">forecast</div><div className="w-24 text-right">vs last wk</div><div className="w-28"></div></div>
+          {days.map(d => {
+            const isWeekend = [0, 6].includes(new Date(d.date + "T00:00:00").getDay());
+            return (
             <button key={d.date} onClick={() => setSelectedDate(d.date)}
-              className="w-full flex items-center gap-2 text-xs p-0.5 rounded-lg hover:bg-slate-800/50 text-left" title="Click for store-by-store and hourly detail">
-              <div className="w-24 flex-shrink-0 text-slate-400">{dayLabel(d.date)}</div>
-              <div className="flex-1 h-4 bg-slate-800/60 rounded overflow-hidden">
-                <div className="h-full bg-indigo-600/70 rounded" style={{ width: `${Math.round(100 * d.revenue / maxRev)}%` }}/>
+              className={`w-full flex items-center gap-2 text-xs px-0.5 py-1 rounded-lg hover:bg-slate-800/50 text-left ${isWeekend ? "bg-slate-800/20" : ""}`} title="Click for store-by-store and hourly detail">
+              <div className={`w-24 flex-shrink-0 ${isWeekend ? "text-slate-200 font-semibold" : "text-slate-400"}`}>{dayLabel(d.date)}</div>
+              <div className="flex-1 relative h-5 bg-slate-800/60 rounded overflow-hidden">
+                <div className="absolute inset-y-0 left-0 bg-indigo-500/80 rounded" style={{ width: `${Math.round(100 * d.revenue / maxRev)}%` }}/>
+                {d.lastWeek != null && <div className="absolute inset-y-0 left-0 border border-slate-400/70 rounded pointer-events-none" style={{ width: `${Math.round(100 * d.lastWeek / maxRev)}%` }} title={`Last week: ${fmtMoney(d.lastWeek)}`}/>}
               </div>
-              <div className="w-20 text-right text-slate-200 font-semibold tabular-nums">{fmtMoney(d.revenue)}</div>
-              <div className="w-9 text-[9px] text-amber-400/80" title="Limited history behind this figure — firms up automatically as weeks accrue">{d.thin ? "thin" : ""}</div>
+              <div className="w-20 text-right text-slate-100 font-bold tabular-nums">{fmtMoney(d.revenue)}</div>
+              <div className="w-24 text-right">{d.lastWeek != null ? <><span className="text-slate-500 tabular-nums">{fmtMoney(d.lastWeek)}</span> <Delta cur={d.revenue} prev={d.lastWeek}/></> : <span className="text-slate-700">—</span>}</div>
+              <div className="w-28 flex items-center justify-end gap-1 flex-wrap">
+                {d.events.map(ev => <span key={ev} className="text-[9px] px-1.5 py-0.5 rounded bg-fuchsia-950/60 border border-fuchsia-800/60 text-fuchsia-300 font-semibold" title={`Calendar event: ${ev}`}>{ev}</span>)}
+                {d.level != null && Math.abs(d.level - 1) >= 0.03 && <span className={`text-[9px] px-1.5 py-0.5 rounded border font-semibold ${d.level > 1 ? "bg-emerald-950/60 border-emerald-800/60 text-emerald-300" : "bg-amber-950/60 border-amber-800/60 text-amber-300"}`} title="Recent fortnight vs this store's usual level — the forecast is scaled by this">{d.level > 1 ? "▲" : "▼"} trend {Math.abs((d.level - 1) * 100).toFixed(0)}%</span>}
+                {d.thin && <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400 font-semibold" title={`Only ${d.minBasis} same-weekday${d.minBasis === 1 ? "" : "s"} behind this figure — firms up as weeks accrue`}>{d.minBasis} wk{d.minBasis === 1 ? "" : "s"}</span>}
+              </div>
               <ChevronRight size={12} className="text-slate-600 flex-shrink-0"/>
             </button>
-          ))}
-          <div className="text-[10px] text-slate-600 pt-1.5">Weighted average of recent same weekdays, regenerated nightly. "thin" = limited history{storeId ? "" : " for at least one store"} that day. Click a day to drill down.</div>
+            );
+          })}
+          <div className="text-[10px] text-slate-600 pt-2 leading-relaxed">Each day is a weighted average of recent same weekdays (closures and odd days excluded), scaled by the store's recent trend and any calendar event. Regenerated nightly. Click a day for store-by-store and hourly detail.</div>
         </div>
       )}
       {selectedDate && (
@@ -31039,6 +31096,7 @@ function ForecastPanel({ storeId, stores }) {
     </div>
   );
 }
+
 
 // ─── Manager Store Dashboard — wraps StoreAnalytics for a manager's store(s) ──
 // Resolves the manager's assigned store(s), offers a picker if they manage more
@@ -69449,7 +69507,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: ANALYTICS-DRILL 2026-10-04g (charts in drills, layout fix)");
+      console.log("CB build: FORECAST-UI 2026-10-04a (forecast panel: week total vs last week, ghost bars, trend/event badges, median chip)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
