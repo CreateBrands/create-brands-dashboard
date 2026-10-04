@@ -32346,6 +32346,103 @@ function DeliveryPerformanceView({ stores = [], brands = [], currentUser, select
 // computed TRULY store-scoped from fetchStoreSalesDetailed (one store + period).
 // Sections: KPIs (+ vs prev period), revenue trend, channel mix, day×hour
 // heatmap, top items, payment methods, refunds/cancellations.
+// ANALYTICS-DRILL 2026-10-04a: every tile on Store Analytics opens the sales
+// behind it. One modal, fed a title and the filtered sale rows.
+function SalesDrill({ title, subtitle, rows, basis = "gross", store, onClose, onDrill }) {
+  const fmtMoneyDec = (n) => ccySym() + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const [q, setQ] = useState("");
+  const [sortKey, setSortKey] = useState("time");
+  const [open, setOpen] = useState(null);
+  const amt = (s) => basis === "net" && s.amountSubtotal != null ? s.amountSubtotal : s.amountTotal;
+  const tz = store?.timezone;
+  const fmtT = (iso) => { try { return new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: tz || undefined }); } catch { return ""; } };
+  const fmtD = (d) => { try { return new Date(d + "T00:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }); } catch { return d; } };
+  const list = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    let out = rows.filter(r => !t || String(r.saleId).toLowerCase().includes(t) || String(r.channel).toLowerCase().includes(t) || String(r.paymentMethod).toLowerCase().includes(t)
+      || (r.saleItems || []).some(it => String(it.caption || "").toLowerCase().includes(t)));
+    out = [...out].sort((a, b) => sortKey === "amount" ? amt(b) - amt(a) : sortKey === "channel" ? String(a.channel).localeCompare(String(b.channel)) : new Date(b.saleTime) - new Date(a.saleTime));
+    return out;
+  }, [rows, q, sortKey, basis]);
+  const total = list.reduce((a, r) => a + amt(r), 0);
+  const disc = list.reduce((a, r) => a + (r.amountDiscount || 0), 0);
+  const exportCsv = () => {
+    const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const out = [["Date", "Time", "Sale", "Channel", "Payment", "Items", "Subtotal", "Discount", "VAT", "Total"].map(esc).join(",")];
+    list.forEach(r => out.push([r.businessDate, fmtT(r.saleTime), r.saleId, r.channel, r.paymentMethod, (r.saleItems || []).reduce((a, it) => a + (Number(it.quantity) || 1), 0), r.amountSubtotal ?? "", r.amountDiscount ?? "", r.amountTax ?? "", r.amountTotal].map(esc).join(",")));
+    const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([out.join("\n")], { type: "text/csv" })); a.download = `${title.toLowerCase().replace(/[^a-z0-9]+/g, "_")}.csv`; a.click();
+  };
+  const Th = ({ k, children, right }) => <th onClick={() => k && setSortKey(k)} className={`px-3 py-2 font-semibold uppercase tracking-wider text-[10px] ${right ? "text-right" : "text-left"} ${k ? "cursor-pointer hover:text-white" : ""} ${sortKey === k ? "text-indigo-300" : ""}`}>{children}</th>;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={onClose}>
+      <div className="bg-slate-900 border border-slate-700 rounded-2xl max-w-4xl w-full max-h-[85vh] flex flex-col shadow-2xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3 px-5 py-3.5 border-b border-slate-800">
+          <div className="min-w-0">
+            <h3 className="text-sm font-bold text-white">{title}</h3>
+            {subtitle && <div className="text-[11px] text-slate-500 truncate">{subtitle}</div>}
+          </div>
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <button onClick={exportCsv} className="px-2.5 h-7 rounded-lg text-[11px] font-semibold text-indigo-300 bg-slate-800 hover:bg-slate-700">Export CSV</button>
+            <button onClick={onClose} className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-500 hover:text-white hover:bg-slate-800 text-lg leading-none">×</button>
+          </div>
+        </div>
+        <div className="grid grid-cols-4 gap-px bg-slate-800 border-b border-slate-800">
+          {[["Sales", list.length.toLocaleString()], [basis === "net" ? "Net" : "Gross", fmtMoneyDec(total)], ["Avg order", fmtMoneyDec(list.length ? total / list.length : 0)], ["Discounts", fmtMoneyDec(disc)]].map(([l, v]) => (
+            <div key={l} className="bg-slate-900 px-4 py-2.5"><div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">{l}</div><div className="text-base font-black text-white tabular-nums">{v}</div></div>
+          ))}
+        </div>
+        <div className="px-4 py-2 border-b border-slate-800 flex items-center gap-2">
+          <Search size={13} className="text-slate-500"/>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search sale id, channel, payment or item…" className="flex-1 bg-transparent text-xs text-white focus:outline-none placeholder:text-slate-600"/>
+        </div>
+        <div className="overflow-auto flex-1">
+          <table className="w-full text-xs">
+            <thead className="sticky top-0 bg-slate-900 z-10"><tr className="text-slate-500 border-b border-slate-800">
+              <Th k="time">When</Th><Th>Sale</Th><Th k="channel">Channel</Th><Th>Payment</Th><Th right>Items</Th><Th right>Discount</Th><Th k="amount" right>{basis === "net" ? "Net" : "Total"}</Th>
+            </tr></thead>
+            <tbody>
+              {list.length === 0 && <tr><td colSpan={7} className="px-4 py-8 text-center text-slate-600">No sales match.</td></tr>}
+              {list.map((r, i) => {
+                const items = r.saleItems || []; const n = items.reduce((a, it) => a + (Number(it.quantity) || 1), 0); const isOpen = open === r.saleId;
+                return (
+                  <Fragment key={r.saleId || i}>
+                    <tr onClick={() => setOpen(isOpen ? null : r.saleId)} className={`border-b border-slate-800/60 cursor-pointer hover:bg-slate-800/40 ${i % 2 ? "bg-slate-950/30" : ""} ${r.isFullyRefunded ? "opacity-60" : ""}`}>
+                      <td className="px-3 py-2 text-slate-300 whitespace-nowrap">{fmtD(r.businessDate)} <span className="text-slate-500">{fmtT(r.saleTime)}</span></td>
+                      <td className="px-3 py-2 font-mono text-[11px] text-slate-400">{String(r.saleId).slice(-8)}{r.isFullyRefunded && <span className="ml-1.5 text-[9px] font-bold uppercase px-1 py-0.5 rounded bg-red-950/60 border border-red-800 text-red-300">refunded</span>}</td>
+                      <td className="px-3 py-2 text-slate-300">{r.channel}</td>
+                      <td className="px-3 py-2 text-slate-400">{r.paymentMethod}</td>
+                      <td className="px-3 py-2 text-right text-slate-400 tabular-nums">{n}</td>
+                      <td className="px-3 py-2 text-right text-amber-300/80 tabular-nums">{r.amountDiscount ? fmtMoneyDec(r.amountDiscount) : ""}</td>
+                      <td className="px-3 py-2 text-right text-white font-semibold tabular-nums">{fmtMoneyDec(amt(r))}</td>
+                    </tr>
+                    {isOpen && (
+                      <tr className="bg-slate-950/60"><td colSpan={7} className="px-5 py-2">
+                        {items.length === 0 ? <div className="text-slate-600">No line items recorded for this sale.</div> : (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-1">
+                            {items.map((it, k) => (
+                              <div key={k} className="flex items-start justify-between gap-3 text-[11px]">
+                                <div className="min-w-0"><span className="text-slate-200">{Number(it.quantity) || 1}× {it.caption}</span>
+                                  {Array.isArray(it.saleItems) && it.saleItems.length > 0 && <div className="text-slate-500 truncate">{it.saleItems.map(m => m.caption).filter(Boolean).join(", ")}</div>}
+                                  {it.category && <div className="text-slate-600">{it.category}</div>}</div>
+                                <div className="text-slate-400 tabular-nums whitespace-nowrap">{it.unitPrice != null ? fmtMoneyDec((Number(it.unitPrice) || 0) * (Number(it.quantity) || 1)) : ""}{it.isRefunded ? <span className="ml-1 text-red-400">refunded</span> : ""}{it.isComplimented ? <span className="ml-1 text-sky-400">comp</span> : ""}</div>
+                              </div>
+                            ))}
+                          </div>)}
+                        <div className="mt-1.5 text-[10px] text-slate-600">Subtotal {r.amountSubtotal != null ? fmtMoneyDec(r.amountSubtotal) : "—"} · VAT {r.amountTax != null ? fmtMoneyDec(r.amountTax) : "—"} · Total {fmtMoneyDec(r.amountTotal)}</div>
+                      </td></tr>
+                    )}
+                  </Fragment>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <div className="px-4 py-2 border-t border-slate-800 text-[10px] text-slate-600">Click a sale to see its items. Sort by clicking When / Channel / Total.</div>
+      </div>
+    </div>
+  );
+}
+
 function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDate, periodLabel }) {
   const toLocalDate = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
   const fmtMoney = (n) => ccySym() + (n || 0).toLocaleString("en-GB", { minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -32357,6 +32454,9 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
   const [error, setError] = useState(null);
   const [basis, setBasis] = useState("gross");   // gross (total) | net (ex-VAT)
   const [heatMetric, setHeatMetric] = useState("orders"); // orders | revenue
+  const [drill, setDrill] = useState(null);   // ANALYTICS-DRILL 2026-10-04a: { title, subtitle, rows }
+  const openDrill = (title, rows, subtitle) => setDrill({ title, rows, subtitle: subtitle || `${store?.shortName || store?.name} · ${periodLabel}` });
+  const tileCls = "bg-slate-900 border border-slate-800 rounded-2xl p-4 cursor-pointer hover:border-indigo-500/60 hover:bg-slate-900/80 transition-colors group";
 
   useEffect(() => {
     let cancelled = false;
@@ -32545,6 +32645,7 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
 
   return (
     <div className="space-y-5">
+      {drill && <SalesDrill title={drill.title} subtitle={drill.subtitle} rows={drill.rows} basis={basis} store={store} onClose={() => setDrill(null)}/>}
       {/* Basis toggle */}
       <div className="flex items-center justify-end gap-2">
         <span className="text-[11px] text-slate-500">Showing:</span>
@@ -32562,7 +32663,7 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+        <div className={tileCls} onClick={() => openDrill("All sales", valid)} title="Click to see every sale">
           <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">{basis === "net" ? "Net revenue" : "Gross revenue"}</div>
           <div className="text-2xl font-bold text-white mt-1">{fmtMoney(kpis.revenue)}</div>
           <div className="mt-1"><Delta v={kpis.revDelta}/> <span className="text-[10px] text-slate-600">vs prev</span></div>
@@ -32572,17 +32673,17 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
             </div>
           )}
         </div>
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+        <div className={tileCls} onClick={() => openDrill("All orders", valid)} title="Click to see every order">
           <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Orders</div>
           <div className="text-2xl font-bold text-white mt-1">{kpis.orders.toLocaleString()}</div>
           <div className="mt-1"><Delta v={kpis.ordersDelta}/> <span className="text-[10px] text-slate-600">vs prev</span></div>
         </div>
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+        <div className={tileCls} onClick={() => openDrill("Orders by value", valid, `${store?.shortName || store?.name} · ${periodLabel} · sorted largest first`)} title="Click to see orders ranked by value">
           <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Avg order (ATV)</div>
           <div className="text-2xl font-bold text-white mt-1">{fmtMoneyDec(kpis.atv)}</div>
           <div className="mt-1"><Delta v={kpis.atvDelta}/> <span className="text-[10px] text-slate-600">vs prev</span></div>
         </div>
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+        <div className={tileCls} onClick={() => openDrill("Discounted sales", valid.filter(s => (s.amountDiscount || 0) > 0))} title="Click to see every discounted sale">
           <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold">Discount rate</div>
           <div className="text-2xl font-bold text-white mt-1">{kpis.discountRate.toFixed(1)}%</div>
           <div className="mt-1 text-[10px] text-slate-600">{fmtMoney(kpis.discount)} given · {periodLabel}</div>
@@ -32590,14 +32691,14 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
       </div>
 
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-        <h3 className="text-sm font-bold text-white mb-3">Revenue trend <span className="text-[11px] font-normal text-slate-500">({basis === "net" ? "net" : "gross"} · bar = this period, line = previous)</span></h3>
+        <h3 className="text-sm font-bold text-white mb-3">Revenue trend <span className="text-[11px] font-normal text-slate-500">({basis === "net" ? "net" : "gross"} · bar = this period, line = previous · click a bar for that day's sales)</span></h3>
         <ResponsiveContainer width="100%" height={220}>
           <ComposedChart data={daily}>
             <CartesianGrid strokeDasharray="3 3" stroke="#1e293b"/>
             <XAxis dataKey="label" tick={{ fill: "#64748b", fontSize: 11 }}/>
             <YAxis tick={{ fill: "#64748b", fontSize: 11 }}/>
             <Tooltip contentStyle={{ background: "#0f172a", border: "1px solid #334155", borderRadius: 8, fontSize: 12 }} formatter={(v, n) => [fmtMoneyDec(v), n === "prevRevenue" ? "Previous" : "This period"]}/>
-            <Bar dataKey="revenue" fill="#844429" radius={[4, 4, 0, 0]}/>
+            <Bar dataKey="revenue" fill="#844429" radius={[4, 4, 0, 0]} cursor="pointer" onClick={(d) => d && d.date && openDrill(`Sales on ${new Date(d.date + "T00:00:00").toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}`, valid.filter(s => s.businessDate === d.date))}/>
             <Line type="monotone" dataKey="prevRevenue" stroke="#64748b" strokeWidth={2} strokeDasharray="4 3" dot={false}/>
           </ComposedChart>
         </ResponsiveContainer>
@@ -32610,7 +32711,8 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
           {dayparts.map(d => {
             const share = kpis.revenue > 0 ? (d.revenue / kpis.revenue) * 100 : 0;
             return (
-              <div key={d.name} className="bg-slate-950 border border-slate-800 rounded-xl p-3">
+              <div key={d.name} onClick={() => openDrill(`${d.name} sales (${d.range})`, valid.filter(s => { let h = tzParts(s.saleTime, store?.timezone).hour; if (h < 6) h += 24; return h >= d.from && h < d.to; }))}
+                className="bg-slate-950 border border-slate-800 rounded-xl p-3 cursor-pointer hover:border-indigo-500/60 transition-colors" title="Click to see these sales">
                 <div className="text-xs font-semibold text-slate-300">{d.name}</div>
                 <div className="text-[10px] text-slate-600 mb-1">{d.range}</div>
                 <div className="text-lg font-bold text-white">{fmtMoney(d.revenue)}</div>
@@ -32647,7 +32749,7 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
                 {channels.map((c, i) => {
                   const pct = kpis.revenue > 0 ? (c.revenue / kpis.revenue) * 100 : 0;
                   return (
-                    <tr key={c.name} className="border-t border-slate-800/50">
+                    <tr key={c.name} onClick={() => openDrill(`${c.name} sales`, valid.filter(s => (s.channel || "Other") === c.name))} className="border-t border-slate-800/50 cursor-pointer hover:bg-slate-800/40" title="Click to see these sales">
                       <td className="py-1.5 text-slate-300"><span className="inline-block w-2.5 h-2.5 rounded-full mr-1.5 align-middle" style={{ background: CH_COLORS[i % CH_COLORS.length] }}/>{c.name}</td>
                       <td className="py-1.5 text-right text-slate-300">{fmtMoneyDec(c.revenue)}</td>
                       <td className="py-1.5 text-right text-slate-400">{c.orders}</td>
@@ -32667,7 +32769,7 @@ function StoreAnalytics({ store, brand, fromDate, toDate, prevFromDate, prevToDa
             {payments.map((p, i) => {
               const pct = kpis.revenue > 0 ? (p.revenue / kpis.revenue) * 100 : 0;
               return (
-                <div key={p.name}>
+                <div key={p.name} onClick={() => openDrill(`${p.name} payments`, valid.filter(s => (s.paymentMethod || "Unknown") === p.name))} className="cursor-pointer rounded-lg -mx-1 px-1 py-0.5 hover:bg-slate-800/40" title="Click to see these sales">
                   <div className="flex items-center justify-between text-xs mb-0.5">
                     <span className="text-slate-300">{p.name}</span>
                     <span className="text-slate-400">{fmtMoneyDec(p.revenue)} · {pct.toFixed(0)}%</span>
@@ -69088,7 +69190,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: HIRE-UI 2026-10-04a (age, WhatsApp, map, one-click RTW, timeline) + BULK-SCAN 04a");
+      console.log("CB build: ANALYTICS-DRILL 2026-10-04a (every Store Analytics tile drills to sales) + HIRE-UI 04a");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
