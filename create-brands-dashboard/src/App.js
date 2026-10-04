@@ -32353,7 +32353,28 @@ function SalesDrill({ title, subtitle, rows, basis = "gross", store, onClose, on
   const [q, setQ] = useState("");
   const [sortKey, setSortKey] = useState("time");
   const [open, setOpen] = useState(null);
+  const [view, setView] = useState("category");   // category | sales
+  const [openCat, setOpenCat] = useState(null);
   const amt = (s) => basis === "net" && s.amountSubtotal != null ? s.amountSubtotal : s.amountTotal;
+  // Items rolled up by category → item. Modifiers with a price are counted inside their parent item.
+  const byCategory = useMemo(() => {
+    const cats = new Map();
+    rows.forEach(r => (r.saleItems || []).forEach(it => {
+      if (it.isRefunded) return;
+      const cat = (it.category || "Uncategorised").trim();
+      const qty = Number(it.quantity) || 1;
+      const mods = Array.isArray(it.saleItems) ? it.saleItems : [];
+      const modRev = mods.reduce((a, m) => a + (Number(m.unitPrice) || 0), 0) * qty;
+      const rev = (Number(it.unitPrice) || 0) * qty + modRev;
+      if (!cats.has(cat)) cats.set(cat, { name: cat, qty: 0, revenue: 0, items: new Map() });
+      const c = cats.get(cat); c.qty += qty; c.revenue += rev;
+      const key = (it.caption || "Item").trim();
+      if (!c.items.has(key)) c.items.set(key, { name: key, qty: 0, revenue: 0 });
+      const x = c.items.get(key); x.qty += qty; x.revenue += rev;
+    }));
+    return [...cats.values()].map(c => ({ ...c, items: [...c.items.values()].sort((a, b) => b.revenue - a.revenue) })).sort((a, b) => b.revenue - a.revenue);
+  }, [rows]);
+  const catTotal = byCategory.reduce((a, c) => a + c.revenue, 0);
   const tz = store?.timezone;
   const fmtT = (iso) => { try { return new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: tz || undefined }); } catch { return ""; } };
   const fmtD = (d) => { try { return new Date(d + "T00:00:00").toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }); } catch { return d; } };
@@ -32372,6 +32393,12 @@ function SalesDrill({ title, subtitle, rows, basis = "gross", store, onClose, on
     list.forEach(r => out.push([r.businessDate, fmtT(r.saleTime), r.saleId, r.channel, r.paymentMethod, (r.saleItems || []).reduce((a, it) => a + (Number(it.quantity) || 1), 0), r.amountSubtotal ?? "", r.amountDiscount ?? "", r.amountTax ?? "", r.amountTotal].map(esc).join(",")));
     const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([out.join("\n")], { type: "text/csv" })); a.download = `${title.toLowerCase().replace(/[^a-z0-9]+/g, "_")}.csv`; a.click();
   };
+  const exportCatCsv = () => {
+    const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const out = [["Category", "Item", "Qty", "Revenue"].map(esc).join(",")];
+    byCategory.forEach(c => { out.push([c.name, "(category total)", c.qty, c.revenue.toFixed(2)].map(esc).join(",")); c.items.forEach(it => out.push([c.name, it.name, it.qty, it.revenue.toFixed(2)].map(esc).join(","))); });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([out.join("\n")], { type: "text/csv" })); a.download = `${title.toLowerCase().replace(/[^a-z0-9]+/g, "_")}_by_category.csv`; a.click();
+  };
   const Th = ({ k, children, right }) => <th onClick={() => k && setSortKey(k)} className={`px-3 py-2 font-semibold uppercase tracking-wider text-[10px] ${right ? "text-right" : "text-left"} ${k ? "cursor-pointer hover:text-white" : ""} ${sortKey === k ? "text-indigo-300" : ""}`}>{children}</th>;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={onClose}>
@@ -32382,7 +32409,11 @@ function SalesDrill({ title, subtitle, rows, basis = "gross", store, onClose, on
             {subtitle && <div className="text-[11px] text-slate-500 truncate">{subtitle}</div>}
           </div>
           <div className="flex items-center gap-1.5 flex-shrink-0">
-            <button onClick={exportCsv} className="px-2.5 h-7 rounded-lg text-[11px] font-semibold text-indigo-300 bg-slate-800 hover:bg-slate-700">Export CSV</button>
+            <div className="inline-flex rounded-lg border border-slate-700 overflow-hidden mr-1">
+              <button onClick={() => setView("category")} className={`px-2.5 h-7 text-[11px] font-semibold ${view === "category" ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400 hover:text-white"}`}>By category</button>
+              <button onClick={() => setView("sales")} className={`px-2.5 h-7 text-[11px] font-semibold ${view === "sales" ? "bg-indigo-600 text-white" : "bg-slate-900 text-slate-400 hover:text-white"}`}>Sales</button>
+            </div>
+            <button onClick={view === "category" ? exportCatCsv : exportCsv} className="px-2.5 h-7 rounded-lg text-[11px] font-semibold text-indigo-300 bg-slate-800 hover:bg-slate-700">Export CSV</button>
             <button onClick={onClose} className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-500 hover:text-white hover:bg-slate-800 text-lg leading-none">×</button>
           </div>
         </div>
@@ -32391,6 +32422,49 @@ function SalesDrill({ title, subtitle, rows, basis = "gross", store, onClose, on
             <div key={l} className="bg-slate-900 px-4 py-2.5"><div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">{l}</div><div className="text-base font-black text-white tabular-nums">{v}</div></div>
           ))}
         </div>
+        {view === "category" && (
+          <div className="overflow-auto flex-1">
+            {byCategory.length === 0 && <div className="px-4 py-8 text-center text-xs text-slate-600">No line items recorded for these sales.</div>}
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-slate-900 z-10"><tr className="text-slate-500 border-b border-slate-800">
+                <th className="px-3 py-2 text-left font-semibold uppercase tracking-wider text-[10px]">Category / item</th>
+                <th className="px-3 py-2 text-right font-semibold uppercase tracking-wider text-[10px]">Qty</th>
+                <th className="px-3 py-2 text-right font-semibold uppercase tracking-wider text-[10px]">Revenue</th>
+                <th className="px-3 py-2 text-right font-semibold uppercase tracking-wider text-[10px]">Share</th>
+              </tr></thead>
+              <tbody>
+                {byCategory.map(c => {
+                  const isOpen = openCat === c.name; const share = catTotal > 0 ? (c.revenue / catTotal) * 100 : 0;
+                  return (
+                    <Fragment key={c.name}>
+                      <tr onClick={() => setOpenCat(isOpen ? null : c.name)} className="border-b border-slate-800 bg-slate-800/40 cursor-pointer hover:bg-slate-800/70">
+                        <td className="px-3 py-2 font-bold text-white"><span className={`inline-block mr-1.5 text-slate-500 transition-transform ${isOpen ? "rotate-90" : ""}`}>▸</span>{c.name} <span className="text-slate-500 font-normal">· {c.items.length} item{c.items.length === 1 ? "" : "s"}</span></td>
+                        <td className="px-3 py-2 text-right text-slate-300 tabular-nums font-semibold">{c.qty.toLocaleString()}</td>
+                        <td className="px-3 py-2 text-right text-white tabular-nums font-bold">{fmtMoneyDec(c.revenue)}</td>
+                        <td className="px-3 py-2 text-right tabular-nums"><div className="inline-flex items-center gap-2"><div className="w-16 h-1.5 bg-slate-800 rounded-full overflow-hidden"><div className="h-full bg-indigo-500 rounded-full" style={{ width: `${share}%` }}/></div><span className="text-slate-400 w-9 text-right">{share.toFixed(0)}%</span></div></td>
+                      </tr>
+                      {isOpen && c.items.map(it => (
+                        <tr key={it.name} className="border-b border-slate-800/50">
+                          <td className="px-3 py-1.5 pl-9 text-slate-300">{it.name}</td>
+                          <td className="px-3 py-1.5 text-right text-slate-400 tabular-nums">{it.qty.toLocaleString()}</td>
+                          <td className="px-3 py-1.5 text-right text-slate-300 tabular-nums">{fmtMoneyDec(it.revenue)}</td>
+                          <td className="px-3 py-1.5 text-right text-slate-500 tabular-nums">{c.revenue > 0 ? ((it.revenue / c.revenue) * 100).toFixed(0) : 0}% of cat.</td>
+                        </tr>
+                      ))}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+              <tfoot><tr className="border-t-2 border-slate-700 font-bold text-white bg-slate-800/40">
+                <td className="px-3 py-2">Total items</td>
+                <td className="px-3 py-2 text-right tabular-nums">{byCategory.reduce((a, c) => a + c.qty, 0).toLocaleString()}</td>
+                <td className="px-3 py-2 text-right tabular-nums">{fmtMoneyDec(catTotal)}</td>
+                <td className="px-3 py-2 text-right text-[10px] text-slate-500 font-normal">item prices, before order discounts</td>
+              </tr></tfoot>
+            </table>
+          </div>
+        )}
+        {view === "sales" && <>
         <div className="px-4 py-2 border-b border-slate-800 flex items-center gap-2">
           <Search size={13} className="text-slate-500"/>
           <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search sale id, channel, payment or item…" className="flex-1 bg-transparent text-xs text-white focus:outline-none placeholder:text-slate-600"/>
@@ -32437,7 +32511,8 @@ function SalesDrill({ title, subtitle, rows, basis = "gross", store, onClose, on
             </tbody>
           </table>
         </div>
-        <div className="px-4 py-2 border-t border-slate-800 text-[10px] text-slate-600">Click a sale to see its items. Sort by clicking When / Channel / Total.</div>
+        </>}
+        <div className="px-4 py-2 border-t border-slate-800 text-[10px] text-slate-600">{view === "category" ? "Click a category to see its items. Revenue is item price × quantity (modifiers included), so it won't match the sales total exactly where order-level discounts apply." : "Click a sale to see its items. Sort by clicking When / Channel / Total."}</div>
       </div>
     </div>
   );
@@ -69190,7 +69265,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: ANALYTICS-DRILL 2026-10-04a (every Store Analytics tile drills to sales) + HIRE-UI 04a");
+      console.log("CB build: ANALYTICS-DRILL 2026-10-04b (drill grouped by category, with item breakdown)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
