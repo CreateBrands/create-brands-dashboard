@@ -14612,9 +14612,46 @@ export async function advanceDistOrderToInvoice(soId, createdBy) {
   if (halfWritten) {
     throw new Error(`Invoice ${halfWritten.invoiceNumber || "(unnumbered)"} for this order was never completed — it failed partway through. Delete it from Invoices, then invoice the order again.`);
   }
-  const lines = (dispatch.lines || []).map(l => ({ itemId: l.itemId, accountCode: "4000", qty: l.qty, unitPrice: l.unitPrice || 0, taxRateId: l.taxRateId || null }));
+  // SO-INVOICE 2026-10-08a: the invoice must equal what the ORDER said it would
+  // cost. Before this it was built from the first dispatch only, at the dispatch
+  // line's price (sometimes 0), with the order's discount, VAT mode and delivery
+  // charge thrown away — so it never matched the order for anyone with terms.
+  // Now: every dispatch for the order is summed per item (so a two-drop order
+  // invoices in full), prices and line discounts come from the ORDER line
+  // (dispatch price only as a fallback), and the order's VAT mode, order-level
+  // discount and delivery charge are carried across unchanged.
+  const so = (await fetchDistSalesOrders({})).find(o => o.id === soId);
+  const soLines = so ? (so.lines || []) : [];
+  const soByItem = new Map(soLines.filter(l => l.itemId).map(l => [l.itemId, l]));
+  const shipped = new Map();   // itemId -> { qty, unitPrice, taxRateId }
+  dispatches.forEach(d => (d.lines || []).forEach(l => {
+    if (!l.itemId || !(Number(l.qty) > 0)) return;
+    const cur = shipped.get(l.itemId) || { qty: 0, unitPrice: 0, taxRateId: null };
+    cur.qty += Number(l.qty) || 0;
+    if (!cur.unitPrice && Number(l.unitPrice) > 0) cur.unitPrice = Number(l.unitPrice);
+    cur.taxRateId = cur.taxRateId || l.taxRateId || null;
+    shipped.set(l.itemId, cur);
+  }));
+  const lines = [...shipped.entries()].map(([itemId, x]) => {
+    const sl = soByItem.get(itemId);
+    return {
+      itemId, accountCode: "4000", qty: x.qty,
+      unitPrice: sl && Number(sl.unitPrice) > 0 ? Number(sl.unitPrice) : (x.unitPrice || 0),
+      discount: sl ? Number(sl.discount) || 0 : 0, discountType: sl ? (sl.discountType || "percent") : "percent",
+      taxRateId: (sl && sl.taxRateId) || x.taxRateId || null,
+      description: sl ? sl.description : null,
+    };
+  });
+  // Order lines with no stock movement (service / delivery lines with no item) still belong on the invoice.
+  soLines.filter(l => !l.itemId && (Number(l.unitPrice) || 0) !== 0).forEach(l => lines.push({ itemId: null, accountCode: "4000", qty: l.qty, unitPrice: l.unitPrice, discount: l.discount || 0, discountType: l.discountType || "percent", taxRateId: l.taxRateId || null, description: l.description }));
   if (!lines.length) throw new Error("This dispatch has no lines to invoice.");
-  return postDistInvoice({ soId, dispatchId: dispatch.id, customerId: dispatch.customerId, createdBy, vatMode: "exclusive" }, lines);
+  return postDistInvoice({
+    soId, dispatchId: dispatch.id, customerId: dispatch.customerId, createdBy,
+    vatMode: so ? (so.vatMode || "exclusive") : "exclusive",
+    discountPercent: so ? so.discountPercent : 0, discountType: so ? so.discountType : "percent",
+    shippingCharge: so ? so.shippingCharge : 0,
+    reference: so ? (so.reference || null) : null, paymentTerms: so ? (so.paymentTerms || null) : null,
+  }, lines);
 }
 // Dispatch: write a negative (issue) movement per line at its batch, then post
 // Dr COGS 5000 / Cr Stock 1200 at total landed cost. Idempotent on distdisp:.
