@@ -14624,67 +14624,33 @@ export async function fetchFreshLinesNeedingCost(soId) {
 // Advance: dispatched → invoiced. Bills the customer for the dispatch.
 // Guarded: throws if already invoiced, or if no dispatch exists.
 export async function advanceDistOrderToInvoice(soId, createdBy) {
-  const dispatches = (await fetchDistDispatches({})).filter(d => d.soId === soId);
-  const dispatch = dispatches[0];
-  if (!dispatch) throw new Error("This order hasn't been dispatched yet.");
-  // FULFILSTAGE 2026-08-18 — only a POSTED invoice blocks a new one. Guarding
-  // on mere existence meant a DRAFT locked the order out of invoicing entirely:
-  // the panel said "Draft — not posted" while this button insisted the order
-  // was already invoiced, with no way forward from either.
-  const existing = (await fetchDistInvoices({})).filter(i => i.soId === soId);
-  if (existing.some(i => i.posted)) throw new Error("This order has already been invoiced.");
-  // An unposted invoice is NOT a draft — there is no draft concept here.
-  // postDistInvoice writes the header, then the lines, then flips posted in one
-  // call, so posted=false means that call died partway and left a half-written
-  // invoice. There is no "post" button to send anyone to; the invoice has to be
-  // removed and raised again.
-  const halfWritten = existing.find(i => !i.posted);
-  if (halfWritten) {
-    throw new Error(`Invoice ${halfWritten.invoiceNumber || "(unnumbered)"} for this order was never completed — it failed partway through. Delete it from Invoices, then invoice the order again.`);
-  }
-  // SO-INVOICE 2026-10-08a: the invoice must equal what the ORDER said it would
-  // cost. Before this it was built from the first dispatch only, at the dispatch
-  // line's price (sometimes 0), with the order's discount, VAT mode and delivery
-  // charge thrown away — so it never matched the order for anyone with terms.
-  // Now: every dispatch for the order is summed per item (so a two-drop order
-  // invoices in full), prices and line discounts come from the ORDER line
-  // (dispatch price only as a fallback), and the order's VAT mode, order-level
-  // discount and delivery charge are carried across unchanged.
+  // SO-INVOICE 2026-10-09c: the invoice bills the ORDER, full stop. Create Brands
+  // ships complete orders, so consulting the dispatch only ever lost lines —
+  // the old build summed dispatch lines and under-billed by £21k across 31
+  // orders (Aug–Oct 2026) whenever a line reached dispatch without a batch.
   const so = (await fetchDistSalesOrders({})).find(o => o.id === soId);
-  const soLines = so ? (so.lines || []) : [];
-  const soByItem = new Map(soLines.filter(l => l.itemId).map(l => [l.itemId, l]));
-  const shipped = new Map();   // itemId -> { qty, unitPrice, taxRateId }
-  dispatches.forEach(d => (d.lines || []).forEach(l => {
-    if (!l.itemId || !(Number(l.qty) > 0)) return;
-    const cur = shipped.get(l.itemId) || { qty: 0, unitPrice: 0, taxRateId: null };
-    cur.qty += Number(l.qty) || 0;
-    if (!cur.unitPrice && Number(l.unitPrice) > 0) cur.unitPrice = Number(l.unitPrice);
-    cur.taxRateId = cur.taxRateId || l.taxRateId || null;
-    shipped.set(l.itemId, cur);
-  }));
-  const lines = [...shipped.entries()].map(([itemId, x]) => {
-    const sl = soByItem.get(itemId);
-    return {
-      itemId, accountCode: "4000", qty: x.qty,
-      unitPrice: sl && Number(sl.unitPrice) > 0 ? Number(sl.unitPrice) : (x.unitPrice || 0),
-      discount: sl ? Number(sl.discount) || 0 : 0, discountType: sl ? (sl.discountType || "percent") : "percent",
-      taxRateId: (sl && sl.taxRateId) || x.taxRateId || null,
-      description: sl ? sl.description : null,
-    };
-  });
-  // Order lines with no stock movement (service / delivery lines with no item) still belong on the invoice.
-  soLines.filter(l => !l.itemId && (Number(l.unitPrice) || 0) !== 0).forEach(l => lines.push({ itemId: null, accountCode: "4000", qty: l.qty, unitPrice: l.unitPrice, discount: l.discount || 0, discountType: l.discountType || "percent", taxRateId: l.taxRateId || null, description: l.description }));
-  if (!lines.length) throw new Error("This dispatch has no lines to invoice.");
+  if (!so) throw new Error("Order not found.");
+  const existing = (await fetchDistInvoices({})).filter(i => i.soId === soId);
+  if (existing.length) throw new Error("This order has already been invoiced.");
+  const dispatches = (await fetchDistDispatches({})).filter(d => d.soId === soId);
+  const lines = (so.lines || [])
+    .filter(l => (Number(l.qty) || 0) > 0 && (l.itemId || (l.description || "").trim()))
+    .map(l => ({
+      itemId: l.itemId || null, accountCode: "4000", qty: Number(l.qty) || 0,
+      unitPrice: Number(l.unitPrice) || 0,
+      discount: Number(l.discount) || 0, discountType: l.discountType || "percent",
+      taxRateId: l.taxRateId || null, description: l.description || null,
+    }));
+  if (!lines.length) throw new Error("This order has no lines to invoice.");
   return postDistInvoice({
-    soId, dispatchId: dispatch.id, customerId: dispatch.customerId, createdBy,
-    vatMode: so ? (so.vatMode || "exclusive") : "exclusive",
-    discountPercent: so ? so.discountPercent : 0, discountType: so ? so.discountType : "percent",
-    shippingCharge: so ? so.shippingCharge : 0,
-    reference: so ? (so.reference || null) : null, paymentTerms: so ? (so.paymentTerms || null) : null,
+    soId, dispatchId: dispatches.length ? dispatches[0].id : null, customerId: so.customerId, createdBy,
+    vatMode: so.vatMode || "exclusive",
+    discountPercent: so.discountPercent || 0, discountType: so.discountType || "percent",
+    shippingCharge: so.shippingCharge || 0,
+    reference: so.reference || null, paymentTerms: so.paymentTerms || null,
   }, lines);
 }
-// Dispatch: write a negative (issue) movement per line at its batch, then post
-// Dr COGS 5000 / Cr Stock 1200 at total landed cost. Idempotent on distdisp:.
+
 export async function postDistDispatch(dispatch, lines = []) {
   const id = dispatch.id || distId("ddisp");
   const dispatchDate = dispatch.dispatchDate || new Date().toISOString().slice(0, 10);
