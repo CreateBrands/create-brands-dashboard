@@ -11868,8 +11868,7 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
               <StatusRow label="Order" value={(so.status||"").toUpperCase()} tone={so.status==="dispatched"||so.status==="invoiced"?"text-emerald-300":"text-indigo-300"}/>
               <StatusRow label="Invoice" value={detail ? (detail.status.invoiced ? "Invoiced" : detail.status.invoiceDraft ? "Failed — not completed" : "Not Invoiced") : "…"} tone={detail?.status.invoiced ? "text-emerald-300" : detail?.status.invoiceDraft ? "text-amber-300" : "text-slate-400"}/>
               <StatusRow label="Payment" value={detail ? (detail.status.paid ? "Paid" : "Unpaid") : "…"} tone={detail?.status.paid ? "text-emerald-300" : "text-amber-300"}/>
-              <StatusRow label="Picked" value={detail ? (detail.status.picked ? "Picked" : "Pending") : "…"} tone={detail?.status.picked ? "text-emerald-300" : "text-amber-300"}/>
-              <StatusRow label="Shipment" value={detail ? (detail.status.dispatched ? "Dispatched" : "Pending") : "…"} tone={detail?.status.dispatched ? "text-emerald-300" : "text-amber-300"}/>
+              {/* SHIP-INVOICE 2026-10-09a: picking and dispatch are no longer separate stages — the status panel tracks order → invoice → payment → store receipt. */}
               <StatusRow label="Store receipt" value={!receipt ? (detail?.status.dispatched ? "Awaiting store" : "—") : receipt.status === "confirmed" ? (receipt.lines.some(l=>l.short) ? `Received · ${receipt.lines.filter(l=>l.short).length} short` : "Received in full") : "Receiving…"} tone={!receipt ? "text-slate-400" : receipt.status === "confirmed" ? (receipt.lines.some(l=>l.short) ? "text-red-300" : "text-emerald-300") : "text-amber-300"}/>
             </div>
 
@@ -69844,7 +69843,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: SHIP-INVOICE 2026-10-09a (one-step ship & invoice; pick/dispatch retired)");
+      console.log("CB build: SHIP-INVOICE 2026-10-09c (one-step ship & invoice; invoice bills the order)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
