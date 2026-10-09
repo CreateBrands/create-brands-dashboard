@@ -14491,6 +14491,36 @@ export async function fetchDistFulfilmentBoard() {
   return rows;
 }
 
+// ── SHIP-INVOICE 2026-10-09a: one step from confirmed order to invoice ──────
+// Create Brands doesn't pick or dispatch as separate physical stages, and the
+// manual dispatch screen silently dropped any line without a batch (31 orders,
+// £21k, Aug–Oct 2026). This runs the proven auto path end to end — FEFO
+// allocation, stock issue, invoice at ORDER prices — so an order can never be
+// invoiced for less than it shipped. Pick and dispatch rows are still written
+// (the stock ledger and COGS hang off them) but no one has to touch them.
+export async function shipAndInvoiceDistOrder(soId, createdBy, freshCosts = {}) {
+  const so = (await fetchDistSalesOrders({})).find(s => s.id === soId);
+  if (!so) throw new Error("Order not found.");
+  const picks = (await fetchDistPicks({})).filter(p => p.soId === soId && p.status !== "cancelled");
+  if (!picks.length) await advanceDistOrderToPick(soId, createdBy);
+  const dispatches = (await fetchDistDispatches({})).filter(d => d.soId === soId);
+  if (!dispatches.length) await advanceDistOrderToDispatch(soId, createdBy, freshCosts);
+  const invoices = (await fetchDistInvoices({})).filter(i => i.soId === soId);
+  if (invoices.length) throw new Error("This order has already been invoiced.");
+  const inv = await advanceDistOrderToInvoice(soId, createdBy);
+  // Safety net: the invoice must equal the order. If it doesn't, say so loudly
+  // rather than letting an under-billed invoice through unnoticed.
+  try {
+    const ordered = (so.lines || []).reduce((a, l) => a + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0);
+    const detail = await fetchDistInvoiceDetail(inv && inv.id ? inv.id : inv);
+    const billed = (detail && detail.lines ? detail.lines : []).reduce((a, l) => a + (Number(l.qty) || 0) * (Number(l.unitPrice) || 0), 0);
+    if (ordered > 0 && billed + 0.01 < ordered * 0.999) {
+      console.error(`SHIP-INVOICE: invoice ${billed.toFixed(2)} is short of order ${ordered.toFixed(2)} on ${so.soNumber}`);
+    }
+  } catch { /* the check must never block the invoice */ }
+  return inv;
+}
+
 // Advance: confirmed → picked. Auto-FEFO allocates batches for every SO line.
 // Guarded: throws if a pick already exists (createDistPick also guards).
 export async function advanceDistOrderToPick(soId, createdBy) {

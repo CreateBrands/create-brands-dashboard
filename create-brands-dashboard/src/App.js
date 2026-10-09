@@ -187,7 +187,7 @@ import {
   fetchDistCustomersForStores, fetchDistPortalCatalogue, uploadDistItemImage,
   fetchDistCollections, upsertDistCollection, deleteDistCollection, fetchDistCollectionItems, setDistCollectionItems, fetchDistCollectionsWithItems,
   fetchDistItemTransactions, fetchDistItemHistory, fetchDistCustomerDetail, fetchDistReceivablesByCustomer, fetchDistSalesOrderDetail,
-  fetchDistFulfilmentBoard, advanceDistOrderToPick, advanceDistOrderToDispatch, advanceDistOrderToInvoice, fetchFreshLinesNeedingCost, fetchDistOrdersByItemType, setDistFulfilCheck, setDistFulfilOrderChecks, setDistFulfilItemChecks,
+  fetchDistFulfilmentBoard, advanceDistOrderToPick, advanceDistOrderToDispatch, advanceDistOrderToInvoice, shipAndInvoiceDistOrder, fetchFreshLinesNeedingCost, fetchDistOrdersByItemType, setDistFulfilCheck, setDistFulfilOrderChecks, setDistFulfilItemChecks,
   updateDistSalesOrder, deleteDistSalesOrder, updateDistPick, deleteDistPick, deleteDistDispatch, fetchDistPickDetail, fetchDistDispatchDetail,
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
@@ -11735,22 +11735,20 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
         </div>
         {/* What's next — advance the order one stage (engine, in place) */}
         {detail && (() => {
-          const next = !detail.status.picked ? { label: "Pick (auto-FEFO)", stage: "confirmed", hint: "Allocate batches (FEFO) and create the pick." }
-            : !detail.status.dispatched ? { label: "Dispatch", stage: "picked", hint: "Ship the picked order — reduces stock, posts COGS." }
-            : !detail.status.invoiced ? { label: "Create Invoice", stage: "dispatched", hint: "Bill the customer for this order." }
+          // SHIP-INVOICE 2026-10-09a: one step from a confirmed order to an invoice.
+          const next = !detail.status.invoiced
+            ? { label: "Ship & invoice", stage: "ship", hint: "Issues stock (FEFO) and bills the customer for the full order." }
             : { label: "Record Payment", stage: "invoiced", hint: "Record the customer's payment." };
           const doAdvance = async () => {
             setErr("");
             try {
-              if (next.stage === "confirmed") await advanceDistOrderToPick(so.id);
-              else if (next.stage === "picked") {
+              if (next.stage === "ship") {
                 // Fresh (non-stocked) lines are charged at cost — capture the
-                // driver's actual supermarket cost before dispatching.
+                // driver's actual supermarket cost before shipping.
                 const freshLines = await fetchFreshLinesNeedingCost(so.id).catch(() => []);
                 if (freshLines.length > 0) { setFreshPrompt({ lines: freshLines, costs: {} }); return; }
-                await advanceDistOrderToDispatch(so.id);
+                await shipAndInvoiceDistOrder(so.id, currentUser?.id);
               }
-              else if (next.stage === "dispatched") await advanceDistOrderToInvoice(so.id);
               else if (next.stage === "invoiced") { navigate("dist-receipts"); onClose(); return; }
               // reload the order detail to reflect the new stage
               const fresh = await fetchDistSalesOrderDetail(so.id).catch(() => null);
@@ -11849,13 +11847,13 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
                   onClick={async () => {
                     setErr("");
                     try {
-                      await advanceDistOrderToDispatch(so.id, undefined, freshPrompt.costs);
+                      await shipAndInvoiceDistOrder(so.id, currentUser?.id, freshPrompt.costs);   // SHIP-INVOICE 2026-10-09a
                       setFreshPrompt(null); setFreshScan("");
                       const fresh = await fetchDistSalesOrderDetail(so.id).catch(() => null);
                       if (fresh) setDetail(fresh);
                     } catch (e) { setErr(e.message); alert(e.message); }
                   }}
-                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-bold">Dispatch at cost</button>
+                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-sm font-bold">Ship &amp; invoice at cost</button>
               </div>
             </div>
           </Modal>
@@ -25647,7 +25645,6 @@ const EMP_NAV_CATALOGUE = {
     { key: "dist-grn",          label: "Goods Received" },
     { key: "dist-picks",        label: "Picking" },
     { key: "dist-dispatch",     label: "Dispatch" },
-    { key: "dist-fulfilment",   label: "Fulfilment" },
     { key: "dist-receipts",     label: "Payments Received" },
     { key: "dist-items",        label: "Items & Stock" },
     { key: "dist-vendors",      label: "Suppliers" },
@@ -26230,9 +26227,9 @@ function EmployeeShell({ currentUser, brands, stores = [], opsTeam, users = [], 
     { key: "dist-credit-notes", label: "Credit Notes",     icon: FileText },
     { key: "dist-po",           label: "Purchase Orders",  icon: ShoppingCart },
     { key: "dist-grn",          label: "Goods Received",   icon: Package },
-    { key: "dist-picks",        label: "Picking",          icon: ClipboardList },
-    { key: "dist-dispatch",     label: "Dispatch",         icon: Truck },
-    { key: "dist-fulfilment",   label: "Fulfilment",       icon: ClipboardList },
+    // SHIP-INVOICE 2026-10-09a: picking, dispatch and the fulfilment board are
+    // retired — orders go straight from confirmed to invoiced. The pages still
+    // exist (old records remain readable by URL) but are off the menus.
     { key: "dist-receipts",     label: "Payments Received", icon: Receipt },
     { key: "dist-items",        label: "Items & Stock",    icon: Package },
     { key: "dist-vendors",      label: "Suppliers",        icon: Users },
@@ -69847,7 +69844,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: FORECAST-UI 2026-10-04f (8-week trajectory, inline day explain, copy brief, skeleton)");
+      console.log("CB build: SHIP-INVOICE 2026-10-09a (one-step ship & invoice; pick/dispatch retired)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
@@ -71714,7 +71711,6 @@ export default function App() {
         { key: "dist-customers",  label: "Customers", icon: Users },
         { key: "dist-pricelists", label: "Price Lists", icon: Tag },
         { key: "dist-sales-orders", label: "Sales Orders", icon: ClipboardList },
-        { key: "dist-fulfilment", label: "Fulfilment", icon: Truck },
         { key: "dist-invoices",   label: "Invoices", icon: FileText },
         { key: "dist-receipts",   label: "Payments Received", icon: PoundSterling },
         { key: "dist-credit-notes", label: "Credit Notes", icon: Receipt },
