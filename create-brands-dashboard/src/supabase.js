@@ -14995,7 +14995,18 @@ export async function deleteDistInvoice(invoiceId) {
   // Reset SO so it can be re-invoiced (if no other invoices remain for it).
   if (head.so_id) {
     const others = await fetchDistInvoices({}).catch(() => []);
-    if (!others.some(i => i.soId === head.so_id)) await advanceSoStatus(head.so_id, "dispatched");
+    // SO-STATUS 2026-10-09a: deleting an invoice is a deliberate reversal, so the
+    // order must actually go back. advanceSoStatus is forward-only (it guards the
+    // approval race), which left orders stuck on "invoiced" with no invoice —
+    // the Ship & invoice button showed, but the status said otherwise.
+    if (!others.some(i => i.soId === head.so_id)) {
+      const { data: so } = await supabase.from("dist_sales_orders").select("status").eq("id", head.so_id).maybeSingle();
+      if (so && so.status === "invoiced") {
+        const dsp = await fetchDistDispatches({}).catch(() => []);
+        const back = dsp.some(d => d.soId === head.so_id) ? "dispatched" : "confirmed";
+        await supabase.from("dist_sales_orders").update({ status: back }).eq("id", head.so_id);
+      }
+    }
   }
   return true;
 }
