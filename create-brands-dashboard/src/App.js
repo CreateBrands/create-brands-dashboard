@@ -11747,7 +11747,7 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
                 // driver's actual supermarket cost before shipping.
                 const freshLines = await fetchFreshLinesNeedingCost(so.id).catch(() => []);
                 if (freshLines.length > 0) { setFreshPrompt({ lines: freshLines, costs: {} }); return; }
-                await shipAndInvoiceDistOrder(so.id, currentUser?.id);
+                await shipAndInvoiceDistOrder(so.id);
               }
               else if (next.stage === "invoiced") { navigate("dist-receipts"); onClose(); return; }
               // reload the order detail to reflect the new stage
@@ -11847,7 +11847,7 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
                   onClick={async () => {
                     setErr("");
                     try {
-                      await shipAndInvoiceDistOrder(so.id, currentUser?.id, freshPrompt.costs);   // SHIP-INVOICE 2026-10-09a
+                      await shipAndInvoiceDistOrder(so.id, undefined, freshPrompt.costs);   // SHIP-INVOICE 2026-10-09a
                       setFreshPrompt(null); setFreshScan("");
                       const fresh = await fetchDistSalesOrderDetail(so.id).catch(() => null);
                       if (fresh) setDetail(fresh);
