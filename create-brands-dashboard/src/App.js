@@ -33722,7 +33722,12 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
 
   // ── Filter visible stores by ownership + status ──────────────────────────
   const visibleStores = useMemo(() => stores.filter(s => {
-    if (s.brandId !== "chocoberry") return false;
+    // UAECHAIN 2026-10-17a: the UAE stores carry brandId "chocoberry-uae", so an
+    // exact match on "chocoberry" dropped every one of them — the page reported
+    // 0 stores and AED 0 while petpooja-sync was filing their sales correctly.
+    // `stores` arrives already scoped to the chosen entity, so widening this to
+    // the brand family cannot mix UK and UAE into one total.
+    if (!String(s.brandId || "").startsWith("chocoberry")) return false;
     if (ownerFilter !== "all" && s.ownershipModel !== ownerFilter) return false;
     if (statusFilter !== "all" && s.status !== statusFilter) return false;
     if (search && !s.shortName?.toLowerCase().includes(search.toLowerCase())) return false;
@@ -33893,13 +33898,22 @@ function ChainPerformanceView({ brands, stores, flipdishStores, flipdishSyncLog,
   const reconciliation = useMemo(() => {
     const fromStr = toLocalDate(fromDate);
     const toStr   = toLocalDate(toDate);
-    const periodEod = entries.filter(e => e.date >= fromStr && e.date <= toStr);
+    // UAECHAIN 2026-10-17a: scope EOD to the stores actually on screen. This was
+    // filtered by date alone, so the UAE view summed every UK report in the
+    // window, printed the total in dirhams and declared a -100% mismatch. Older
+    // entries can have a null storeId, so fall back to the brand in scope.
+    const storeIds = new Set(visibleStores.map(s => s.id));
+    const brandIds = new Set(visibleStores.map(s => s.brandId).filter(Boolean));
+    const periodEod = entries.filter(e => {
+      if (!(e.date >= fromStr && e.date <= toStr)) return false;
+      return e.storeId ? storeIds.has(e.storeId) : brandIds.has(e.brandId);
+    });
     const eodRevenue = periodEod.reduce((a, e) => a + (e.netSales || 0), 0);
     const diff = totals.revenue - eodRevenue;
     const diffPct = eodRevenue > 0 ? (diff / eodRevenue) * 100 : 0;
     const ok = Math.abs(diffPct) <= 5;
     return { eodRevenue, flipdishRevenue: totals.revenue, diff, diffPct, ok, eodCount: periodEod.length };
-  }, [entries, fromDate, toDate, totals.revenue]);
+  }, [entries, fromDate, toDate, totals.revenue, visibleStores]);
 
   // ── Last sync indicator ──────────────────────────────────────────────────
   // Last sync: derive from the actual ingested data, not from flipdish_sync_log.
@@ -69843,7 +69857,7 @@ export default function App() {
   }, []);
   useEffect(() => {
     try {
-      console.log("CB build: SHIP-INVOICE 2026-10-09c (one-step ship & invoice; invoice bills the order)");
+      console.log("CB build: UAECHAIN 2026-10-17a (chain performance sees UAE stores; EOD scoped)");
       // BATCHMATCH: the first run over the backlog is deliberately operator-driven
       // rather than automatic — it writes matched_store_item_id across hundreds of
       // lines, so it should be previewed before it writes. From the console:
