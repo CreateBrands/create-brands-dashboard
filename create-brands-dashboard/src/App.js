@@ -30075,7 +30075,7 @@ function TimesheetReportsView({ stores, brands, opsTeam, currentUser, fenced = f
   const pickableEmployees = useMemo(() => {
     const start = (!from || !to || from <= to) ? from : to;
     return (opsTeam || [])
-      .filter(m => employedDuring(m, start))
+      .filter(m => employedDuring(m, start, { includeLegacy: true }))
       .filter(m => {
         const sid = m.storeIds?.[0];
         if (storeSel !== "all") return tsInScope(sid);
@@ -38124,7 +38124,9 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
         const salaried = isSalaried(emp);
         // LEAVER 2026-10-22 — last working day if they've left or are leaving.
         const leaverLast = leaverPhase(emp) === "active" ? null : leaverLastDay(emp);
-        const leaverInPeriod = !!(leaverLast && leaverLast <= to);
+        const leaverInPeriod = !!(leaverLast && leaverLast >= from && leaverLast <= to);
+        // Left in an earlier period but has hours in this one — paid, flagged.
+        const workedAfterLeaving = !!(leaverLast && leaverLast < from);
         let leaverProrata = null;
         if (salaried) {
           const amount = Number(emp.hourlyRate) || 0;
@@ -38209,8 +38211,9 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
           // Defaults to false so a new starter stands out until confirmed.
           // LEAVER 2026-10-22 — a leaver whose last day is in this period shows
           // as "Left job (issue P45)" unless someone has set it otherwise.
-          payrollStatus: leaverInPeriod && (!emp.payrollStatus || emp.payrollStatus === "on") ? "left" : (emp.payrollStatus || ""),
+          payrollStatus: leaverInPeriod && !emp.payrollStatus ? "left" : (emp.payrollStatus || ""),
           leaver: leaverInPeriod,
+          workedAfterLeaving,
           leavingDate: leaverInPeriod ? leaverLast : null,
           leaverReason: leaverInPeriod ? (emp.leaver?.reasonLabel || "") : "",
           holidayOwedHours: leaverInPeriod && emp.leaver?.holidayOwedHours != null ? Number(emp.leaver.holidayOwedHours) : null,
@@ -38939,6 +38942,9 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                       {r.leaver && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-red-100 border border-red-400 text-red-900 font-semibold"
                         title={`Last working day ${leaverFmtDate(r.leavingDate)}${r.leaverProrata ? ` — salary paid for ${r.leaverProrata.daysWorked} of ${r.leaverProrata.daysAll} days` : ""}${r.holidayOwedHours != null ? ` · holiday owed ${r.holidayOwedHours}h` : ""}`}>
                         LEAVER · {leaverFmtDate(r.leavingDate)}</span>}
+                      {r.workedAfterLeaving && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-100 border border-amber-400 text-amber-900 font-semibold"
+                        title="Their leaving date is before this period but they have shifts in it. They're paid for those shifts — check the leaving date is right and whether this is a payment after their P45 (0T code).">
+                        SHIFTS AFTER LEAVING</span>}
                       {r.salaryPrivacy === "hidden_included" && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-stone-200 border border-stone-400 text-stone-700 font-semibold" title="Owner-only. Still counted in this store's wage cost.">HIDDEN</span>}
                       {r.salaryPrivacy === "hidden_excluded" && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-purple-100 border border-purple-400 text-purple-900 font-semibold" title="Owner-only. Not counted in store wage cost.">HIDDEN · OFF-STORE</span>}
                     </td>
@@ -46597,9 +46603,14 @@ function staffCanSignIn(m) {
 }
 // Was this person on the books at any point from `from` onwards? Used so a
 // pay period still includes someone who left part-way through it.
-function employedDuring(m, from) {
+// People archived the old way (no leaver record) only count when
+// includeLegacy is set: their archive date is when someone clicked Archive,
+// not necessarily when they stopped working, so payroll picks them up from
+// their actual shifts instead (see lateLeavers in PayrollRunScreen).
+function employedDuring(m, from, { includeLegacy = false } = {}) {
   if (!m) return false;
   if (leaverPhase(m) !== "left") return true;
+  if (!m.leaverStatus && !includeLegacy) return false;
   const last = leaverLastDay(m);
   return !!(last && from && last >= from);
 }
@@ -46737,7 +46748,8 @@ function StartLeaverModal({ employee, currentUser, onUpdateEmployee, onClose, on
     setForm(f => ({
       ...f, reason: v,
       rehireEligible: r ? r.rehire : f.rehireEligible,
-      type: r?.immediate ? "immediate" : f.type,
+      type: r?.immediate ? "immediate"
+        : (LEAVING_REASONS.find(x => x.value === f.reason)?.immediate ? "notice" : f.type),
     }));
     setErr("");
   };
@@ -46909,6 +46921,7 @@ function LeavingTab({ employee, currentUser, onUpdateEmployee, onStart }) {
   // manager can sanity-check before the accountant does.
   useEffect(() => {
     let cancelled = false;
+    setPackErr("");
     if (phase === "active" || !last) { setPack(null); return; }
     (async () => {
       try {
@@ -47368,7 +47381,7 @@ function EmployeeProfileView({
       </div>
 
       {/* LEAVER 2026-10-22 — one obvious way in to the leaver process. */}
-      {leaverPhase(employee) === "notice" && (
+      {leaverPhase(employee) === "notice" && isManagerOrAbove(currentUser?.role) && (
         <button onClick={() => setTab("leaving")} className="w-full text-left rounded-2xl border border-amber-800/50 bg-amber-950/20 px-4 py-3 text-sm text-amber-200 hover:bg-amber-950/30">
           Serving notice — last working day {leaverFmtDate(employee.leavingDate)}{employee.leaver && !employee.leaver.approvedAt ? " · waiting for HQ approval" : ""}. Open the Leaving tab for the checklist and final pay.
         </button>
@@ -62403,7 +62416,10 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
     if (next.length === 4) {
       // LEAVER 2026-10-22 — this matched archived staff too, so a leaver's PIN
       // still clocked them in. Leavers can no longer sign in at the kiosk.
-      const found = opsTeam.find(m => m.pin && m.pin === next && staffCanSignIn(m));
+      // A leaver still clocked in (e.g. last shift ran past midnight) can still
+      // use their PIN to clock out.
+      const found = opsTeam.find(m => m.pin && m.pin === next && (staffCanSignIn(m) ||
+        (punchRecords || []).some(p => p.employeeId === m.id && !p.punchOut)));
       if (found) {
         setMatched(found);   // shows name + Confirm button; employee verifies it's them
         setError("");
@@ -71253,7 +71269,8 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [opsTeamAll, actualUser?.email, actualUser?.role]);
 
-  // LEAVER 2026-10-22 — once a notice-period leaver's last day has passed, record
+  // LEAVER 2026-10-22 — once a notice-period leaver's last day has passed (approved
+  // or not — the date takes effect either way), record
   // them as left (archived, payroll status "left"). leaverPhase already treats
   // them as left everywhere, so this is bookkeeping, not the access cut-off.
   // Runs once per person per load, only for a manager-or-above session.
@@ -71280,11 +71297,11 @@ export default function App() {
 
   // LEAVER 2026-10-22 — a saved session (manager login or staff PIN login)
   // belonging to someone who has gone through the leaver process and left is
-  // signed out. Owners are never signed out this way. Only people with a
+  // signed out. Owners and HQ are never signed out this way. Only people with a
   // leaver record count, and only if every staff record linked to the login
   // has left — so an old duplicate profile can't lock out a current manager.
   useEffect(() => {
-    if (!actualUser || actualUser.role === "owner" || (opsTeamAll || []).length === 0) return;
+    if (!actualUser || isHqOrAbove(actualUser.role) || (opsTeamAll || []).length === 0) return;
     const e = (actualUser.email || "").trim().toLowerCase();
     const linked = (opsTeamAll || []).filter(mm =>
       mm.id === actualUser.id || mm.id === actualUser.opsTeamMemberId ||
@@ -72123,7 +72140,7 @@ export default function App() {
       // when set, so restore keeps working before the leaver SQL is run.
       const cur = (opsTeamAll || []).find(x => x.id === id);
       const s = (cur && (cur.leaverStatus || cur.leavingDate))
-        ? await updateOpsTeamMember(id, { archivedAt: null, leaverStatus: null, leavingDate: null })
+        ? await updateOpsTeamMember(id, { archivedAt: null, leaverStatus: null, leavingDate: null, ...(cur.payrollStatus === "left" ? { payrollStatus: "" } : {}) })
         : await unarchiveOpsTeamMember(id);
       setOpsTeam(ts => ts.map(x => x.id === s.id ? s : x));
       showToast("Restored to the active team");
@@ -72810,7 +72827,7 @@ export default function App() {
               );
             })()}
             {effectiveActiveView === "whos-working" && <WhosWorkingScreen punchRecords={punchRecords.filter(p => visibleBrands.some(b => b.id === p.brandId))} schedules={schedules} opsTeam={opsTeam} stores={stores} brands={visibleBrands} visibleStoreIds={scopedVisibleStoreIds} currentUser={currentUser} onUpdatePunch={updatePunchRec} onDeletePunch={delPunchRec}/>}
-            {effectiveActiveView === "schedule" && <ScheduleView brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} opsTeam={opsTeam} users={users} schedules={schedules||[]} availability={availability||[]} shiftPresets={shiftPresets||[]} punchRecords={punchRecords||[]} busyPeriods={busyPeriods||[]} storeRoles={storeRoles||[]} onSaveBusyPeriod={saveBusyPeriod} onDeleteBusyPeriod={deleteBusyPeriod} currentUser={currentUser} onAdd={addSchedule} onUpdate={addSchedule} onDelete={deleteSchedule} onPublish={handlePublishWeek} onUpdateMember={(id,patch)=>{ const m = opsTeam.find(x=>x.id===id); if (m) return updateOpsTeam({ ...m, ...patch }); }}/>}
+            {effectiveActiveView === "schedule" && <ScheduleView brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} opsTeam={opsTeam} users={users} schedules={schedules||[]} availability={availability||[]} shiftPresets={shiftPresets||[]} punchRecords={punchRecords||[]} busyPeriods={busyPeriods||[]} storeRoles={storeRoles||[]} onSaveBusyPeriod={saveBusyPeriod} onDeleteBusyPeriod={deleteBusyPeriod} currentUser={currentUser} onAdd={addSchedule} onUpdate={addSchedule} onDelete={deleteSchedule} onPublish={handlePublishWeek} onUpdateMember={(id,patch)=>{ const m = opsTeam.find(x=>x.id===id); if (m) return patchOpsTeam(id, patch); }}/>}
             {effectiveActiveView === "availability" && <ManagerAvailabilityView brands={visibleBrands} stores={stores} opsTeam={opsTeam} availability={availability||[]} currentUser={currentUser} onUpdate={updateAvailability} onAdd={addAvailability} onDelete={id => updateAvailability({id, status:"rejected"})} busyPeriods={busyPeriods||[]}/>}
             {effectiveActiveView === "google-hub"     && canSeeView("google-hub") && <ChainCommandCenter stores={stores} currentUser={currentUser}/>}
             {effectiveActiveView === "eod"            && <EODView brands={visibleBrands} stores={stores} visibleStoreIds={scopedVisibleStoreIds} entries={entries} currentUser={currentUser} onAddEntry={addEntry} onDeleteEntry={delEntry} onDepositCash={depositEodCash}/>}

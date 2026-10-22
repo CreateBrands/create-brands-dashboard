@@ -346,7 +346,12 @@ export async function fetchOpsTeam() {
   return data.map(dbOpsTeamToApp);
 }
 export async function upsertOpsTeamMember(m) {
-  const { data, error } = await supabase.from("ops_team").upsert(appOpsTeamToDb(m), { onConflict: "id" }).select().single();
+  // LEAVER 2026-10-22 — leaver fields are only ever written by a partial
+  // update (updateOpsTeamMember). A whole-row save from a screen holding a
+  // stale copy of the person must not wipe a leaver record written since.
+  const row = appOpsTeamToDb(m);
+  delete row.leaver_status; delete row.leaving_date; delete row.leaver;
+  const { data, error } = await supabase.from("ops_team").upsert(row, { onConflict: "id" }).select().single();
   if (error) throw error;
   return dbOpsTeamToApp(data);
 }
@@ -711,9 +716,11 @@ function dbOpsTeamToApp(m) {
     // LEAVER 2026-10-22 — leaving process. leaverStatus: null | "notice" | "left".
     // leavingDate = last working day (drives payroll inclusion and access cut-off).
     // leaver holds the rest: type, reason, rehire flag, approval, checklist.
-    leaverStatus: m.leaver_status || null,
-    leavingDate:  m.leaving_date || null,
-    leaver:       (m.leaver && typeof m.leaver === "object") ? m.leaver : null,
+    // Only mapped when the columns exist, so a whole-row save made before the
+    // SQL is run doesn't try to write columns the table doesn't have yet.
+    ...("leaver_status" in m ? { leaverStatus: m.leaver_status || null } : {}),
+    ...("leaving_date"  in m ? { leavingDate:  m.leaving_date  || null } : {}),
+    ...("leaver"        in m ? { leaver: (m.leaver && typeof m.leaver === "object") ? m.leaver : null } : {}),
     hireDate:    m.hire_date || null,
     payType:     m.pay_type || "hourly",
     phoneClockIn: m.phone_clock_in ?? false,
