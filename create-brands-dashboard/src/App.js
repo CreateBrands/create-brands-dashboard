@@ -11,7 +11,7 @@ import {
   fetchCleaningTasks, upsertCleaningTask, removeCleaningTask,
   fetchAssignments, upsertAssignment, removeAssignment,
   fetchOpsTeam, upsertOpsTeamMember, removeOpsTeamMember, updateOpsTeamMember,
-  archiveOpsTeamMember, unarchiveOpsTeamMember,
+  archiveOpsTeamMember, unarchiveOpsTeamMember, setOpsTeamPaymentMethod,
   fetchAccessPermissions, setAccessPermission, setAccessPermissionsBulk,
   fetchEntityOverrides, setEntityOverride,
   fetchCustomRoles, upsertCustomRole, archiveCustomRole, setMemberCustomRole,
@@ -37602,7 +37602,7 @@ function UserEditorModal({ user: editUser, brands, stores = [], onSave, onClose 
 // each row to payroll_periods and exports a clean Excel package for the accountant
 // (loans are NEVER included). Loudly flags any employee whose rate can't be
 // resolved (e.g. minimum-wage with no configured band rate or missing DOB).
-function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployeeProfile, onUpdateEmployeeStatus, onUpdateEmployeeSort, onPayrollOrderSaved }) {
+function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployeeProfile, onUpdateEmployeeStatus, onUpdateEmployeeSort, onPayrollOrderSaved, onSetPaymentMethod }) {
   const ExcelJS = useExcelJS();
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -37637,6 +37637,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
     { key: "working",    idx: 11, label: "Working" },
     { key: "age",        idx: 12, label: "Age" },
     { key: "minrate",    idx: 13, label: "Min rate" },
+    { key: "paymethod",  idx: 14, label: "Payment method" },   // PAYMETHOD 2026-10-22
   ];
   const [hiddenCols, setHiddenCols] = useState(() => {
     try { return new Set(JSON.parse(localStorage.getItem("payrollHiddenCols") || "[]")); }
@@ -37706,6 +37707,9 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
       value: r => (r.newStarter ? "Yes" : "") },
     { key: "status",     label: "Status",           width: 16,
       value: r => ({ new_starter: "New starter", on: "On payroll", not_on: "Not on payroll", left: "Left job (issue P45)", pending: "Pending" })[r.payrollStatus] || "" },
+    // PAYMETHOD 2026-10-22 — set on Team → Payment Methods (or on this screen).
+    { key: "payMethod",  label: "Payment Method",   width: 16,
+      value: r => paymentMethodLabel(r.paymentMethod) || "Not set" },
     // Salaried staff have no hourly floor — show the monthly salary the pay is
     // derived from, matching the on-screen column.
     { key: "minRate",    label: "Min Rate",         width: 11, numeric: true,
@@ -37747,7 +37751,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
   // "Match screen" maps the on-screen picker onto the sheet where the two share
   // a column. The export-only fields (name split, salary term, normalised
   // hours) have no on-screen counterpart and are left as they are.
-  const SCREEN_TO_EXPORT = { status: "status", gross: "wages", bank: "bank", normalized: "normWage", cash: "cash", minrate: "minRate" };
+  const SCREEN_TO_EXPORT = { status: "status", gross: "wages", bank: "bank", normalized: "normWage", cash: "cash", minrate: "minRate", paymethod: "payMethod" };
   const matchScreenCols = () => setHiddenExportCols(prev => {
     const next = new Set(prev);
     Object.entries(SCREEN_TO_EXPORT).forEach(([screenKey, exportKey]) => {
@@ -38214,6 +38218,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
           payrollStatus: leaverInPeriod && !emp.payrollStatus ? "left" : (emp.payrollStatus || ""),
           leaver: leaverInPeriod,
           workedAfterLeaving,
+          paymentMethod: emp.paymentMethod || "",
           leavingDate: leaverInPeriod ? leaverLast : null,
           leaverReason: leaverInPeriod ? (emp.leaver?.reasonLabel || "") : "",
           holidayOwedHours: leaverInPeriod && emp.leaver?.holidayOwedHours != null ? Number(emp.leaver.holidayOwedHours) : null,
@@ -38860,13 +38865,14 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                   <th className="py-2 pr-3 sticky top-0 z-10 bg-stone-100">Working</th>
                   <th className="py-2 pr-3 sticky top-0 z-10 bg-stone-100 text-right">Age</th>
                   <th className="py-2 pr-3 sticky top-0 z-10 bg-stone-100 text-right">Min rate</th>
+                  <th className="py-2 pr-3 sticky top-0 z-10 bg-stone-100">Payment method</th>
                 </tr>
               </thead>
               <tbody>
                 {rowGroups.map(g => (
                   <Fragment key={g.id || "unassigned"}>
                     <tr className={`${locColor(g.id).row} border-b-2 ${locColor(g.id).border}`}>
-                      <td colSpan={14} className={`py-2 px-3 sticky left-0 ${locColor(g.id).row}`}>
+                      <td colSpan={15} className={`py-2 px-3 sticky left-0 ${locColor(g.id).row}`}>
                         <span className={`inline-block w-1.5 h-4 rounded-sm mr-2 align-middle ${locColor(g.id).bar}`} />
                         <span className={`text-[11px] font-bold uppercase tracking-wider ${locColor(g.id).text}`}>{g.name}</span>
                         <span className="ml-2 text-[11px] text-stone-600">
@@ -38889,7 +38895,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                         onDragOver={e => e.preventDefault()}
                         onDrop={e => { e.preventDefault(); moveItem(dragId, it.key); setDragId(null); }}
                         className={`border-b ${sepColor(s.color).border} ${sepColor(s.color).row} ${dragId === it.key ? "opacity-40" : ""}`}>
-                        <td colSpan={13} className={`pc-keep py-1.5 px-3 sticky left-0 ${sepColor(s.color).row}`}>
+                        <td colSpan={14} className={`pc-keep py-1.5 px-3 sticky left-0 ${sepColor(s.color).row}`}>
                           <span className="text-stone-400 mr-2 cursor-grab select-none" title="Drag to reorder">⋮⋮</span>
                           <input
                             value={sepDraft[s.id] ?? s.label ?? ""}
@@ -38949,7 +38955,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                       {r.salaryPrivacy === "hidden_excluded" && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-purple-100 border border-purple-400 text-purple-900 font-semibold" title="Owner-only. Not counted in store wage cost.">HIDDEN · OFF-STORE</span>}
                     </td>
                     {r.rowError ? (
-                      <td colSpan={12} className="pc-keep py-2 pr-3 text-red-900 text-xs">{r.rowError}</td>
+                      <td colSpan={13} className="pc-keep py-2 pr-3 text-red-900 text-xs">{r.rowError}</td>
                     ) : (
                       <>
                         <td className="py-1.5 pr-3">
@@ -39117,6 +39123,23 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                           ) : (
                             <span className="text-[11px] text-amber-400" title="No minimum wage rate configured for this band and date">not set</span>
                           )}
+                        </td>
+                        <td className="py-1.5 pr-3">
+                          {/* PAYMETHOD 2026-10-22 — saved on the person, like Status. */}
+                          <select value={r.paymentMethod || ""} title="Payment method"
+                            onChange={e => {
+                              const v = e.target.value;
+                              updateRow(r.employeeId, { paymentMethod: v });
+                              if (onSetPaymentMethod) onSetPaymentMethod([r.employeeId], v || null).catch(err => alert(`Could not save payment method: ${err?.message || err}`));
+                            }}
+                            className={`text-xs rounded-lg border px-2 py-1 ${
+                              r.paymentMethod === "bank"   ? "border-sky-400 bg-sky-50 text-sky-900" :
+                              r.paymentMethod === "cash"   ? "border-emerald-400 bg-emerald-50 text-emerald-900" :
+                              r.paymentMethod === "cheque" ? "border-violet-400 bg-violet-50 text-violet-900" :
+                                                             "border-amber-400 bg-amber-50 text-amber-900"}`}>
+                            <option value="">Not set</option>
+                            {PAYMENT_METHODS.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+                          </select>
                         </td>
                       </>
                     )}
@@ -40021,7 +40044,7 @@ function EmployeeNavSetup({ customRoles = [] }) {
 function AdminPanelView({
   brands, users, entries,
   stores = [], flipdishStores = [],
-  opsTeam = [], currentUser, onOpenEmployeeProfile, onUpdateEmployeeStatus, onUpdateEmployeeSort, onPayrollOrderSaved,
+  opsTeam = [], currentUser, onOpenEmployeeProfile, onUpdateEmployeeStatus, onUpdateEmployeeSort, onPayrollOrderSaved, onSetPaymentMethod,
   onAddBrand, onUpdateBrand, onDeleteBrand,
   onAddUser, onUpdateUser, onDeleteUser,
   onAddStore, onUpdateStore, onDeleteStore,
@@ -40161,7 +40184,7 @@ function AdminPanelView({
       )}
 
       {tab==="payroll"&&(
-        <PayrollRunScreen opsTeam={opsTeam} stores={stores} brands={brands} currentUser={currentUser} onOpenEmployeeProfile={onOpenEmployeeProfile} onUpdateEmployeeStatus={onUpdateEmployeeStatus} onUpdateEmployeeSort={onUpdateEmployeeSort} onPayrollOrderSaved={onPayrollOrderSaved} />
+        <PayrollRunScreen opsTeam={opsTeam} stores={stores} brands={brands} currentUser={currentUser} onOpenEmployeeProfile={onOpenEmployeeProfile} onUpdateEmployeeStatus={onUpdateEmployeeStatus} onUpdateEmployeeSort={onUpdateEmployeeSort} onPayrollOrderSaved={onPayrollOrderSaved} onSetPaymentMethod={onSetPaymentMethod} />
       )}
 
       {locModal&&<LocationEditorModal brand={locModal==="new"?null:locModal} onSave={locModal==="new"?onAddBrand:onUpdateBrand} onClose={()=>setLocModal(null)}/>}
@@ -47112,6 +47135,193 @@ function LeavingTab({ employee, currentUser, onUpdateEmployee, onStart }) {
       <div className="text-[11px] text-slate-600">
         Records are kept after someone leaves: payroll for at least 3 years, holiday and pension records for 6. Review this profile for deletion after {leaverFmtDate(leaverAddYears(last, 6))}.
       </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// PAYMETHOD 2026-10-22 — how each employee is paid
+// ════════════════════════════════════════════════════════════════════════════
+// One place for managers to see and set everyone's payment method. The choice
+// travels to the payroll run and the accountant's sheet as its own column. It
+// is a record of preference only: the bank / cash split on the payroll run is
+// still worked out exactly as before.
+const PAYMENT_METHODS = [
+  { value: "bank",   label: "Bank transfer", short: "Bank",   tone: "border-sky-500 bg-sky-600 text-white" },
+  { value: "cash",   label: "Cash",          short: "Cash",   tone: "border-emerald-500 bg-emerald-600 text-white" },
+  { value: "cheque", label: "Cheque",        short: "Cheque", tone: "border-violet-500 bg-violet-600 text-white" },
+];
+function paymentMethodLabel(v) {
+  return PAYMENT_METHODS.find(p => p.value === v)?.label || "";
+}
+
+function PaymentMethodsView({ stores = [], visibleStoreIds = [], opsTeam = [], storeRoles = [], currentUser, onSetPaymentMethod }) {
+  const [search, setSearch] = useState("");
+  const [storeFilter, setStoreFilter] = useState("");
+  const [onlyUnset, setOnlyUnset] = useState(false);
+  const [selected, setSelected] = useState(() => new Set());
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const canEdit = isManagerOrAbove(currentUser?.role);
+
+  // Same scope as the Team list: current staff (incl. notice-period leavers,
+  // who are still paid) at stores this person can see.
+  const people = useMemo(() => {
+    const visible = new Set(visibleStoreIds || []);
+    return (opsTeam || [])
+      .filter(m => leaverPhase(m) !== "left")
+      .filter(m => visible.size === 0 ? isHqOrAbove(currentUser?.role) : (m.storeIds || []).some(id => visible.has(id)));
+  }, [opsTeam, visibleStoreIds, currentUser]);
+
+  const storeOpts = useMemo(
+    () => stores.filter(s => !s.archivedAt && (visibleStoreIds || []).includes(s.id)),
+    [stores, visibleStoreIds]
+  );
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return people.filter(m => {
+      if (storeFilter && !(m.storeIds || []).includes(storeFilter)) return false;
+      if (onlyUnset && m.paymentMethod) return false;
+      if (q && !`${m.firstName} ${m.lastName || ""} ${m.nickname || ""}`.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [people, search, storeFilter, onlyUnset]);
+
+  const groups = useMemo(() => {
+    const by = new Map();
+    filtered.forEach(m => {
+      const sid = (m.storeIds || [])[0] || "";
+      if (!by.has(sid)) by.set(sid, []);
+      by.get(sid).push(m);
+    });
+    const name = id => { const s = stores.find(x => x.id === id); return s ? (s.shortName || s.name) : "No store assigned"; };
+    return [...by.entries()]
+      .map(([id, ms]) => ({ id, name: name(id), members: ms.sort((a, b) => (a.firstName || "").localeCompare(b.firstName || "")) }))
+      .sort((a, b) => (a.id ? 0 : 1) - (b.id ? 0 : 1) || a.name.localeCompare(b.name));
+  }, [filtered, stores]);
+
+  const counts = useMemo(() => {
+    const c = { bank: 0, cash: 0, cheque: 0, unset: 0 };
+    people.forEach(m => { c[m.paymentMethod || "unset"] = (c[m.paymentMethod || "unset"] || 0) + 1; });
+    return c;
+  }, [people]);
+
+  const roleLabel = (m) => {
+    const ids = (m.roleIds && m.roleIds.length) ? m.roleIds : (m.roleId ? [m.roleId] : []);
+    return ids.map(id => storeRoles.find(r => r.id === id)?.name).filter(Boolean).join(", ") || m.role || "";
+  };
+
+  const apply = async (ids, method, key) => {
+    if (!canEdit || !ids.length) return;
+    setBusy(key); setErr("");
+    try {
+      await onSetPaymentMethod(ids, method);
+      if (key === "bulk") setSelected(new Set());
+    } catch (e) {
+      const msg = e?.message || String(e);
+      setErr(/payment_method|column/i.test(msg)
+        ? "The payment method field isn't in the database yet — run docs/sql/2026-10-22_payment_method.sql in Supabase first."
+        : `Could not save: ${msg}`);
+    } finally { setBusy(""); }
+  };
+
+  const toggle = (id) => setSelected(prev => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const allShownSelected = filtered.length > 0 && filtered.every(m => selected.has(m.id));
+  const toggleAll = () => setSelected(allShownSelected ? new Set() : new Set(filtered.map(m => m.id)));
+
+  const selCls = "px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-sm text-slate-200 focus:outline-none focus:border-indigo-500";
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h1 className="text-2xl font-bold text-white flex items-center gap-2"><PoundSterling size={22}/> Payment methods</h1>
+        <p className="text-sm text-slate-400 mt-1 max-w-2xl">How each person is paid. This shows as a Payment Method column on the payroll run and the sheet sent to the accountant. It doesn't change the bank / cash amounts the payroll run works out.</p>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {[...PAYMENT_METHODS.map(p => ({ k: p.value, label: p.label })), { k: "unset", label: "Not set" }].map(c => (
+          <div key={c.k} className={`rounded-xl border px-3 py-2 ${c.k === "unset" && counts.unset ? "border-amber-800/60 bg-amber-950/30" : "border-slate-800 bg-slate-900"}`}>
+            <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">{c.label}</div>
+            <div className={`text-lg font-bold tabular-nums ${c.k === "unset" && counts.unset ? "text-amber-300" : "text-white"}`}>{counts[c.k] || 0}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex flex-wrap gap-2 items-center">
+        <input id="pm-search" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name…" className={`${selCls} flex-1 min-w-[180px]`}/>
+        <select id="pm-store" value={storeFilter} onChange={e => setStoreFilter(e.target.value)} className={selCls}>
+          <option value="">All stores</option>
+          {storeOpts.map(s => <option key={s.id} value={s.id}>{s.shortName || s.name}</option>)}
+        </select>
+        <button onClick={() => setOnlyUnset(v => !v)}
+          className={`px-3 py-2 rounded-xl text-sm font-semibold ${onlyUnset ? "bg-amber-500 text-amber-950" : "bg-slate-900 text-amber-300 border border-amber-900/60 hover:bg-amber-950/40"}`}>
+          {onlyUnset ? "Showing not set" : `Not set only${counts.unset ? ` (${counts.unset})` : ""}`}
+        </button>
+      </div>
+
+      {canEdit && selected.size > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-indigo-700/60 bg-indigo-950/30 px-3 py-2">
+          <span className="text-sm text-indigo-200 font-semibold">{selected.size} selected — set to</span>
+          {PAYMENT_METHODS.map(p => (
+            <button key={p.value} disabled={!!busy} onClick={() => apply([...selected], p.value, "bulk")}
+              className="px-3 py-1.5 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white font-semibold hover:bg-slate-700 disabled:opacity-50">{p.label}</button>
+          ))}
+          <button disabled={!!busy} onClick={() => setSelected(new Set())} className="ml-auto text-xs text-slate-400 hover:text-white">Clear selection</button>
+        </div>
+      )}
+      {err && <div className="text-sm text-red-400">{err}</div>}
+
+      {filtered.length === 0 ? (
+        <div className="text-sm text-slate-500 bg-slate-900 border border-slate-800 rounded-2xl p-8 text-center">
+          {onlyUnset ? "Everyone shown has a payment method set." : "No team members match these filters."}
+        </div>
+      ) : (
+        <div className="space-y-5">
+          {canEdit && (
+            <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer select-none">
+              <input id="pm-select-all" type="checkbox" checked={allShownSelected} onChange={toggleAll}/>
+              Select all {filtered.length} shown
+            </label>
+          )}
+          {groups.map(g => (
+            <div key={g.id || "none"}>
+              <div className="flex items-center gap-2 mb-2">
+                <h2 className="text-sm font-bold text-slate-300">{g.name}</h2>
+                <span className="text-[11px] text-slate-600">{g.members.length}</span>
+              </div>
+              <div className="space-y-1.5">
+                {g.members.map(m => (
+                  <div key={m.id} className="flex items-center gap-3 flex-wrap bg-slate-900 border border-slate-800 rounded-xl px-3 py-2.5">
+                    {canEdit && <input type="checkbox" aria-label={`Select ${m.firstName}`} checked={selected.has(m.id)} onChange={() => toggle(m.id)}/>}
+                    <Avatar photoUrl={m.photoUrl} name={`${m.firstName} ${m.lastName || ""}`} color={m.color} size={30} rounded="lg"/>
+                    <div className="flex-1 min-w-[140px]">
+                      <div className="text-sm font-semibold text-white flex items-center gap-2 flex-wrap">
+                        {m.firstName} {m.lastName}
+                        <LeaverBadge member={m}/>
+                      </div>
+                      <div className="text-[11px] text-slate-500">{roleLabel(m)}</div>
+                    </div>
+                    <div className="flex gap-1" role="group" aria-label={`Payment method for ${m.firstName}`}>
+                      {PAYMENT_METHODS.map(p => {
+                        const on = m.paymentMethod === p.value;
+                        return (
+                          <button key={p.value} disabled={!canEdit || busy === m.id}
+                            onClick={() => apply([m.id], on ? null : p.value, m.id)}
+                            title={on ? `Click again to clear` : `Pay ${m.firstName} by ${p.label.toLowerCase()}`}
+                            className={`px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-colors disabled:cursor-default ${on ? p.tone : "border-slate-700 bg-slate-800 text-slate-400 hover:text-white hover:border-slate-500"}`}>
+                            {p.short}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -70628,7 +70838,7 @@ export default function App() {
   // Board, Training, Contracts. Old per-item keys still work via redirect.
   const [teamTab, setTeamTab] = useState("team");
   const [commsTab, setCommsTab] = useState("helpdesk");
-  const TEAM_TAB_KEYS = ["team", "time-attend", "pay-periods", "hiring", "onboarding-board", "training", "contracts"];
+  const TEAM_TAB_KEYS = ["team", "time-attend", "pay-periods", "payment-methods", "hiring", "onboarding-board", "training", "contracts"];
   useEffect(() => {
     if (TEAM_TAB_KEYS.includes(activeView)) setTeamTab(activeView);
   }, [activeView]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -72133,6 +72343,14 @@ export default function App() {
       throw err;
     }
   }, [showToast]);
+  // PAYMETHOD 2026-10-22 — one write for one or many people.
+  const setPaymentMethod = useCallback(async (ids, method) => {
+    const saved = await setOpsTeamPaymentMethod(ids, method);
+    const byId = new Map(saved.map(x => [x.id, x]));
+    setOpsTeam(ts => ts.map(x => byId.get(x.id) || x));
+    showToast(saved.length > 1 ? `${saved.length} people set to ${paymentMethodLabel(method) || "not set"}` : "Payment method saved");
+    return saved;
+  }, [showToast]);
   const restoreOpsTeam = useCallback(async id => {
     try {
       // LEAVER 2026-10-22 — restoring someone who went through the leaver
@@ -72528,6 +72746,7 @@ export default function App() {
         { key: "whos-working", label: "Who's Working", icon: UserCheck, hideForCK: true },
         { key: "team:time-attend",     view: "team", tab: "time-attend",     label: "Time & Attendance", icon: Clock },
         { key: "team:pay-periods",     view: "team", tab: "pay-periods",     label: "Pay Periods",       icon: Calendar },
+        { key: "team:payment-methods", view: "team", tab: "payment-methods", label: "Payment Methods",   icon: PoundSterling, gateRole: ["owner", "hq_staff", "manager"] },
         { key: "team:hiring",          view: "team", tab: "hiring",          label: "Hiring",            icon: UserPlus, badge: hiringBadge > 0 ? hiringBadge.toString() : null, gateView: "hiring" },
         { key: "team:onboarding-board",view: "team", tab: "onboarding-board",label: "Onboarding Board",  icon: ClipboardList, gateView: "onboarding-board" },
         { key: "team:training",        view: "team", tab: "training",        label: "Training",          icon: GraduationCap },
@@ -72889,6 +73108,11 @@ export default function App() {
                       tab strip into its own view. That page already carries records,
                       summary, breaks and recordings; payroll sign-off is a separate
                       job done monthly, not another tab on a busy screen. */}
+                  {effTeamTab === "payment-methods" && isManagerOrAbove(currentUser.role) && <PaymentMethodsView
+                    stores={stores} visibleStoreIds={crossEntityStoreIds}
+                    opsTeam={opsTeam} storeRoles={storeRoles} currentUser={currentUser}
+                    onSetPaymentMethod={setPaymentMethod}
+                  />}
                   {effTeamTab === "pay-periods" && <PayPeriodsPanel
                     stores={crossEntityStores}
                     isHQ={isHqOrAbove(currentUser.role)}
@@ -73091,6 +73315,7 @@ export default function App() {
                   setOpsTeam(ts => ts.map(x => x.id === id ? { ...x, payrollSort } : x));
                 } catch (e) { /* order is cosmetic — never block the run */ }
               }}
+              onSetPaymentMethod={setPaymentMethod}
               onUpdateEmployeeStatus={async (id, payrollStatus) => {
                 try {
                   const saved = await updateOpsTeamMember(id, { payrollStatus });

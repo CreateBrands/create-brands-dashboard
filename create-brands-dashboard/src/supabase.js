@@ -351,6 +351,7 @@ export async function upsertOpsTeamMember(m) {
   // stale copy of the person must not wipe a leaver record written since.
   const row = appOpsTeamToDb(m);
   delete row.leaver_status; delete row.leaving_date; delete row.leaver;
+  delete row.payment_method;   // PAYMETHOD — set only from the payment methods screen / payroll
   const { data, error } = await supabase.from("ops_team").upsert(row, { onConflict: "id" }).select().single();
   if (error) throw error;
   return dbOpsTeamToApp(data);
@@ -393,6 +394,20 @@ export async function updateOpsTeamMember(id, patch) {
 // which you are generally required to retain. Archiving keeps every row and
 // simply removes them from active lists; the whole app already filters on
 // `archivedAt`, so nothing else needs to change.
+// PAYMETHOD 2026-10-22 — set the payment method for one or many people in a
+// single write (the Payment Methods screen's bulk action).
+export async function setOpsTeamPaymentMethod(ids, method) {
+  const list = (Array.isArray(ids) ? ids : [ids]).filter(Boolean);
+  if (!list.length) return [];
+  const { data, error } = await supabase
+    .from("ops_team")
+    .update({ payment_method: method || null, updated_at: new Date().toISOString() })
+    .in("id", list)
+    .select();
+  if (error) throw error;
+  return (data || []).map(dbOpsTeamToApp);
+}
+
 export async function archiveOpsTeamMember(id) {
   if (!id) throw new Error("id required");
   return updateOpsTeamMember(id, { archivedAt: new Date().toISOString() });
@@ -640,6 +655,7 @@ function appOpsTeamToDb(m) {
   if (m.leaverStatus  !== undefined) row.leaver_status = m.leaverStatus || null;
   if (m.leavingDate   !== undefined) row.leaving_date  = m.leavingDate || null;
   if (m.leaver        !== undefined) row.leaver        = m.leaver || null;
+  if (m.paymentMethod !== undefined) row.payment_method = m.paymentMethod || null;
   // Slice 6 — explicit hire date. Manager can override; default-derived
   // from linked job_application.archived_at in the profile UI.
   if (m.hireDate      !== undefined) row.hire_date     = m.hireDate || null;
@@ -721,6 +737,8 @@ function dbOpsTeamToApp(m) {
     ...("leaver_status" in m ? { leaverStatus: m.leaver_status || null } : {}),
     ...("leaving_date"  in m ? { leavingDate:  m.leaving_date  || null } : {}),
     ...("leaver"        in m ? { leaver: (m.leaver && typeof m.leaver === "object") ? m.leaver : null } : {}),
+    // PAYMETHOD 2026-10-22 — how they're paid: "bank" | "cash" | "cheque" | null (not set).
+    ...("payment_method" in m ? { paymentMethod: m.payment_method || null } : {}),
     hireDate:    m.hire_date || null,
     payType:     m.pay_type || "hourly",
     phoneClockIn: m.phone_clock_in ?? false,
