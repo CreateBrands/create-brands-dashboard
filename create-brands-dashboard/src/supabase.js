@@ -631,6 +631,10 @@ function appOpsTeamToDb(m) {
   if (m.hrNotes       !== undefined) row.hr_notes      = m.hrNotes || null;
   if (m.status        !== undefined) row.status        = m.status || "active";
   if (m.archivedAt    !== undefined) row.archived_at   = m.archivedAt;
+  // LEAVER 2026-10-22 — see dbOpsTeamToApp.
+  if (m.leaverStatus  !== undefined) row.leaver_status = m.leaverStatus || null;
+  if (m.leavingDate   !== undefined) row.leaving_date  = m.leavingDate || null;
+  if (m.leaver        !== undefined) row.leaver        = m.leaver || null;
   // Slice 6 — explicit hire date. Manager can override; default-derived
   // from linked job_application.archived_at in the profile UI.
   if (m.hireDate      !== undefined) row.hire_date     = m.hireDate || null;
@@ -704,6 +708,12 @@ function dbOpsTeamToApp(m) {
     hrNotes:     m.hr_notes || "",
     status:      m.status || "active",
     archivedAt:  m.archived_at || null,
+    // LEAVER 2026-10-22 — leaving process. leaverStatus: null | "notice" | "left".
+    // leavingDate = last working day (drives payroll inclusion and access cut-off).
+    // leaver holds the rest: type, reason, rehire flag, approval, checklist.
+    leaverStatus: m.leaver_status || null,
+    leavingDate:  m.leaving_date || null,
+    leaver:       (m.leaver && typeof m.leaver === "object") ? m.leaver : null,
     hireDate:    m.hire_date || null,
     payType:     m.pay_type || "hourly",
     phoneClockIn: m.phone_clock_in ?? false,
@@ -1109,6 +1119,27 @@ export async function upsertSchedule(s) {
 export async function removeSchedule(id) {
   const { error } = await supabase.from("schedules").delete().eq("id", id);
   if (error) throw error;
+}
+
+// LEAVER 2026-10-22 — rota shifts booked for a leaver after their last working
+// day. Count first (to show the manager), then delete. Past shifts are never
+// touched — they're the record of what was planned.
+export async function countSchedulesAfter(employeeId, date) {
+  if (!employeeId || !date) return 0;
+  const { count, error } = await supabase
+    .from("schedules").select("id", { count: "exact", head: true })
+    .eq("employee_id", employeeId).gt("date", date);
+  if (error) throw error;
+  return count || 0;
+}
+export async function deleteSchedulesAfter(employeeId, date) {
+  if (!employeeId || !date) return 0;
+  const { data, error } = await supabase
+    .from("schedules").delete()
+    .eq("employee_id", employeeId).gt("date", date)
+    .select("id");
+  if (error) throw error;
+  return (data || []).length;
 }
 
 function appScheduleToDb(s) {

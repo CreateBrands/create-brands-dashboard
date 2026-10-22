@@ -40,7 +40,7 @@ import {
   fetchAuditTrail, insertAuditEntry, clearAuditTrail,
   fetchAvailability, insertAvailability, upsertAvailability, removeAvailability,
   fetchBusyPeriods, upsertBusyPeriod, removeBusyPeriod,
-  fetchSchedules, upsertSchedule, removeSchedule,
+  fetchSchedules, upsertSchedule, removeSchedule, countSchedulesAfter, deleteSchedulesAfter,
   fetchShiftPresets, upsertShiftPreset, removeShiftPreset, publishWeekSchedules,
   fetchPunchRecords, insertPunchIn, updatePunchOut, sweepAutoClockouts, upsertPunchRecord, deletePunchRecord, setPunchBreak, fetchAppSettings, upsertAppSetting, fetchDefaultStoreScope, setDefaultStoreScopeForRole, fetchAnnouncements, createAnnouncement, setAnnouncementActive, deleteAnnouncement, fetchMyAnnouncementAcks, acknowledgeAnnouncement, fetchAnnouncementAcks, fetchPayPeriods, upsertPayPeriod, fetchBankTransactions, insertBankTransactions, updateBankTransaction, deleteBankTransaction, fetchBankAccounts, upsertBankAccount, deleteBankAccount, fetchEodForAccounts, fetchInvoicesForAccounts, computeStoreTheoreticalCogs, fetchTxnCategories, upsertTxnCategory, deleteTxnCategory, fetchTxnCategoryRules, upsertTxnCategoryRule, deleteTxnCategoryRule, applyTxnCategoryRules, fetchReconMatches, addReconMatches, deleteReconMatchesForTxn, fetchPayrollRunsForRecon, fetchPayoutsForRecon, logPunchAudit, fetchPunchAudit, uploadPunchPhoto, attachPunchPhoto, addPunchOvertimeComment, fetchSchedulesRange, fetchLabourVsRevenue, fetchStoreDayForecasts, fetchForecastAccuracySummary, fetchStoreHourForecasts, fetchForecastAccuracyByMethod, fetchStoreDayAggregates, fetchForecastAccuracyRows, fetchContractStatuses, fetchRtwDocuments, fetchTrainingOverview, fetchPolicyAcks, fetchNarrativeReports, fetchStoreDayPayments, fetchItemDayAggregates, askData, parseDeliverooReports, saveDeliverooPerformance, fetchDeliverooPerformance, fetchDeliverooWeeks, parseUberEatsReports, saveUberEatsPerformance, fetchUberEatsPerformance, fetchUberEatsWeeks, SALES_CATEGORIES, fetchFlipdishCategories, fetchItemsInCategory, fetchSalesCategoryMap, saveSalesCategoryMap, rollItemsSoldByCategory,
   fetchStores, fetchFlipdishStores, fetchFlipdishOrders, fetchFlipdishSyncLog, fetchFlipdishSales, runFlipdishSync, rebuildStoreDayAggregates, fetchItemsSold, fetchSalesAggregated, fetchSalesHeatmap, fetchLastSaleTime, fetchStoreSales, fetchStoreSalesDetailed,
@@ -2335,7 +2335,8 @@ function EmployeeLoginScreen({ opsTeam, brands, onLogin, onSwitchToManager }) {
     if (!e) { setError("Enter your email."); return; }
     if (!pin) { setError("Enter your PIN."); return; }
     const member = (opsTeam || []).find(
-      m => (m.email || "").trim().toLowerCase() === e && m.status !== "archived" && !m.archivedAt
+      // LEAVER 2026-10-22 — also stops a notice-period leaver the day after their last day.
+      m => (m.email || "").trim().toLowerCase() === e && staffCanSignIn(m)
     );
     // Single combined check — deliberately vague so we never reveal whether an
     // email exists or whether it was the email vs the PIN that was wrong.
@@ -30069,9 +30070,12 @@ function TimesheetReportsView({ stores, brands, opsTeam, currentUser, fenced = f
   const PAYMENT_REPORTS = ["cash-banking", "payment-mix"];
 
   // Employees pickable for the detail report — scoped to the selected store.
+  // LEAVER 2026-10-22 — leavers stay pickable for any range that overlaps
+  // their employment, so you can still pull their hours for the month they left.
   const pickableEmployees = useMemo(() => {
+    const start = (!from || !to || from <= to) ? from : to;
     return (opsTeam || [])
-      .filter(m => !m.archivedAt)
+      .filter(m => employedDuring(m, start))
       .filter(m => {
         const sid = m.storeIds?.[0];
         if (storeSel !== "all") return tsInScope(sid);
@@ -30079,7 +30083,7 @@ function TimesheetReportsView({ stores, brands, opsTeam, currentUser, fenced = f
         return true;
       })
       .sort((a, b) => (a.firstName || "").localeCompare(b.firstName || ""));
-  }, [opsTeam, storeSel, isMgr, myStoreIds, fenced]);
+  }, [opsTeam, storeSel, isMgr, myStoreIds, fenced, from, to]);
 
   const runReport = async () => {
     setLoading(true);
@@ -35331,9 +35335,12 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
   // now means what it says on the dashboard too: not in the wage tile, not in
   // the labour breakdown. Before this only the Payroll report honoured it.
   const wageExcludedIds = useMemo(() => new Set((opsTeam || []).filter(m => m.salaryPrivacy === "hidden_excluded").map(m => m.id)), [opsTeam]);
+  // LEAVER 2026-10-22 — salaried leavers count for the days they were still
+  // employed. Earliest date across both periods so the comparison works too.
+  const salariedFrom = [period?.from, prevPeriod?.from].filter(Boolean).sort()[0] || null;
   const scopedSalaried = useMemo(
-    () => (opsTeam || []).filter(m => !m.archivedAt && isSalaried(m) && !wageExcludedIds.has(m.id) && scopedStoreIds.has((m.storeIds || [])[0])),
-    [opsTeam, scopedStoreIds, wageExcludedIds]
+    () => (opsTeam || []).filter(m => employedDuring(m, salariedFrom) && isSalaried(m) && !wageExcludedIds.has(m.id) && scopedStoreIds.has((m.storeIds || [])[0])),
+    [opsTeam, scopedStoreIds, wageExcludedIds, salariedFrom]
   );
   const salariedIds = useMemo(() => new Set(scopedSalaried.map(m => m.id)), [scopedSalaried]);
   // ALL salaried staff (not store-scoped). Used to exclude salaried punches from
@@ -35346,15 +35353,16 @@ function DashboardView({ brands, stores, entries, issues, opsTeam = [], currentU
     [opsTeam]
   );
   // Fixed salaried cost for the whole selected period = sum(dailySlice) * days.
+  // LEAVER 2026-10-22 — per person, only the days they were employed.
   const salariedPeriodCost = useMemo(() => {
-    const perDay = scopedSalaried.reduce((a, m) => a + salariedDailyCost(m), 0);
-    return Math.round(perDay * daysInPeriod(period.from, period.to) * 100) / 100;
+    const total = scopedSalaried.reduce((a, m) => a + salariedDailyCost(m) * daysEmployedInRange(m, period.from, period.to), 0);
+    return Math.round(total * 100) / 100;
   }, [scopedSalaried, period.from, period.to]);
   // Same for the comparison period (prev), using its own day count.
   const salariedPrevCost = useMemo(() => {
     if (!prevPeriod) return 0;
-    const perDay = scopedSalaried.reduce((a, m) => a + salariedDailyCost(m), 0);
-    return Math.round(perDay * daysInPeriod(prevPeriod.from, prevPeriod.to) * 100) / 100;
+    const total = scopedSalaried.reduce((a, m) => a + salariedDailyCost(m) * daysEmployedInRange(m, prevPeriod.from, prevPeriod.to), 0);
+    return Math.round(total * 100) / 100;
   }, [scopedSalaried, prevPeriod?.from, prevPeriod?.to]);
 
   // ── Roll up a sales+punch set into metrics, scoped to selected stores ─────
@@ -38015,9 +38023,13 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
     return s ? (s.shortName || s.name) : "";
   };
 
+  // LEAVER 2026-10-22 — was "not archived", so anyone archived part-way
+  // through a period vanished from that period's payroll along with the hours
+  // they'd already worked. Now: anyone still employed on or after the period
+  // start, i.e. active staff plus people whose last working day falls in it.
   const activeEmployees = useMemo(
-    () => (opsTeam || []).filter(e => e.status !== "archived" && !e.archivedAt),
-    [opsTeam]
+    () => (opsTeam || []).filter(e => employedDuring(e, from)),
+    [opsTeam, from]
   );
 
   // PAYROLLLOC 2026-07-28o — run payroll for one site at a time. Scoped by
@@ -38069,7 +38081,17 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
         setOverlapWarn(`A payroll run for ${from} → ${to} was already saved (${existing.length} record${existing.length > 1 ? "s" : ""}). Saving again will overwrite those records.`);
       }
 
-      const computed = scopedEmployees.map(emp => {
+      // LEAVER 2026-10-22 — belt and braces: anyone with closed hours in this
+      // period is paid, even if their leaving date was recorded earlier than
+      // the shifts they actually worked.
+      const inRun = new Set(scopedEmployees.map(e => e.id));
+      const lateLeavers = (opsTeam || []).filter(e =>
+        !inRun.has(e.id) &&
+        (locIsAll || locHas(empPayrollLoc(e))) &&
+        (punches || []).some(p => p.employeeId === e.id && p.punchOut && Number(p.hoursWorked) > 0));
+      const runEmployees = [...scopedEmployees, ...lateLeavers];
+
+      const computed = runEmployees.map(emp => {
         // PAYALLHOURS 2026-07-28q — was `p.approved && p.hoursWorked`, which
         // paid only explicitly-approved punches. That column is almost never
         // set: the Approve button only ever surfaced for overtime and
@@ -38100,6 +38122,10 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
         // the month's hours: £30,960 × 72.93h = £2,257,912. Hours are still
         // totalled for the record, but they never touch the pay.
         const salaried = isSalaried(emp);
+        // LEAVER 2026-10-22 — last working day if they've left or are leaving.
+        const leaverLast = leaverPhase(emp) === "active" ? null : leaverLastDay(emp);
+        const leaverInPeriod = !!(leaverLast && leaverLast <= to);
+        let leaverProrata = null;
         if (salaried) {
           const amount = Number(emp.hourlyRate) || 0;
           const monthly = emp.payType === "annual" ? amount / 12 : amount;
@@ -38107,7 +38133,12 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
             rowError = `Salaried employee (${emp.payType}) has no salary amount set.`;
           }
           totalHours = empPunches.reduce((a, p) => a + (Number(p.hoursWorked) || 0), 0);
-          totalPay = Math.round(monthly * 100) / 100;
+          // LEAVER 2026-10-22 — a salaried leaver is paid to their last day,
+          // pro rata by calendar days in the period, not the full month.
+          const daysAll = daysInPeriod(from, to);
+          const daysWorked = leaverInPeriod ? daysEmployedInRange(emp, from, to) : daysAll;
+          if (daysWorked < daysAll) leaverProrata = { daysWorked, daysAll };
+          totalPay = Math.round(monthly * (daysWorked / daysAll) * 100) / 100;
           lines.push({ key: `salary|${emp.payType}`, hours: 0, pay: totalPay, rate: null, band: null, basis: emp.payType, age: null });
         }
         for (const p of (salaried ? [] : empPunches)) {
@@ -38176,7 +38207,14 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
             : !!(emp.hireDate && emp.hireDate >= from && emp.hireDate <= to),
           // Whether the accountant has actually registered them on payroll.
           // Defaults to false so a new starter stands out until confirmed.
-          payrollStatus: emp.payrollStatus || "",
+          // LEAVER 2026-10-22 — a leaver whose last day is in this period shows
+          // as "Left job (issue P45)" unless someone has set it otherwise.
+          payrollStatus: leaverInPeriod && (!emp.payrollStatus || emp.payrollStatus === "on") ? "left" : (emp.payrollStatus || ""),
+          leaver: leaverInPeriod,
+          leavingDate: leaverInPeriod ? leaverLast : null,
+          leaverReason: leaverInPeriod ? (emp.leaver?.reasonLabel || "") : "",
+          holidayOwedHours: leaverInPeriod && emp.leaver?.holidayOwedHours != null ? Number(emp.leaver.holidayOwedHours) : null,
+          leaverProrata,
           salaryAmount: Number(emp.hourlyRate) || 0,
           totalHours, totalPay,
           punchCount: empPunches.length, openPunches, otPending, notApproved,
@@ -38194,15 +38232,19 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
           salaryPrivacy: emp.salaryPrivacy || "",
           payrollSort: emp.payrollSort ?? null,
           lines, rowError,
+          // LEAVER — an hourly leaver with no shifts in the period has nothing
+          // to be paid; keep them off the sheet rather than as an empty row.
+          _dropLeaver: leaverPhase(emp) === "left" && !salaried && allPunches.length === 0,
           beforeEffectiveHours: Math.round(beforeEffectiveHours * 100) / 100,
           beforeEffectiveDates,
         };
       });
       // LOANCOL 2026-07-28aa — outstanding loan balance, shown for information.
       // Never deducted here; the screen's own note says loans are not included.
-      const loanBal = await fetchLoanBalancesFor(computed.map(r => r.employeeId)).catch(() => ({}));
-      computed.forEach(r => { r.loanBalance = Number(loanBal[r.employeeId] || 0); });
-      setRows(computed);
+      const kept = computed.filter(r => !r._dropLeaver);
+      const loanBal = await fetchLoanBalancesFor(kept.map(r => r.employeeId)).catch(() => ({}));
+      kept.forEach(r => { r.loanBalance = Number(loanBal[r.employeeId] || 0); });
+      setRows(kept);
     } catch (e) {
       setErr(e?.message || String(e));
     } finally {
@@ -38287,6 +38329,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
         return ax - bx;
       });
     const starters = exportable.filter(r => r.newStarter);
+    const leaversOut = exportable.filter(r => r.leaver);   // LEAVER 2026-10-22
 
     const wb = new ExcelJS.Workbook();
     wb.creator = "Chocoberry Dashboard";
@@ -38323,7 +38366,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
     // ── Title ──────────────────────────────────────────────────────────────
     const t = ws.addRow([`Payroll — ${from} to ${to}`]);
     t.getCell(1).font = { bold: true, size: 14 };
-    const sub = ws.addRow([`${locModeLabel}: ${locIsAll ? "All locations" : [...locFilter].map(id => storeName(id) || id).join(", ")} · ${exportable.length} employees · ${starters.length} new starter${starters.length === 1 ? "" : "s"}`]);
+    const sub = ws.addRow([`${locModeLabel}: ${locIsAll ? "All locations" : [...locFilter].map(id => storeName(id) || id).join(", ")} · ${exportable.length} employees · ${starters.length} new starter${starters.length === 1 ? "" : "s"} · ${leaversOut.length} leaver${leaversOut.length === 1 ? "" : "s"}`]);
     sub.getCell(1).font = { size: 10, color: { argb: "FF64748B" } };
     ws.addRow([]);
 
@@ -38346,6 +38389,35 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
           stMark(r, "A"), stMark(r, "B"), stMark(r, "C"),
         ]);
         styleBody(row, i);
+      });
+    }
+
+    ws.addRow([]);
+    ws.addRow([]);
+
+    // ── Block 1b: leavers — LEAVER 2026-10-22 ──────────────────────────────
+    // Tells the bureau who needs a P45 and final pay, with the last working
+    // day they need for the FPS. Their pay is in the payroll block below.
+    sectionTitle("LEAVERS — issue P45 with final pay");
+    const leaverCols = [
+      ["First Name", 16], ["Last Name", 16], ["Accounting Location", 20], ["Last Working Day", 13],
+      ["NI Number", 14], ["Holiday Owed (hrs)", 12], ["Loan Balance", 12], ["Salary Pro Rata", 16], ["Notes", 32],
+    ];
+    styleHeader(ws.addRow(leaverCols.map(c => c[0])));
+    if (leaversOut.length === 0) {
+      const none = ws.addRow(["No leavers in this period."]);
+      none.getCell(1).font = { italic: true, color: { argb: "FF6B7280" } };
+    } else {
+      leaversOut.forEach((r, i) => {
+        const row = ws.addRow([
+          r.firstName || "", r.lastName || "", storeName(r.accountingLocation), r.leavingDate || "",
+          r.niNumber || "",
+          r.holidayOwedHours != null ? r.holidayOwedHours : "Not entered",
+          Number((r.loanBalance || 0).toFixed(2)),
+          r.leaverProrata ? `${r.leaverProrata.daysWorked} of ${r.leaverProrata.daysAll} days` : "",
+          (r.loanBalance || 0) > 0.005 ? "Loan outstanding — deduct only if agreed in writing" : "",
+        ]);
+        styleBody(row, i, [7]);
       });
     }
 
@@ -38402,6 +38474,7 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
     // Widths: the wider of the two blocks wins per column.
     const widths = [];
     starterCols.forEach((c, i) => { widths[i] = Math.max(widths[i] || 0, c[1]); });
+    leaverCols.forEach((c, i) => { widths[i] = Math.max(widths[i] || 0, c[1]); });
     payCols.forEach((c, i) => { widths[i] = Math.max(widths[i] || 0, c[1]); });
     widths.forEach((w, i) => { ws.getColumn(i + 1).width = w; });
 
@@ -38863,6 +38936,9 @@ function PayrollRunScreen({ opsTeam, stores, brands, currentUser, onOpenEmployee
                         </button>
                       ) : r.name}
                       {r.under18 && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-amber-100 border border-amber-400 text-amber-900 font-semibold">U18</span>}
+                      {r.leaver && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-red-100 border border-red-400 text-red-900 font-semibold"
+                        title={`Last working day ${leaverFmtDate(r.leavingDate)}${r.leaverProrata ? ` — salary paid for ${r.leaverProrata.daysWorked} of ${r.leaverProrata.daysAll} days` : ""}${r.holidayOwedHours != null ? ` · holiday owed ${r.holidayOwedHours}h` : ""}`}>
+                        LEAVER · {leaverFmtDate(r.leavingDate)}</span>}
                       {r.salaryPrivacy === "hidden_included" && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-stone-200 border border-stone-400 text-stone-700 font-semibold" title="Owner-only. Still counted in this store's wage cost.">HIDDEN</span>}
                       {r.salaryPrivacy === "hidden_excluded" && <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded bg-purple-100 border border-purple-400 text-purple-900 font-semibold" title="Owner-only. Not counted in store wage cost.">HIDDEN · OFF-STORE</span>}
                     </td>
@@ -46450,6 +46526,583 @@ function ManagerAccessTab({ employee, users = [], currentUser, onAddUser, onUpda
   );
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// LEAVER 2026-10-22 — staff leaver process (UK)
+// ════════════════════════════════════════════════════════════════════════════
+// Before this, leaving was one Archive click: no leaving date, no reason, no
+// rehire flag, and payroll dropped the person entirely — so wages for days they
+// worked before being archived never reached the accountant.
+//
+// Model (three ops_team columns, see docs/sql/2026-10-22_leaver_process.sql):
+//   leaver_status  null | "notice" | "left"
+//   leaving_date   last working day — payroll includes them up to this date and
+//                  their PIN / logins stop the day after
+//   leaver (jsonb) type, reason, rehire flag, approval, holiday owed, notes,
+//                  checklist ticks
+//
+// A notice-period leaver whose last day has passed is treated as "left"
+// everywhere (leaverPhase), so access is cut even before the sweep in the app
+// root writes the status. Legacy archived people (no leaver record) count as
+// left, with their archive date standing in for the leaving date.
+const LEAVING_REASONS = [
+  { value: "resigned",              label: "Resigned",                              rehire: true  },
+  { value: "end_of_contract",       label: "End of contract / seasonal",            rehire: true  },
+  { value: "relocation",            label: "Moved away / relocation",               rehire: true  },
+  { value: "education",             label: "Back to studies",                       rehire: true  },
+  { value: "redundancy",            label: "Redundancy",                            rehire: true  },
+  { value: "retirement",            label: "Retirement",                            rehire: true  },
+  { value: "failed_probation",      label: "Did not pass probation",                rehire: false },
+  { value: "dismissed_performance", label: "Dismissed — performance / capability",  rehire: false },
+  { value: "dismissed_conduct",     label: "Dismissed — misconduct",                rehire: false },
+  { value: "gross_misconduct",      label: "Dismissed — gross misconduct",          rehire: false, immediate: true },
+  { value: "walked_out",            label: "Walked out / stopped turning up",       rehire: false, immediate: true },
+  { value: "other",                 label: "Other",                                 rehire: true  },
+];
+const LEAVER_CHECKLIST = [
+  { key: "letter",    group: "Store",   label: "Leaving confirmed to them in writing" },
+  { key: "keys",      group: "Store",   label: "Keys and fobs returned, alarm / safe codes changed" },
+  { key: "uniform",   group: "Store",   label: "Uniform and equipment returned" },
+  { key: "groups",    group: "Store",   label: "Removed from WhatsApp and staff groups" },
+  { key: "systems",   group: "Store",   label: "Removed from Flipdish, POS and other outside logins" },
+  { key: "exit",      group: "Store",   label: "Exit conversation held" },
+  { key: "tips",      group: "Payroll", label: "Tips / service charge they earned paid out" },
+  { key: "holiday",   group: "Payroll", label: "Holiday owed agreed" },
+  { key: "loan",      group: "Payroll", label: "Loan settled, or repayment agreed in writing" },
+  { key: "final_pay", group: "Payroll", label: "Final pay sent to the accountant" },
+  { key: "p45",       group: "Payroll", label: "P45 issued" },
+  { key: "pension",   group: "Payroll", label: "Pension provider told" },
+];
+
+function leaverToday() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+// Last working day: the leaver date if set, else the archive date for people
+// archived before the leaver process existed.
+function leaverLastDay(m) {
+  if (!m) return null;
+  return m.leavingDate || (m.archivedAt ? String(m.archivedAt).slice(0, 10) : null);
+}
+// "active" | "notice" | "left"
+function leaverPhase(m, today = leaverToday()) {
+  if (!m) return "active";
+  if (m.leaverStatus === "left" || m.archivedAt || m.status === "archived") return "left";
+  if (m.leaverStatus === "notice") return (m.leavingDate && m.leavingDate < today) ? "left" : "notice";
+  return "active";
+}
+// PIN / email / kiosk sign-in. Notice-period staff keep working until their
+// last day; the day after, their PIN stops.
+function staffCanSignIn(m) {
+  return !!m && leaverPhase(m) !== "left";
+}
+// Was this person on the books at any point from `from` onwards? Used so a
+// pay period still includes someone who left part-way through it.
+function employedDuring(m, from) {
+  if (!m) return false;
+  if (leaverPhase(m) !== "left") return true;
+  const last = leaverLastDay(m);
+  return !!(last && from && last >= from);
+}
+// Calendar days in from..to the person was employed (stops at their last day).
+function daysEmployedInRange(m, from, to) {
+  if (!from || !to) return 0;
+  const last = leaverPhase(m) === "active" ? null : leaverLastDay(m);
+  const end = (last && last < to) ? last : to;
+  if (end < from) return 0;
+  return daysInPeriod(from, end);
+}
+function leaverReasonLabel(v, fallback = "") {
+  return LEAVING_REASONS.find(r => r.value === v)?.label || fallback || v || "";
+}
+function leaverFmtDate(iso) {
+  if (!iso) return "—";
+  const [y, m, d] = String(iso).slice(0, 10).split("-");
+  return `${d}/${m}/${y}`;
+}
+function leaverAddYears(iso, n) {
+  if (!iso) return null;
+  const [y, m, d] = String(iso).slice(0, 10).split("-").map(Number);
+  return `${y + n}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+function leaverActor(u) {
+  return u?.name || `${u?.firstName || ""} ${u?.lastName || ""}`.trim() || u?.email || "Unknown";
+}
+
+// Start (or edit) a leaver. Writes the employee first, then clears rota shifts
+// after the last day, then logs a profile note — so a failed write never
+// leaves shifts deleted for someone who isn't actually leaving.
+async function submitLeaver({ employee, form, currentUser, onUpdateEmployee, editing = false }) {
+  const now = new Date().toISOString();
+  const today = leaverToday();
+  const hq = isHqOrAbove(currentUser?.role);
+  const who = leaverActor(currentUser);
+  const immediate = form.type === "immediate";
+  const leavingDate = form.leavingDate || today;
+  const prev = employee.leaver || {};
+  const reasonLabel = leaverReasonLabel(form.reason);
+  const leaver = {
+    ...(editing ? prev : {}),
+    type: form.type,
+    noticeDate: immediate ? null : (form.noticeDate || null),
+    reason: form.reason,
+    reasonLabel,
+    rehireEligible: !!form.rehireEligible,
+    rehireNote: (form.rehireNote || "").trim(),
+    holidayOwedHours: (form.holidayOwedHours === "" || form.holidayOwedHours == null) ? null : Number(form.holidayOwedHours),
+    notes: (form.notes || "").trim(),
+    checklist: editing ? (prev.checklist || {}) : {},
+    startedBy:   editing ? (prev.startedBy || who) : who,
+    startedById: editing ? (prev.startedById || null) : (currentUser?.id || null),
+    startedAt:   editing ? (prev.startedAt || now) : now,
+    approvedBy:  (editing && prev.approvedBy) ? prev.approvedBy : (hq ? who : null),
+    approvedAt:  (editing && prev.approvedAt) ? prev.approvedAt : (hq ? now : null),
+    updatedBy: who, updatedAt: now,
+  };
+  const leftNow = immediate || leavingDate < today;
+  const patch = { id: employee.id, leaverStatus: leftNow ? "left" : "notice", leavingDate, leaver };
+  if (leftNow) {
+    patch.archivedAt = employee.archivedAt || now;
+    patch.payrollStatus = "left";
+  }
+  await onUpdateEmployee(patch);
+
+  let removed = 0;
+  try { removed = await deleteSchedulesAfter(employee.id, leavingDate); }
+  catch (e) { console.error("Leaver: could not clear future shifts", e); }
+
+  const name = `${employee.firstName} ${employee.lastName || ""}`.trim();
+  addEmployeeNote({
+    employeeId: employee.id,
+    authorId: currentUser?.id || null, authorName: who,
+    content: `${editing ? "Leaver details updated" : (immediate ? "Immediate leaver recorded" : "Leaver started")}: ${reasonLabel}. `
+      + `Last working day ${leaverFmtDate(leavingDate)}. Rehire: ${leaver.rehireEligible ? "yes" : "no"}${leaver.rehireNote ? ` (${leaver.rehireNote})` : ""}.`
+      + (removed ? ` ${removed} future rota shift${removed === 1 ? "" : "s"} removed.` : "")
+      + (leaver.notes ? `\n${leaver.notes}` : ""),
+  }).catch(() => {});
+  if (!hq && !editing) {
+    notifyManagers({
+      brandId: employee.brandId, storeId: employee.storeIds?.[0], kind: "staff",
+      title: `Leaver to approve: ${name}`,
+      body: `${reasonLabel} · last day ${leaverFmtDate(leavingDate)} · started by ${who}`,
+      linkView: "team", excludeUserId: currentUser?.id,
+    });
+  }
+  return { removed, leftNow };
+}
+
+// Turns an approved notice-period leaver into "left" once their last day has
+// passed. Called by the root sweep and by the Leaving tab's "Mark as left now".
+function finalizeLeaverPatch(employee) {
+  return {
+    leaverStatus: "left",
+    archivedAt: employee.archivedAt || new Date().toISOString(),
+    payrollStatus: "left",
+  };
+}
+
+// ── Start / edit leaver modal ───────────────────────────────────────────────
+function StartLeaverModal({ employee, currentUser, onUpdateEmployee, onClose, onDone, onPlainArchive }) {
+  const editing = !!employee.leaverStatus && !!employee.leaver;
+  const prev = editing ? (employee.leaver || {}) : {};
+  const today = leaverToday();
+  const [form, setForm] = useState(() => ({
+    type: prev.type || "notice",
+    noticeDate: prev.noticeDate || today,
+    leavingDate: employee.leavingDate || "",
+    reason: prev.reason || "",
+    rehireEligible: prev.rehireEligible ?? true,
+    rehireNote: prev.rehireNote || "",
+    holidayOwedHours: prev.holidayOwedHours ?? "",
+    notes: prev.notes || "",
+  }));
+  const [shiftCount, setShiftCount] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const set = (k, v) => { setForm(f => ({ ...f, [k]: v })); setErr(""); };
+  const immediate = form.type === "immediate";
+  const effLeavingDate = form.leavingDate || (immediate ? today : "");
+
+  // How many booked shifts will come off the rota — shown before saving.
+  useEffect(() => {
+    let cancelled = false;
+    if (!effLeavingDate) { setShiftCount(null); return; }
+    countSchedulesAfter(employee.id, effLeavingDate)
+      .then(n => { if (!cancelled) setShiftCount(n); })
+      .catch(() => { if (!cancelled) setShiftCount(null); });
+    return () => { cancelled = true; };
+  }, [employee.id, effLeavingDate]);
+
+  const pickReason = (v) => {
+    const r = LEAVING_REASONS.find(x => x.value === v);
+    setForm(f => ({
+      ...f, reason: v,
+      rehireEligible: r ? r.rehire : f.rehireEligible,
+      type: r?.immediate ? "immediate" : f.type,
+    }));
+    setErr("");
+  };
+
+  const save = async () => {
+    if (!form.reason) return setErr("Pick a leaving reason.");
+    if (!immediate && !form.leavingDate) return setErr("Enter their last working day.");
+    if (!immediate && form.noticeDate && form.leavingDate && form.leavingDate < form.noticeDate)
+      return setErr("The last working day can't be before the day notice was given.");
+    if (!form.rehireEligible && !form.rehireNote.trim())
+      return setErr("Add a short reason why they shouldn't be re-hired. It's shown if they apply again.");
+    if (form.holidayOwedHours !== "" && !(Number(form.holidayOwedHours) >= 0))
+      return setErr("Holiday owed must be a number of hours (0 or more).");
+    setBusy(true);
+    try {
+      const res = await submitLeaver({ employee, form: { ...form, leavingDate: effLeavingDate }, currentUser, onUpdateEmployee, editing });
+      onDone?.(res);
+      onClose();
+    } catch (e) {
+      const msg = e?.message || String(e);
+      setErr(/leaver|leaving_date|column/i.test(msg)
+        ? "The leaver fields aren't in the database yet — run docs/sql/2026-10-22_leaver_process.sql in Supabase first."
+        : `Could not save: ${msg}`);
+    } finally { setBusy(false); }
+  };
+
+  const name = `${employee.firstName} ${employee.lastName || ""}`.trim();
+  const hq = isHqOrAbove(currentUser?.role);
+  const inp = "mt-1 w-full px-3 py-2 rounded-lg bg-slate-800 border border-slate-700 text-sm text-white focus:outline-none focus:border-indigo-500";
+  const lbl = "text-xs text-slate-400 font-semibold";
+
+  return (
+    <div className="fixed inset-0 z-50 bg-black/70 flex items-start sm:items-center justify-center p-4 overflow-y-auto" onClick={onClose}>
+      <div className="w-full max-w-lg bg-slate-900 border border-slate-700 rounded-2xl p-5 space-y-4 my-8" onClick={e => e.stopPropagation()}>
+        <div>
+          <h2 className="text-lg font-bold text-white">{editing ? "Edit leaver details" : "Start leaver"} — {name}</h2>
+          <p className="text-xs text-slate-500 mt-1">
+            Their records are all kept. They stay on payroll up to and including their last working day, and their PIN and logins stop working the day after.
+          </p>
+        </div>
+
+        <div>
+          <div className={lbl}>How are they leaving?</div>
+          <div className="grid grid-cols-2 gap-2 mt-1">
+            {[
+              { v: "notice",    t: "Working their notice", s: "Stays on the rota until their last day" },
+              { v: "immediate", t: "Leaving now",          s: "Walked out or dismissed — access cut today" },
+            ].map(o => (
+              <button key={o.v} type="button" onClick={() => set("type", o.v)}
+                className={`text-left rounded-xl border px-3 py-2.5 ${form.type === o.v ? "border-indigo-500 bg-indigo-950/40" : "border-slate-700 bg-slate-800/60 hover:border-slate-500"}`}>
+                <div className="text-sm font-semibold text-white">{o.t}</div>
+                <div className="text-[11px] text-slate-400 mt-0.5">{o.s}</div>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <label className="block">
+          <span className={lbl}>Reason</span>
+          <select value={form.reason} onChange={e => pickReason(e.target.value)} className={inp}>
+            <option value="">— pick a reason —</option>
+            {LEAVING_REASONS.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+          </select>
+        </label>
+
+        <div className="grid grid-cols-2 gap-3">
+          {!immediate && (
+            <label className="block">
+              <span className={lbl}>Notice given on</span>
+              <input type="date" value={form.noticeDate} onChange={e => set("noticeDate", e.target.value)} className={inp}/>
+            </label>
+          )}
+          <label className={`block ${immediate ? "col-span-2" : ""}`}>
+            <span className={lbl}>Last working day</span>
+            <input type="date" value={immediate ? (form.leavingDate || today) : form.leavingDate}
+              onChange={e => set("leavingDate", e.target.value)} className={inp}/>
+            {immediate && <span className="text-[11px] text-slate-500">The last day they actually worked — usually today.</span>}
+          </label>
+        </div>
+        {shiftCount > 0 && (
+          <div className="text-xs rounded-lg border border-amber-800/60 bg-amber-950/30 text-amber-200 px-3 py-2">
+            {shiftCount} rota shift{shiftCount === 1 ? "" : "s"} booked after {leaverFmtDate(effLeavingDate)} will be removed. Cover them before or after saving.
+          </div>
+        )}
+
+        <div>
+          <div className={lbl}>Would you re-hire them?</div>
+          <div className="flex gap-2 mt-1">
+            {[{ v: true, t: "Yes" }, { v: false, t: "No" }].map(o => (
+              <button key={String(o.v)} type="button" onClick={() => set("rehireEligible", o.v)}
+                className={`px-4 py-1.5 rounded-lg text-sm font-semibold border ${form.rehireEligible === o.v
+                  ? (o.v ? "bg-emerald-600 border-emerald-500 text-white" : "bg-red-600 border-red-500 text-white")
+                  : "bg-slate-800 border-slate-700 text-slate-300"}`}>{o.t}</button>
+            ))}
+          </div>
+          {!form.rehireEligible && (
+            <input value={form.rehireNote} onChange={e => set("rehireNote", e.target.value)}
+              placeholder="Why not? (required — shown if they apply again)" className={inp}/>
+          )}
+        </div>
+
+        <label className="block">
+          <span className={lbl}>Holiday owed (hours) <span className="font-normal text-slate-500">— optional</span></span>
+          <input type="number" min="0" step="0.25" value={form.holidayOwedHours} onChange={e => set("holidayOwedHours", e.target.value)} className={inp} placeholder="e.g. 12.5"/>
+          <span className="text-[11px] text-slate-500">Accrued, untaken holiday is paid in their final pay. For irregular-hours staff it builds up at 12.07% of hours worked.</span>
+        </label>
+
+        <label className="block">
+          <span className={lbl}>Notes <span className="font-normal text-slate-500">— optional</span></span>
+          <textarea value={form.notes} onChange={e => set("notes", e.target.value)} rows={3} className={inp}
+            placeholder="What happened, anything agreed (e.g. loan repayment), handover…"/>
+        </label>
+
+        {!hq && !editing && (
+          <div className="text-[11px] text-slate-400">HQ will be asked to approve this. The leaving date takes effect either way.</div>
+        )}
+        {err && <div className="text-sm text-red-400">{err}</div>}
+
+        <div className="flex items-center gap-2 pt-1">
+          {onPlainArchive && hq && !editing && (
+            <button type="button" onClick={onPlainArchive} className="text-[11px] text-slate-500 hover:text-slate-300 underline mr-auto">
+              Archive without a leaver record (duplicate / test profile)
+            </button>
+          )}
+          <div className="flex gap-2 ml-auto">
+            <button onClick={onClose} className="px-4 py-2 rounded-xl bg-slate-800 text-slate-300 text-sm font-semibold hover:bg-slate-700">Cancel</button>
+            <button onClick={save} disabled={busy}
+              className={`px-4 py-2 rounded-xl text-white text-sm font-semibold disabled:opacity-50 ${immediate ? "bg-red-600 hover:bg-red-500" : "bg-indigo-600 hover:bg-indigo-500"}`}>
+              {busy ? "Saving…" : editing ? "Save changes" : immediate ? "Record leaver — cut access now" : "Start leaver"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Small status pill used on the team list, profile header and payroll.
+function LeaverBadge({ member, className = "" }) {
+  const phase = leaverPhase(member);
+  if (phase === "active") return null;
+  const last = leaverLastDay(member);
+  if (phase === "notice") {
+    return (
+      <span className={`text-[10px] px-1.5 py-0.5 rounded bg-amber-950/60 border border-amber-700 text-amber-300 font-semibold ${className}`}
+        title="Serving notice">Leaving {leaverFmtDate(last)}{member.leaver && !member.leaver.approvedAt ? " · awaiting HQ" : ""}</span>
+    );
+  }
+  return (
+    <span className={`text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-600 text-slate-300 font-semibold ${className}`}>
+      Left {last ? leaverFmtDate(last) : ""}{member.leaver?.rehireEligible === false ? " · do not re-hire" : ""}
+    </span>
+  );
+}
+
+// ── Profile tab: Leaving ────────────────────────────────────────────────────
+function LeavingTab({ employee, currentUser, onUpdateEmployee, onStart }) {
+  const phase = leaverPhase(employee);
+  const lv = employee.leaver || null;
+  const last = leaverLastDay(employee);
+  const hq = isHqOrAbove(currentUser?.role);
+  const who = leaverActor(currentUser);
+  const [busy, setBusy] = useState("");
+  const [pack, setPack] = useState(null);
+  const [packErr, setPackErr] = useState("");
+
+  // Final pay pack — hours and an estimate for the pay period their last day
+  // falls in. The payroll run stays the source of truth; this is so the
+  // manager can sanity-check before the accountant does.
+  useEffect(() => {
+    let cancelled = false;
+    if (phase === "active" || !last) { setPack(null); return; }
+    (async () => {
+      try {
+        const [sched, rates, payRates, loans] = await Promise.all([
+          fetchPaySchedule().catch(() => null),
+          fetchMinimumWageRates().catch(() => []),
+          fetchEmployeePayRates(employee.id).catch(() => []),
+          fetchLoanBalancesFor([employee.id]).catch(() => ({})),
+        ]);
+        const periods = generatePayPeriods(sched, { back: 6, forward: 2, today: last });
+        const period = periods.find(p => p.periodStart <= last && p.periodEnd >= last) || null;
+        const from = period?.periodStart || `${last.slice(0, 8)}01`;
+        const punches = await fetchPunchRecords({ from, to: last });
+        const mine = (punches || []).filter(p => p.employeeId === employee.id && p.punchOut && Number(p.hoursWorked) > 0);
+        const open = (punches || []).filter(p => p.employeeId === employee.id && !p.punchOut).length;
+        const hours = mine.reduce((a, p) => a + (Number(p.hoursWorked) || 0), 0);
+        let gross = 0, rateErr = "";
+        if (isSalaried(employee)) {
+          const amount = Number(employee.hourlyRate) || 0;
+          const monthly = employee.payType === "annual" ? amount / 12 : amount;
+          const to = period?.periodEnd || last;
+          gross = monthly * (daysEmployedInRange(employee, from, to) / daysInPeriod(from, to));
+        } else {
+          const byEmp = { [employee.id]: payRates || [] };
+          for (const p of mine) {
+            const r = resolveHourlyRate(employee, p.date, rates, byEmp);
+            if (r.error) { rateErr = r.error; continue; }
+            gross += (Number(p.hoursWorked) || 0) * (Number(r.rate) || 0);
+          }
+        }
+        if (!cancelled) setPack({
+          from, to: last, hours: Math.round(hours * 100) / 100, shifts: mine.length, open,
+          gross: Math.round(gross * 100) / 100, rateErr,
+          loan: Number(loans?.[employee.id] || 0),
+        });
+      } catch (e) { if (!cancelled) setPackErr(e?.message || String(e)); }
+    })();
+    return () => { cancelled = true; };
+    // Recompute when the person, their phase or last day changes — not on every
+    // unrelated profile edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [employee.id, phase, last]);
+
+  const patchLeaver = async (nextLeaver, extra = {}, note = "") => {
+    await onUpdateEmployee({ id: employee.id, leaver: nextLeaver, ...extra });
+    if (note) addEmployeeNote({ employeeId: employee.id, authorId: currentUser?.id || null, authorName: who, content: note }).catch(() => {});
+  };
+  const run = (key, fn) => async () => {
+    setBusy(key);
+    try { await fn(); } catch (e) { alert(`Could not update: ${e?.message || e}`); } finally { setBusy(""); }
+  };
+
+  const approve = run("approve", () => patchLeaver(
+    { ...lv, approvedBy: who, approvedAt: new Date().toISOString() }, {}, `Leaver approved by ${who}.`));
+  const markLeftNow = run("left", async () => {
+    if (!window.confirm(`Mark ${employee.firstName} as left now? Their PIN and logins stop working straight away.`)) return;
+    // Leaving earlier than planned moves the last day to today.
+    const lastDay = (employee.leavingDate && employee.leavingDate < leaverToday()) ? employee.leavingDate : leaverToday();
+    await patchLeaver(lv, { ...finalizeLeaverPatch(employee), leavingDate: lastDay }, `Marked as left by ${who} — last working day ${leaverFmtDate(lastDay)}.`);
+    try { await deleteSchedulesAfter(employee.id, lastDay); } catch (e) { console.error("Leaver: could not clear future shifts", e); }
+  });
+  const cancelLeaver = run("cancel", () => {
+    if (!window.confirm(`Cancel ${employee.firstName}'s leaving? They go back to being an active team member. Rota shifts already removed are not put back.`)) return Promise.resolve();
+    return onUpdateEmployee({ id: employee.id, leaverStatus: null, leavingDate: null, leaver: { ...lv, cancelledBy: who, cancelledAt: new Date().toISOString() } })
+      .then(() => addEmployeeNote({ employeeId: employee.id, authorId: currentUser?.id || null, authorName: who, content: `Leaving cancelled by ${who} — staying on.` }).catch(() => {}));
+  });
+  const toggleItem = (key) => run(`item:${key}`, () => {
+    const cur = lv?.checklist?.[key];
+    const next = { ...(lv?.checklist || {}) };
+    if (cur?.done) delete next[key];
+    else next[key] = { done: true, by: who, at: new Date().toISOString() };
+    return patchLeaver({ ...lv, checklist: next });
+  })();
+
+  if (phase === "active") {
+    return (
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center space-y-3">
+        <div className="text-sm text-slate-300">{employee.firstName} isn't leaving.</div>
+        <div className="text-xs text-slate-500">When they hand in notice, are dismissed or walk out, start the leaver process here. It records the reason, keeps them on payroll up to their last day, clears future shifts and stops their access after they've gone.</div>
+        {isManagerOrAbove(currentUser?.role) && (
+          <button onClick={onStart} className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-500">Start leaver</button>
+        )}
+      </div>
+    );
+  }
+
+  const done = LEAVER_CHECKLIST.filter(i => lv?.checklist?.[i.key]?.done).length;
+  const fmtMoney = (n) => `${ccySym()}${Number(n || 0).toFixed(2)}`;
+  const row = (k, v) => (
+    <div><div className="text-slate-500 uppercase tracking-wider text-[10px] font-semibold">{k}</div><div className="text-slate-200 mt-0.5 text-sm">{v}</div></div>
+  );
+
+  return (
+    <div className="space-y-4">
+      <div className={`rounded-2xl border p-5 ${phase === "notice" ? "bg-amber-950/20 border-amber-800/50" : "bg-slate-900 border-slate-800"}`}>
+        <div className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <div className="text-sm font-bold text-white">
+              {phase === "notice" ? `Serving notice — last day ${leaverFmtDate(last)}` : `Left — last day ${leaverFmtDate(last)}`}
+            </div>
+            {!lv && <div className="text-xs text-slate-500 mt-1">Archived before the leaver process existed, so there's no reason or checklist on file. The archive date is used as the leaving date.</div>}
+            {lv && !lv.approvedAt && <div className="text-xs text-amber-300 mt-1">Waiting for HQ to approve. Started by {lv.startedBy}.</div>}
+            {lv?.approvedAt && <div className="text-xs text-slate-500 mt-1">Started by {lv.startedBy} · approved by {lv.approvedBy} on {leaverFmtDate(lv.approvedAt)}</div>}
+          </div>
+          {lv && (
+            <div className="flex gap-2 flex-wrap">
+              {hq && !lv.approvedAt && (
+                <button onClick={approve} disabled={!!busy} className="px-3 py-1.5 rounded-xl bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-500 disabled:opacity-50">{busy === "approve" ? "…" : "Approve"}</button>
+              )}
+              {phase === "notice" && isManagerOrAbove(currentUser?.role) && (
+                <>
+                  <button onClick={onStart} disabled={!!busy} className="px-3 py-1.5 rounded-xl bg-slate-700 text-white text-xs font-semibold hover:bg-slate-600 disabled:opacity-50">Edit</button>
+                  <button onClick={markLeftNow} disabled={!!busy} className="px-3 py-1.5 rounded-xl bg-red-700 text-white text-xs font-semibold hover:bg-red-600 disabled:opacity-50">{busy === "left" ? "…" : "Mark as left now"}</button>
+                  <button onClick={cancelLeaver} disabled={!!busy} className="px-3 py-1.5 rounded-xl bg-slate-800 text-slate-300 text-xs font-semibold hover:bg-slate-700 disabled:opacity-50">{busy === "cancel" ? "…" : "Cancel leaving"}</button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+        {lv && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-3 mt-4">
+            {row("Reason", lv.reasonLabel || leaverReasonLabel(lv.reason))}
+            {row("Type", lv.type === "immediate" ? "Left immediately" : "Worked notice")}
+            {row("Notice given", leaverFmtDate(lv.noticeDate))}
+            {row("Re-hire", lv.rehireEligible === false
+              ? <span className="text-red-300">No{lv.rehireNote ? ` — ${lv.rehireNote}` : ""}</span>
+              : <span className="text-emerald-300">Yes</span>)}
+          </div>
+        )}
+        {lv?.notes && <div className="text-xs text-slate-400 mt-3 whitespace-pre-wrap">{lv.notes}</div>}
+      </div>
+
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+        <div className="text-sm font-bold text-white">Final pay</div>
+        <div className="text-[11px] text-slate-500 mt-0.5">An estimate to check against the payroll run, which is the figure the accountant gets.</div>
+        {packErr && <div className="text-xs text-red-400 mt-3">{packErr}</div>}
+        {!pack && !packErr && <div className="text-xs text-slate-500 mt-3">Working it out…</div>}
+        {pack && (
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-3 mt-4">
+              {row("Pay period", `${leaverFmtDate(pack.from)} → ${leaverFmtDate(pack.to)}`)}
+              {row("Hours worked", `${pack.hours}h · ${pack.shifts} shift${pack.shifts === 1 ? "" : "s"}`)}
+              {row(isSalaried(employee) ? "Salary to last day" : "Wages (estimate)", fmtMoney(pack.gross))}
+              {row("Holiday owed", lv?.holidayOwedHours != null ? `${lv.holidayOwedHours}h` : <span className="text-amber-300">Not entered</span>)}
+            </div>
+            <div className="space-y-1 mt-3">
+              {pack.open > 0 && <div className="text-xs text-amber-300">⚠ {pack.open} shift{pack.open === 1 ? " is" : "s are"} still clocked in — close {pack.open === 1 ? "it" : "them"} so the hours count.</div>}
+              {pack.rateErr && <div className="text-xs text-amber-300">⚠ {pack.rateErr}</div>}
+              {pack.loan > 0.005 && <div className="text-xs text-amber-300">⚠ Loan balance {fmtMoney(pack.loan)} outstanding. Only deduct it from final pay if they agreed to that in writing.</div>}
+              <div className="text-[11px] text-slate-500">Tips they earned, unpaid expenses and holiday owed are added on top. Anything paid after the P45 goes through on the 0T tax code.</div>
+            </div>
+          </>
+        )}
+      </div>
+
+      {lv && (
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5">
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-bold text-white">Leaver checklist</div>
+            <div className="text-xs text-slate-500">{done} of {LEAVER_CHECKLIST.length} done</div>
+          </div>
+          {["Store", "Payroll"].map(g => (
+            <div key={g} className="mt-3">
+              <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold mb-1">{g}</div>
+              <div className="space-y-1">
+                {LEAVER_CHECKLIST.filter(i => i.group === g).map(i => {
+                  const st = lv.checklist?.[i.key];
+                  return (
+                    <button key={i.key} type="button" onClick={() => isManagerOrAbove(currentUser?.role) && toggleItem(i.key)}
+                      disabled={busy === `item:${i.key}`}
+                      className="w-full flex items-start gap-3 text-left px-3 py-2 rounded-lg hover:bg-slate-800/60">
+                      <span className={`mt-0.5 w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${st?.done ? "bg-emerald-600 border-emerald-500" : "border-slate-600"}`}>
+                        {st?.done && <Check size={11} className="text-white"/>}
+                      </span>
+                      <span className="flex-1">
+                        <span className={`text-sm ${st?.done ? "text-slate-400 line-through" : "text-slate-200"}`}>{i.label}</span>
+                        {st?.done && <span className="block text-[10px] text-slate-600">{st.by} · {leaverFmtDate(st.at)}</span>}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="text-[11px] text-slate-600">
+        Records are kept after someone leaves: payroll for at least 3 years, holiday and pension records for 6. Review this profile for deletion after {leaverFmtDate(leaverAddYears(last, 6))}.
+      </div>
+    </div>
+  );
+}
+
 function EmployeeProfileView({
   employeeId, brands, stores, storeRoles, storeDepartments,
   opsTeam, currentUser, onUpdateEmployee, onClose,
@@ -46473,6 +47126,7 @@ function EmployeeProfileView({
   const [savingHr, setSavingHr] = useState(false);
   const [converting, setConverting] = useState(false);  // trainee→staff conversion in progress
   const [profileBusy, setProfileBusy] = useState(false); // profile-status update in progress
+  const [leaverOpen, setLeaverOpen] = useState(false);    // LEAVER 2026-10-22 — start/edit leaver modal
 
   useEffect(() => {
     if (!employee) return;
@@ -46671,11 +47325,8 @@ function EmployeeProfileView({
                   ⚠ Pending setup
                 </span>
               )}
-              {employee.archivedAt && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400 font-semibold">
-                  Archived
-                </span>
-              )}
+              {/* LEAVER 2026-10-22 — notice / left replaces the bare Archived pill */}
+              <LeaverBadge member={employee}/>
               {employee.isTrainee && (
                 <span className="text-[10px] px-1.5 py-0.5 rounded bg-sky-950/60 border border-sky-800 text-sky-300 font-semibold">
                   🎓 Trainee
@@ -46715,6 +47366,19 @@ function EmployeeProfileView({
           </div>
         </div>
       </div>
+
+      {/* LEAVER 2026-10-22 — one obvious way in to the leaver process. */}
+      {leaverPhase(employee) === "notice" && (
+        <button onClick={() => setTab("leaving")} className="w-full text-left rounded-2xl border border-amber-800/50 bg-amber-950/20 px-4 py-3 text-sm text-amber-200 hover:bg-amber-950/30">
+          Serving notice — last working day {leaverFmtDate(employee.leavingDate)}{employee.leaver && !employee.leaver.approvedAt ? " · waiting for HQ approval" : ""}. Open the Leaving tab for the checklist and final pay.
+        </button>
+      )}
+      {leaverOpen && (
+        <StartLeaverModal
+          employee={employee} currentUser={currentUser} onUpdateEmployee={onUpdateEmployee}
+          onClose={() => setLeaverOpen(false)} onDone={() => setTab("leaving")}
+        />
+      )}
 
       {/* Profile completion status (separate from trainee). Manager confirms once
           all required fields are filled. */}
@@ -46768,6 +47432,7 @@ function EmployeeProfileView({
           { key: "documents",   label: "Documents" },
           { key: "application", label: linkedApp ? "Linked Application" : "Application (none)" },
           { key: "notes",       label: `Notes${notes.length > 0 ? ` (${notes.length})` : ""}` },
+          ...(isManagerOrAbove(currentUser?.role) ? [{ key: "leaving", label: leaverPhase(employee) === "active" ? "Leaving" : leaverPhase(employee) === "notice" ? "Leaving ●" : "Leaver" }] : []),
           ...(isOwnerRole(currentUser?.role) ? [{ key: "payroll", label: "Payroll" }] : []),
           // PROMOTE 2026-08-05n — granting a login is an HQ/owner decision.
           ...(isHqOrAbove(currentUser?.role) && onAddUser ? [{ key: "access", label: "App access" }] : []),
@@ -46868,6 +47533,15 @@ function EmployeeProfileView({
           notes={notes} setNotes={setNotes}
           loading={notesLoading}
           currentUser={currentUser}
+        />
+      )}
+
+      {tab === "leaving" && isManagerOrAbove(currentUser?.role) && (
+        <LeavingTab
+          employee={employee}
+          currentUser={currentUser}
+          onUpdateEmployee={onUpdateEmployee}
+          onStart={() => setLeaverOpen(true)}
         />
       )}
 
@@ -50123,6 +50797,22 @@ function OpsTeamMemberFormModal({
       alert("Please pick at least one role. (If this store has no roles defined yet, add one under Ops Setup → Structure first.)");
       return;
     }
+    // LEAVER 2026-10-22 — re-hire check. When adding someone new, warn if they
+    // match a leaver marked "do not re-hire" (by email, phone, or full name).
+    if (!item?.id || item?._seedFromManager) {
+      const norm = v => (v || "").trim().toLowerCase();
+      const digits = v => (v || "").replace(/\D/g, "").slice(-10);
+      const fullName = norm(`${form.firstName} ${form.lastName || ""}`);
+      const hit = (opsTeam || []).find(m =>
+        m.leaver && m.leaver.rehireEligible === false && leaverPhase(m) === "left" && (
+          (form.email && norm(m.email) === norm(form.email)) ||
+          (form.phone && digits(form.phone).length >= 9 && digits(m.phone) === digits(form.phone)) ||
+          (fullName && norm(`${m.firstName} ${m.lastName || ""}`) === fullName)));
+      if (hit) {
+        const why = hit.leaver.rehireNote ? `\nReason: ${hit.leaver.rehireNote}` : "";
+        if (!window.confirm(`${hit.firstName} ${hit.lastName || ""} left on ${leaverFmtDate(leaverLastDay(hit))} and is marked "do not re-hire".${why}\n\nAdd them anyway?`)) return;
+      }
+    }
     // Q6: PIN uniqueness check across the whole org. The kiosk identifies
     // staff by PIN alone, so two people can't share one. We skip checking
     // against the current item being edited (so re-saving without changing
@@ -51204,11 +51894,12 @@ function OpsTeamView({
   opsTeam = [], users = [],
   customRoles = [],
   onAddOpsTeam, onUpdateOpsTeam, onDeleteOpsTeam,
-  onArchiveOpsTeam, onRestoreOpsTeam,
+  onArchiveOpsTeam, onRestoreOpsTeam, onPatchOpsTeam,
   onOpenEmployeeProfile, currentUser,
 }) {
   const [tmModal, setTmModal] = useState(null);
   const [delTarget, setDelTarget] = useState(null);
+  const [leaverTarget, setLeaverTarget] = useState(null);  // LEAVER 2026-10-22
   // ARCHIVETEAM: archived people are hidden by default but never destroyed.
   const [showArchived, setShowArchived] = useState(false);
   const [search, setSearch] = useState("");
@@ -51233,8 +51924,9 @@ function OpsTeamView({
   // Active employees (not archived). Non-HQ users (managers, incl. JV/franchise)
   // only see members assigned to a store they can see; HQ/owner see everyone.
   const base = useMemo(() => {
+    // LEAVER 2026-10-22 — the archived view is the leavers list, newest first.
     const all = showArchived
-      ? [...opsTeam.filter(m => m.archivedAt)]
+      ? [...opsTeam.filter(m => m.archivedAt)].sort((a, b) => (leaverLastDay(b) || "").localeCompare(leaverLastDay(a) || ""))
       : [...opsTeam.filter(m => !m.archivedAt), ...managersAsRoster(users, opsTeam)];
     // Everyone — including HQ/owner — is scoped to the visible stores so the
     // grouped list matches the rest of the dashboard. visibleStoreIds already
@@ -51324,8 +52016,8 @@ function OpsTeamView({
         </select>
         <button onClick={() => setShowOnlyPending(v => !v)} className={`px-3 py-2 rounded-xl text-sm font-semibold transition-colors ${showOnlyPending ? "bg-amber-500 text-amber-950" : "bg-slate-900 text-amber-300 border border-amber-900/60 hover:bg-amber-950/40"}`}>{showOnlyPending ? "Showing pending" : "Pending only"}</button>
         <button onClick={() => setShowNoPhoto(v => !v)} className={`px-3 py-2 rounded-xl text-sm font-semibold transition-colors ${showNoPhoto ? "bg-indigo-600 text-white" : "bg-slate-900 text-indigo-300 border border-indigo-900/60 hover:bg-indigo-950/40"}`}>{showNoPhoto ? "Showing no photo" : `No photo${noPhotoCount?` (${noPhotoCount})`:""}`}</button>
-        {/* ARCHIVETEAM: archived people are still here, just out of the way. */}
-        <button onClick={() => setShowArchived(v => !v)} className={`px-3 py-2 rounded-xl text-sm font-semibold transition-colors ${showArchived ? "bg-amber-600 text-white" : "bg-slate-900 text-amber-300 border border-amber-900/60 hover:bg-amber-950/40"}`}>{showArchived ? "← Back to active team" : `Archived${archivedCount ? ` (${archivedCount})` : ""}`}</button>
+        {/* ARCHIVETEAM / LEAVER: people who've left are still here, just out of the way. */}
+        <button onClick={() => setShowArchived(v => !v)} className={`px-3 py-2 rounded-xl text-sm font-semibold transition-colors ${showArchived ? "bg-amber-600 text-white" : "bg-slate-900 text-amber-300 border border-amber-900/60 hover:bg-amber-950/40"}`}>{showArchived ? "← Back to active team" : `Leavers${archivedCount ? ` (${archivedCount})` : ""}`}</button>
         {anyFilter && <button onClick={() => { setSearch(""); setFilterStore(""); setFilterDept(""); setFilterRole(""); setShowOnlyPending(false); }} className="px-3 py-2 rounded-xl text-sm font-semibold bg-slate-800 text-slate-300 hover:bg-slate-700">Clear</button>}
       </div>
 
@@ -51350,9 +52042,16 @@ function OpsTeamView({
                         <div className="flex items-center gap-2 flex-wrap">
                           <div className="text-sm font-bold text-white">{m.firstName} {m.lastName}{m.nickname ? <span className="text-slate-600 font-normal ml-1">({m.nickname})</span> : ""}{!m.photoUrl && <span className="ml-2 text-[9px] px-1.5 py-0.5 rounded bg-indigo-600 text-white uppercase font-bold align-middle">no photo</span>}</div>
                           {m.status === "pending_setup" && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-950/60 border border-amber-800 text-amber-300 font-semibold">⚠ Pending setup</span>}
+                          {!m.isManager && <LeaverBadge member={m}/>}
                           {m.isManager && <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-950/60 border border-purple-700 text-purple-300 font-semibold">Manager</span>}
                         </div>
                         <div className="text-xs text-slate-600">{[roleLabel, deptLabel].filter(Boolean).join(" · ") || (m.status === "pending_setup" ? "Click to complete setup" : "")}</div>
+                        {showArchived && (
+                          <div className="text-[11px] text-slate-500 mt-0.5">
+                            {m.leaver ? (m.leaver.reasonLabel || leaverReasonLabel(m.leaver.reason)) : "Archived — no leaver record"}
+                            {leaverLastDay(m) ? ` · keep records until ${leaverFmtDate(leaverAddYears(leaverLastDay(m), 6))}` : ""}
+                          </div>
+                        )}
                       </div>
                       <div className="flex gap-1.5 flex-shrink-0" onClick={e => e.stopPropagation()}>
                         {m.isManager && <button onClick={() => setTmModal({
@@ -51367,12 +52066,15 @@ function OpsTeamView({
                             managers. Deleting cascades away notes, pay history,
                             certifications, documents and training progress, so it stays
                             owner-only and warns about exactly what it destroys. */}
-                        {!m.isManager && !m.archivedAt && isManagerOrAbove(currentUser?.role) && (
-                          <button onClick={() => setDelTarget({
+                        {/* LEAVER 2026-10-22 — this button used to archive on the spot,
+                            which dropped the person from payroll for days they'd
+                            already worked. It now starts the leaver process. */}
+                        {!m.isManager && !m.archivedAt && isManagerOrAbove(currentUser?.role) && leaverPhase(m) === "active" && (
+                          <button onClick={() => onPatchOpsTeam ? setLeaverTarget(m) : setDelTarget({
                             msg: `Archive "${m.firstName} ${m.lastName}"? They come off the active team, rotas and lists. Their punches, pay history, documents and training records are all kept, and you can restore them any time.`,
                             confirmLabel: "Archive",
                             fn: () => onArchiveOpsTeam?.(m.id),
-                          })} title="Archive — keeps all their records"
+                          })} title="Leaver — start the leaving process"
                             className="p-2 rounded-xl bg-slate-800 text-slate-400 hover:text-amber-300 hover:bg-amber-950/20"><Archive size={13}/></button>
                         )}
                         {!m.isManager && m.archivedAt && isManagerOrAbove(currentUser?.role) && (
@@ -51415,6 +52117,21 @@ function OpsTeamView({
         />
       )}
       {delTarget && <OpsConfirmModal message={delTarget.msg} confirmLabel={delTarget.confirmLabel} onConfirm={delTarget.fn} onClose={() => setDelTarget(null)}/>}
+      {leaverTarget && (
+        <StartLeaverModal
+          employee={leaverTarget} currentUser={currentUser} onUpdateEmployee={onPatchOpsTeam}
+          onClose={() => setLeaverTarget(null)}
+          onPlainArchive={() => {
+            const m = leaverTarget;
+            setLeaverTarget(null);
+            setDelTarget({
+              msg: `Archive "${m.firstName} ${m.lastName}" without a leaver record? Use this only for duplicate or test profiles — real leavers should go through the leaver process so payroll and access are handled.`,
+              confirmLabel: "Archive",
+              fn: () => onArchiveOpsTeam?.(m.id),
+            });
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -61684,7 +62401,9 @@ function KioskApp({ opsTeam, brands, stores = [], currentStore, punchRecords, sc
 
     // On the 4th digit: match and show the name, but require explicit confirm.
     if (next.length === 4) {
-      const found = opsTeam.find(m => m.pin && m.pin === next);
+      // LEAVER 2026-10-22 — this matched archived staff too, so a leaver's PIN
+      // still clocked them in. Leavers can no longer sign in at the kiosk.
+      const found = opsTeam.find(m => m.pin && m.pin === next && staffCanSignIn(m));
       if (found) {
         setMatched(found);   // shows name + Confirm button; employee verifies it's them
         setError("");
@@ -70534,6 +71253,52 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [opsTeamAll, actualUser?.email, actualUser?.role]);
 
+  // LEAVER 2026-10-22 — once a notice-period leaver's last day has passed, record
+  // them as left (archived, payroll status "left"). leaverPhase already treats
+  // them as left everywhere, so this is bookkeeping, not the access cut-off.
+  // Runs once per person per load, only for a manager-or-above session.
+  const leaverSweptRef = useRef(new Set());
+  useEffect(() => {
+    if (!actualUser || !isManagerOrAbove(actualUser.role)) return;
+    const today = leaverToday();
+    const due = (opsTeamAll || []).filter(m =>
+      m.leaverStatus === "notice" && m.leavingDate && m.leavingDate < today && !leaverSweptRef.current.has(m.id));
+    if (!due.length) return;
+    due.forEach(m => leaverSweptRef.current.add(m.id));
+    (async () => {
+      for (const m of due) {
+        try {
+          const saved = await updateOpsTeamMember(m.id, finalizeLeaverPatch(m));
+          setOpsTeam(ts => ts.map(x => x.id === saved.id ? saved : x));
+          addEmployeeNote({ employeeId: m.id, authorId: null, authorName: "System",
+            content: `Marked as left automatically after their last working day (${leaverFmtDate(m.leavingDate)}).` }).catch(() => {});
+        } catch (e) { console.error("Leaver sweep failed for", m.id, e); }
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opsTeamAll, actualUser?.id, actualUser?.role]);
+
+  // LEAVER 2026-10-22 — a saved session (manager login or staff PIN login)
+  // belonging to someone who has gone through the leaver process and left is
+  // signed out. Owners are never signed out this way. Only people with a
+  // leaver record count, and only if every staff record linked to the login
+  // has left — so an old duplicate profile can't lock out a current manager.
+  useEffect(() => {
+    if (!actualUser || actualUser.role === "owner" || (opsTeamAll || []).length === 0) return;
+    const e = (actualUser.email || "").trim().toLowerCase();
+    const linked = (opsTeamAll || []).filter(mm =>
+      mm.id === actualUser.id || mm.id === actualUser.opsTeamMemberId ||
+      (e && (mm.email || "").trim().toLowerCase() === e));
+    if (!linked.length) return;
+    const gone = linked.every(mm => mm.leaverStatus && leaverPhase(mm) === "left");
+    if (!gone) return;
+    localStorage.removeItem("cb_session");
+    localStorage.removeItem("cb_impersonate");
+    setActualUser(null); setImpersonatedUserId(null);
+    showToast("This account belongs to someone who has left, so it has been signed out.", "error");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opsTeamAll, actualUser?.id]);
+
   const isImpersonating = !!impersonatedUserId && actualUser?.role === "owner" && currentUser?.id !== actualUser?.id;
 
   // Custom-role resolution. A person may hold a custom role (ops_team.role_id).
@@ -71353,7 +72118,13 @@ export default function App() {
   }, [showToast]);
   const restoreOpsTeam = useCallback(async id => {
     try {
-      const s = await unarchiveOpsTeamMember(id);
+      // LEAVER 2026-10-22 — restoring someone who went through the leaver
+      // process also clears it (the leaver record stays as history). Only sent
+      // when set, so restore keeps working before the leaver SQL is run.
+      const cur = (opsTeamAll || []).find(x => x.id === id);
+      const s = (cur && (cur.leaverStatus || cur.leavingDate))
+        ? await updateOpsTeamMember(id, { archivedAt: null, leaverStatus: null, leavingDate: null })
+        : await unarchiveOpsTeamMember(id);
       setOpsTeam(ts => ts.map(x => x.id === s.id ? s : x));
       showToast("Restored to the active team");
       return s;
@@ -71361,7 +72132,7 @@ export default function App() {
       showToast(`Restore failed: ${err?.message || err}`, "error");
       throw err;
     }
-  }, [showToast]);
+  }, [showToast, opsTeamAll]);
   const deleteOpsTeam = useCallback(async id=>{
     try {
       await removeOpsTeamMember(id);
@@ -72093,7 +72864,7 @@ export default function App() {
                     storeDepartments={storeDepartments} storeRoles={storeRoles}
                     opsTeam={opsTeam} users={users}
                     customRoles={customRoles}
-                    onAddOpsTeam={addOpsTeam} onUpdateOpsTeam={updateOpsTeam} onDeleteOpsTeam={deleteOpsTeam} onArchiveOpsTeam={archiveOpsTeam} onRestoreOpsTeam={restoreOpsTeam}
+                    onAddOpsTeam={addOpsTeam} onUpdateOpsTeam={updateOpsTeam} onDeleteOpsTeam={deleteOpsTeam} onArchiveOpsTeam={archiveOpsTeam} onRestoreOpsTeam={restoreOpsTeam} onPatchOpsTeam={patchOpsTeam}
                     onOpenEmployeeProfile={openEmployeeProfile}
                     currentUser={currentUser}
                   />}
@@ -72273,7 +73044,7 @@ export default function App() {
               onAddChecklist={addChecklist} onUpdateChecklist={updateChecklist} onDeleteChecklist={deleteChecklist}
               onAddTempUnit={addTempUnit} onUpdateTempUnit={updateTempUnit} onDeleteTempUnit={deleteTempUnit}
               onAddCleanTask={addCleanTask} onUpdateCleanTask={updateCleanTask} onDeleteCleanTask={deleteCleanTask}
-              onAddOpsTeam={addOpsTeam} onUpdateOpsTeam={updateOpsTeam} onDeleteOpsTeam={deleteOpsTeam} onArchiveOpsTeam={archiveOpsTeam} onRestoreOpsTeam={restoreOpsTeam}
+              onAddOpsTeam={addOpsTeam} onUpdateOpsTeam={updateOpsTeam} onDeleteOpsTeam={deleteOpsTeam} onArchiveOpsTeam={archiveOpsTeam} onRestoreOpsTeam={restoreOpsTeam} onPatchOpsTeam={patchOpsTeam}
               onOpenEmployeeProfile={openEmployeeProfile}
               onAddShiftPreset={addShiftPreset} onUpdateShiftPreset={updateShiftPreset} onDeleteShiftPreset={deleteShiftPreset}
               onAddStoreDepartment={addStoreDepartment} onUpdateStoreDepartment={updateStoreDepartmentRow}
