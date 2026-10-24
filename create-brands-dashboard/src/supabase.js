@@ -14644,8 +14644,13 @@ async function _advanceToDispatch(soId, createdBy, freshCosts = {}) {
   const pick = picks.find(p => p.status === "picked") || picks[0];
   if (!pick) throw new Error("This order hasn't been picked yet.");
   const existing = (await fetchDistDispatches({})).filter(d => d.soId === soId);
-  // A dispatch that stopped part-way is finished, not skipped or duplicated.
+  // A dispatch that stopped part-way is finished, not skipped or duplicated —
+  // but only when it's the order's only dispatch. Two (a double tap) means one
+  // must be deleted first, or the goods would leave the warehouse twice.
   const stopped = existing.find(d => !d.posted);
+  if (stopped && existing.length > 1) {
+    throw new Error(`This order has ${existing.length} dispatches (${existing.map(d => d.dispatchNumber).join(", ")}). Delete the extra one on the Dispatch screen, then ship again.`);
+  }
   if (stopped) {
     const res = await resumeDistDispatch(stopped.id, { freshCosts, createdBy });
     await advanceSoStatus(soId, "dispatched");
@@ -14767,8 +14772,9 @@ async function _postDispatchBody(head, lines, { createdBy = null, journalDate = 
   // Landed cost for batched lines the caller didn't price.
   const batchIds = [...new Set(valid.map(x => x.batchId).filter(Boolean))];
   const batchCost = new Map();
-  if (batchIds.length) {
-    const { data: bs } = await supabase.from("dist_batches").select("id, landed_cost").in("id", batchIds);
+  for (let i = 0; i < batchIds.length; i += 40) {
+    const { data: bs, error: bErr } = await supabase.from("dist_batches").select("id, landed_cost").in("id", batchIds.slice(i, i + 40));
+    if (bErr) throw bErr;
     (bs || []).forEach(b => batchCost.set(b.id, Number(b.landed_cost) || 0));
   }
   // One line per item + batch + price: the stock key and the reversal in
@@ -14816,10 +14822,23 @@ async function _postDispatchBody(head, lines, { createdBy = null, journalDate = 
     moveByRef.set(ref, m);
     cogsValue += line.qty * line.landed_cost;
   });
+  // Movements this dispatch already made (one short query, whatever the order size).
+  const { data: have, error: hErr } = await supabase.from("dist_stock_movements")
+    .select("source_ref, qty").like("source_ref", `distdisp:${id}:%`);
+  if (hErr) throw hErr;
+  // A stopped dispatch is only finished automatically when what it already
+  // moved matches what it should move. Anything else (a batch or quantity
+  // changed by hand on the Dispatch screen) needs a person to look at it —
+  // guessing would move stock twice.
+  const mismatched = (have || []).filter(h => {
+    const want = moveByRef.get(h.source_ref);
+    return !want || Math.abs(Number(want.qty) - Number(h.qty)) > 0.0005;
+  });
+  if (mismatched.length) {
+    throw new Error(`${head.dispatch_number} already moved stock that doesn't match the order's pick (${mismatched.length} line${mismatched.length === 1 ? "" : "s"}). It needs fixing by hand before it can be finished.`);
+  }
   if (moveByRef.size) {
     const refs = [...moveByRef.keys()];
-    const { data: have, error: hErr } = await supabase.from("dist_stock_movements").select("source_ref").in("source_ref", refs);
-    if (hErr) throw hErr;
     const done = new Set((have || []).map(h => h.source_ref));
     const fresh = refs.filter(r => !done.has(r)).map(r => ({
       id: distId("dm"), ...moveByRef.get(r), type: "issue",
@@ -14875,14 +14894,12 @@ async function _dispatchLinesFromPick(pick, freshCosts = {}) {
 export async function resumeDistDispatch(dispatchId, { journalDate = null, freshCosts = null, createdBy = null } = {}) {
   const { data: head } = await supabase.from("dist_dispatches").select("*").eq("id", dispatchId).maybeSingle();
   if (!head) throw new Error("Dispatch not found.");
-  if (head.posted) return { alreadyPosted: true };
+  if (head.posted) return { alreadyPosted: true, soId: head.so_id, lines: [] };
   const pick = head.pick_id ? (await fetchDistPicks({})).find(p => p.id === head.pick_id) : null;
   if (!pick) throw new Error(`${head.dispatch_number}: its pick is missing, so the full list of what shipped can't be rebuilt.`);
-  let costs = freshCosts && Object.keys(freshCosts).length ? freshCosts : null;
-  if (!costs) {
-    const { data: saved } = await supabase.from("dist_dispatch_lines").select("item_id, unit_price").eq("dispatch_id", dispatchId);
-    costs = Object.fromEntries((saved || []).map(l => [l.item_id, l.unit_price]));
-  }
+  // Prices fresh lines already saved with, overridden by any just entered.
+  const { data: saved } = await supabase.from("dist_dispatch_lines").select("item_id, unit_price").eq("dispatch_id", dispatchId);
+  const costs = { ...Object.fromEntries((saved || []).map(l => [l.item_id, l.unit_price])), ...(freshCosts || {}) };
   const lines = await _dispatchLinesFromPick(pick, costs);
   if (!lines.length) throw new Error(`${head.dispatch_number}: its pick has no lines.`);
   const res = await _postDispatchBody(head, lines, { createdBy: createdBy || head.created_by, journalDate });
@@ -14902,21 +14919,29 @@ export async function deleteDistDispatch(dispatchId) {
   if (invoices.some(i => i.dispatchId === dispatchId)) throw new Error("Cannot delete: an invoice references this dispatch. Delete the invoice first.");
   const { data: head } = await supabase.from("dist_dispatches").select("*").eq("id", dispatchId).maybeSingle();
   if (!head) throw new Error("Dispatch not found.");
-  const { data: lines } = await supabase.from("dist_dispatch_lines").select("*").eq("dispatch_id", dispatchId);
 
-  // 1. Return stock to each batch (positive movement, distinct reversal ref).
-  //    Batchless lines (fresh / negative-stock override) moved NO stock on
-  //    dispatch, so there is nothing to return — skip them, or the movement
-  //    insert dies on the batch_id not-null constraint.
-  let cogsValue = 0;
-  for (const l of (lines || []).filter(x => x.batch_id)) {
+  // DISPATCHSAVE 2026-10-24 — reverse what the dispatch ACTUALLY did, not what
+  // its line rows say. Lines and movements can disagree (a dispatch that
+  // stopped part-way saved a line whose stock never moved; two lines can
+  // share one item + batch movement), and reversing by line returned stock
+  // that never left, or too little.
+  // 1. Return stock: one return per stock movement this dispatch made.
+  const { data: moves } = await supabase.from("dist_stock_movements")
+    .select("item_id, batch_id, qty, source_ref").like("source_ref", `distdisp:${dispatchId}:%`);
+  for (const m of (moves || [])) {
     await addDistMovement({
-      itemId: l.item_id, batchId: l.batch_id, qty: Math.abs(Number(l.qty) || 0), type: "return",
-      sourceKind: "dispatch_reversal", sourceRef: `distdispREV:${dispatchId}:${l.item_id}:${l.batch_id}`,
+      itemId: m.item_id, batchId: m.batch_id, qty: Math.abs(Number(m.qty) || 0), type: "return",
+      sourceKind: "dispatch_reversal", sourceRef: m.source_ref.replace(/^distdisp:/, "distdispREV:"),
     });
-    cogsValue += (Number(l.qty) || 0) * (Number(l.landed_cost) || 0);
   }
-  // 2. Reversing journal: Dr Stock / Cr COGS.
+  // 2. Reversing journal for exactly the cost of sales that was booked (none
+  //    if the dispatch never got that far).
+  let cogsValue = 0;
+  const { data: je } = await supabase.from("journal_entries").select("id").eq("source_ref", `distdisp:${dispatchId}`).limit(1);
+  if (je && je.length) {
+    const { data: jl } = await supabase.from("journal_lines").select("amount").eq("journal_id", je[0].id);
+    cogsValue = (jl || []).filter(l => Number(l.amount) > 0).reduce((a, l) => a + Number(l.amount), 0);
+  }
   if (cogsValue > 0) {
     const [cogs, stock] = await Promise.all([
       resolveAccountForEntity(DIST_ENTITY, "5000"), resolveAccountForEntity(DIST_ENTITY, "1200"),
