@@ -192,7 +192,7 @@ import {
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
-  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, fetchStoreOrderPrefs, saveStoreOrderPrefs, fetchChatGroups, createChatGroup, updateChatGroup, deleteChatGroup, deleteChatThread, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment, editPendingOrderLines, mergePendingOrders, fetchDeliverySourceReceipt, synthesizeInvoiceFromItems, normalizeReceiptDescription,
+  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, ensureStoreDeliveries, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, fetchStoreOrderPrefs, saveStoreOrderPrefs, fetchChatGroups, createChatGroup, updateChatGroup, deleteChatGroup, deleteChatThread, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment, editPendingOrderLines, mergePendingOrders, fetchDeliverySourceReceipt, synthesizeInvoiceFromItems, normalizeReceiptDescription,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
   fetchFreshOrderCustomers, saveFreshOrderCustomers, freshAccessActive, setSoFreshAttached, deletePayPeriod, setSoTeamNotes, uploadIssuePhoto,
@@ -3784,7 +3784,7 @@ function NotificationBell({ recipientType, recipientId, panelClass = "top-full r
     return `${Math.floor(hrs / 24)}d`;
   };
 
-  const KIND_ICON = { application: "📋", task: "✅", training: "🎓", staff: "👤", sync: "⚠️", anomaly: "⚡" };
+  const KIND_ICON = { application: "📋", task: "✅", training: "🎓", staff: "👤", sync: "⚠️", anomaly: "⚡", delivery: "🚚" };
 
   // Clicking a notification DISMISSES it (removed from list, marked read in DB)
   // and NAVIGATES to the relevant section when it has a linkView.
@@ -4124,7 +4124,7 @@ function NotificationsView({ currentUser, onNavigate }) {
   const unreadCount = items.filter(n => !n.readAt).length;
   const visible = filter === "unread" ? items.filter(n => !n.readAt) : items;
 
-  const KIND_ICON = { application: "📋", task: "✅", training: "🎓", staff: "👤", sync: "⚠️", anomaly: "⚡" };
+  const KIND_ICON = { application: "📋", task: "✅", training: "🎓", staff: "👤", sync: "⚠️", anomaly: "⚡", delivery: "🚚" };
   const KIND_LABEL = { application: "Hiring", task: "Task", training: "Training", staff: "Team", sync: "Data health" };
 
   const fmtWhen = (iso) => {
@@ -11667,6 +11667,8 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
   const [amendBusy, setAmendBusy] = useState(false);
   const [err, setErr] = useState("");
   const [freshPrompt, setFreshPrompt] = useState(null); // { lines:[{itemId,name,qty}], costs:{} } before dispatch
+  const [sendBusy, setSendBusy] = useState(false);      // INCOMING 2026-10-24 — "Send to store"
+  const [sendMsg, setSendMsg] = useState("");
   const [freshScan, setFreshScan] = useState(""); // scan status message
   const freshScanRef = useRef(null);
   useEffect(() => {
@@ -11870,8 +11872,30 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
               <StatusRow label="Invoice" value={detail ? (detail.status.invoiced ? "Invoiced" : detail.status.invoiceDraft ? "Failed — not completed" : "Not Invoiced") : "…"} tone={detail?.status.invoiced ? "text-emerald-300" : detail?.status.invoiceDraft ? "text-amber-300" : "text-slate-400"}/>
               <StatusRow label="Payment" value={detail ? (detail.status.paid ? "Paid" : "Unpaid") : "…"} tone={detail?.status.paid ? "text-emerald-300" : "text-amber-300"}/>
               {/* SHIP-INVOICE 2026-10-09a: picking and dispatch are no longer separate stages — the status panel tracks order → invoice → payment → store receipt. */}
-              <StatusRow label="Store receipt" value={!receipt ? (detail?.status.dispatched ? "Awaiting store" : "—") : receipt.status === "confirmed" ? (receipt.lines.some(l=>l.short) ? `Received · ${receipt.lines.filter(l=>l.short).length} short` : "Received in full") : "Receiving…"} tone={!receipt ? "text-slate-400" : receipt.status === "confirmed" ? (receipt.lines.some(l=>l.short) ? "text-red-300" : "text-emerald-300") : "text-amber-300"}/>
+              {/* INCOMING 2026-10-24 — "Awaiting store" used to show whenever the
+                  order was dispatched, even when no delivery existed, so the store
+                  had nothing to receive and nobody could tell. Now: on the store's
+                  list = "Awaiting store"; not on it = say so and offer to send it. */}
+              <StatusRow label="Store receipt" value={!receipt ? (detail?.status.dispatched ? "Not on store's list" : "—") : receipt.status === "confirmed" ? (receipt.lines.some(l=>l.short) ? `Received · ${receipt.lines.filter(l=>l.short).length} short` : "Received in full") : receipt.lines.some(l => l.qtyReceived != null) ? "Receiving…" : "Awaiting store"} tone={!receipt ? (detail?.status.dispatched ? "text-amber-300" : "text-slate-400") : receipt.status === "confirmed" ? (receipt.lines.some(l=>l.short) ? "text-red-300" : "text-emerald-300") : "text-amber-300"}/>
             </div>
+            {!receipt && detail?.status.dispatched && (
+              <div className="mt-2 rounded-lg border border-amber-800/60 bg-amber-950/30 p-2.5 space-y-2">
+                <div className="text-[11px] text-amber-200">This order was dispatched but isn't on the store's Incoming Orders, so they can't check it in.</div>
+                <button disabled={sendBusy} onClick={async () => {
+                  setSendBusy(true); setSendMsg("");
+                  try {
+                    const res = await ensureStoreDeliveries({ soId: so.id });
+                    const r = await fetchOrderStoreReceipt(so.id).catch(() => null);
+                    setReceipt(r);
+                    if (!r) setSendMsg(res.problems[0]?.reason || "Couldn't add it to the store's list. Check the order has a dispatch with items on it.");
+                  } catch (e) { setSendMsg(e?.message || String(e)); }
+                  setSendBusy(false);
+                }} className="px-3 py-1.5 rounded-lg bg-amber-600 text-white text-xs font-semibold hover:bg-amber-500 disabled:opacity-50">
+                  {sendBusy ? "Sending…" : "Send to store"}
+                </button>
+                {sendMsg && <div className="text-[11px] text-red-300">{sendMsg}</div>}
+              </div>
+            )}
 
             {/* SOEVENTS 2026-08-06 — the order's own history. The note field used
                 to carry a few appended stamps, which couldn't be attributed or
@@ -42696,6 +42720,13 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
         <button onClick={() => { setOpenId(null); setDetail(null); }} className="text-sm font-semibold" style={{ color: C.accent }}>← Back to incoming</button>
         <div className="rounded-2xl p-4" style={{ background: C.cream, border:`1px solid ${C.line}` }}>
           <div className="text-xs font-bold uppercase tracking-wide mb-1" style={{ color: C.inkFaint }}>Receiving delivery</div>
+          {/* INCOMING 2026-10-24 — which order this is. */}
+          <div className="text-base font-bold mb-1" style={{ color: C.ink }}>
+            {detail.head?.so_number || `Delivery #${openId}`}
+            <span className="text-xs font-semibold ml-2" style={{ color: C.inkFaint }}>
+              {detail.head?.so_number ? `Delivery #${openId}` : ""}{detail.head?.supplier_name ? ` · ${detail.head.supplier_name}` : detail.head?.dist_order_id ? " · Distribution (warehouse)" : ""}
+            </span>
+          </div>
           <div className="text-sm" style={{ color: C.inkSoft }}>Enter the actual quantity received for each item. Short items are reported to Distribution.</div>
           {(() => {
             const totalVal = lines.reduce((s2, l) => s2 + (Number(recv[l.id]) || 0) * (Number(l.unit_cost) || 0), 0);
@@ -42823,7 +42854,7 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
        : list.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16" style={{ color: C.inkFaint }}>
           <Truck size={32} className="mb-3"/><div className="text-sm font-semibold">No incoming deliveries.</div>
-          <div className="text-xs mt-1">Dispatched orders from Distribution appear here to receive.</div>
+          <div className="text-xs mt-1">Orders appear here as soon as Distribution sends them. You'll get a notification too.</div>
         </div>
       ) : (
         <div className="space-y-2">
@@ -42844,8 +42875,12 @@ function IncomingOrdersView({ stores, visibleStoreIds }) {
             <button key={d.id} onClick={() => openDelivery(d.id)} className="w-full text-left rounded-xl p-4" style={{ background: C.cream, border:`1px solid ${C.line}` }}>
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
+                  {/* INCOMING 2026-10-24 — lead with the SO number: it's what's
+                      printed on the delivery note, so staff can match the box
+                      in their hands to the card. */}
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-bold" style={{ color: C.ink }}>Delivery #{d.id}</span>
+                    <span className="text-sm font-bold" style={{ color: C.ink }}>{d.soNumber || `Delivery #${d.id}`}</span>
+                    {d.soNumber && <span className="text-[11px]" style={{ color: C.inkFaint }}>Delivery #{d.id}</span>}
                     {source && <span className="text-[11px] px-1.5 py-0.5 rounded" style={{ background: "#F3EADA", color: C.accent }}>{source}</span>}
                   </div>
                   <div className="text-[13px] mt-1" style={{ color: C.ink }}>

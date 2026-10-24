@@ -14644,23 +14644,9 @@ export async function advanceDistOrderToDispatch(soId, createdBy, freshCosts = {
     };
   });
   if (!lines.length) throw new Error("This pick has no lines to dispatch.");
-  const dispatchResult = await postDistDispatch({ soId, pickId: pick.id, customerId: pick.customerId, createdBy }, lines);
-  // PHASE 3b: mirror the dispatch into a store_delivery (incoming) so the store
-  // can receive against it. Best-effort — never blocks the dispatch.
-  try {
-    // postDistDispatch returns the id as a plain string. Reading .id off it gave
-    // undefined every time, so every store delivery was written with a null
-    // dispatch_id and could not be traced back to the dispatch that made it.
-    const dispatchId = typeof dispatchResult === "string"
-      ? dispatchResult
-      : ((dispatchResult && (dispatchResult.id || dispatchResult.dispatchId)) || null);
-    await createStoreDeliveryFromDispatch(soId, dispatchId, lines);
-    // CK customer: mirror into a CK delivery instead (each mirror checks its
-    // own applicability — store fn no-ops without a store_id, CK fn no-ops
-    // unless the customer is flagged is_central_kitchen).
-    await createCkDeliveryFromDispatch(soId, dispatchId, lines);
-  } catch (e) { console.error("delivery mirror failed:", e.message); }
-  return dispatchResult;
+  // PHASE 3b / INCOMING 2026-10-24: postDistDispatch now mirrors the dispatch
+  // into the store's (or kitchen's) incoming delivery itself, for every path.
+  return postDistDispatch({ soId, pickId: pick.id, customerId: pick.customerId, createdBy }, lines);
 }
 
 // Which fresh (non-stocked) lines on a picked order still need an actual cost
@@ -14773,6 +14759,16 @@ export async function postDistDispatch(dispatch, lines = []) {
   await advanceSoStatus(dispatch.soId, "dispatched");
   if (dispatch.soId) await logSoEvent(dispatch.soId, "dispatched", { note: "Dispatched" });
   if (dispatch.pickId) await supabase.from("dist_picks").update({ status: "dispatched" }).eq("id", dispatch.pickId);
+  // INCOMING 2026-10-24 — every dispatch reaches the store (or the kitchen).
+  // This used to live only in advanceDistOrderToDispatch, so dispatches made
+  // or edited on the Dispatch screen never appeared on the store's Incoming
+  // list and sat at "Awaiting store" for ever. Best-effort; never blocks.
+  if (dispatch.soId) {
+    try {
+      await createStoreDeliveryFromDispatch(dispatch.soId, id, lines);
+      await createCkDeliveryFromDispatch(dispatch.soId, id, lines);
+    } catch (e) { console.error("delivery mirror failed:", e?.message || e); }
+  }
   return id;
 }
 
@@ -14822,6 +14818,27 @@ export async function deleteDistDispatch(dispatchId) {
   await supabase.from("dist_dispatch_lines").delete().eq("dispatch_id", dispatchId);
   const { error } = await supabase.from("dist_dispatches").delete().eq("id", dispatchId);
   if (error) throw error;
+  // INCOMING 2026-10-24 — take the dispatch off the store's Incoming list too,
+  // as long as nobody has started receiving it; editing a dispatch re-posts it
+  // and the new one creates a fresh delivery. Older deliveries saved without a
+  // dispatch id are matched by order.
+  try {
+    const { data: dels } = await supabase.from("store_deliveries").select("id, dispatch_id, status")
+      .eq("dist_order_id", head.so_id).eq("status", "incoming");
+    for (const d of (dels || []).filter(x => x.dispatch_id === dispatchId || !x.dispatch_id)) {
+      const { data: started } = await supabase.from("store_delivery_lines").select("id")
+        .eq("delivery_id", d.id).not("qty_received", "is", null).limit(1);
+      if (started && started.length) continue;
+      await supabase.from("store_delivery_lines").delete().eq("delivery_id", d.id);
+      await supabase.from("store_deliveries").delete().eq("id", d.id);
+    }
+    const { data: ckd } = await supabase.from("ck_deliveries").select("id")
+      .eq("dispatch_id", dispatchId).eq("status", "incoming");
+    for (const d of (ckd || [])) {
+      await supabase.from("ck_delivery_lines").delete().eq("delivery_id", d.id);
+      await supabase.from("ck_deliveries").delete().eq("id", d.id);
+    }
+  } catch (e) { console.error("delivery cleanup after dispatch delete failed:", e?.message || e); }
   // 4. Reset SO + pick so the order can be re-dispatched.
   await advanceSoStatus(head.so_id, "picking");
   if (head.pick_id) await supabase.from("dist_picks").update({ status: "picked" }).eq("id", head.pick_id);
@@ -18041,6 +18058,100 @@ export async function fetchUberEatsWeeks() {
 // dispatch. Store-only — no CK involvement.
 
 // Resolve the store_id for a dist sales order (via customer→store link).
+// INCOMING 2026-10-24 — who at the store hears about an incoming order: the
+// manager logins for that store, plus team members at that store whose job
+// title says manager. Not HQ — they'd get a ping for every dispatch.
+async function notifyStoreIncoming(storeId, soId, lineCount) {
+  try {
+    const [{ data: so }, { data: users }, { data: team }] = await Promise.all([
+      supabase.from("dist_sales_orders").select("so_number").eq("id", soId).maybeSingle(),
+      supabase.from("users").select("id, role, store_ids"),
+      supabase.from("ops_team").select("id, role, store_ids, archived_at, leaver_status").contains("store_ids", [storeId]),
+    ]);
+    const ref = so?.so_number || "An order";
+    const title = `${ref} is on its way`;
+    const body = `${lineCount} item${lineCount === 1 ? "" : "s"} from Distribution. Check it in under Deliveries → Incoming Orders when it arrives.`;
+    const rows = [
+      ...(users || []).filter(u => u.role === "manager" && (u.store_ids || []).includes(storeId))
+        .map(u => ({ recipientType: "user", recipientId: u.id })),
+      ...(team || []).filter(m => !m.archived_at && m.leaver_status !== "left" && /manager|supervisor/i.test(m.role || ""))
+        .map(m => ({ recipientType: "ops", recipientId: m.id })),
+    ].map(r => ({ ...r, kind: "delivery", title, body, linkView: "ops-deliveries" }));
+    if (rows.length) await insertNotifications(rows);
+  } catch (e) { console.error("notifyStoreIncoming failed:", e?.message || e); }
+}
+
+// INCOMING 2026-10-24 — why an order can't reach a store's Incoming list.
+async function _storeLinkProblem(soId) {
+  const { data: so } = await supabase.from("dist_sales_orders")
+    .select("customer_id").eq("id", soId).maybeSingle();
+  if (!so?.customer_id) return "This order has no customer.";
+  const { data: c } = await supabase.from("dist_contacts")
+    .select("display_name, company_name, store_id, is_central_kitchen").eq("id", so.customer_id).maybeSingle();
+  if (!c) return "The customer on this order no longer exists.";
+  if (c.is_central_kitchen) return null;
+  if (!c.store_id) return `The customer "${c.display_name || c.company_name || "?"}" isn't linked to a store. Link it to the store in Distribution → Contacts, then try again.`;
+  return null;
+}
+
+// INCOMING 2026-10-24 — put dispatched orders that never reached a store's
+// Incoming list onto it. Two ways in:
+//   { soId }            one order (the "Send to store" button on the order)
+//   { storeId, days }   every dispatch to that store in the last `days` days
+//                       (run each time the store opens Incoming Orders)
+// Skips any dispatch that already has a delivery (by dispatch, or for older
+// deliveries saved without a dispatch id, by order). Returns
+// { created: [deliveryId], problems: [{ soId, reason }] }.
+export async function ensureStoreDeliveries({ soId = null, storeId = null, days = 7 } = {}) {
+  const out = { created: [], problems: [] };
+  let q = supabase.from("dist_dispatches").select("id, so_id, customer_id, dispatch_date, created_at");
+  if (soId) q = q.eq("so_id", soId);
+  else if (storeId) {
+    const { data: contacts } = await supabase.from("dist_contacts").select("id").eq("store_id", storeId);
+    const ids = (contacts || []).map(c => c.id);
+    if (!ids.length) return out;
+    const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+    q = q.in("customer_id", ids).gte("dispatch_date", since);
+  } else return out;
+  const { data: dispatches, error } = await q;
+  if (error) throw error;
+  const list = (dispatches || []).filter(d => d.so_id);
+  if (!list.length) return out;
+
+  const soIds = [...new Set(list.map(d => d.so_id))];
+  const [{ data: byDispatch }, { data: bySo }, { data: sos }] = await Promise.all([
+    supabase.from("store_deliveries").select("dispatch_id").in("dispatch_id", list.map(d => d.id)),
+    supabase.from("store_deliveries").select("dist_order_id, dispatch_id").in("dist_order_id", soIds),
+    supabase.from("dist_sales_orders").select("id, status").in("id", soIds),
+  ]);
+  const haveDispatch = new Set((byDispatch || []).map(r => r.dispatch_id));
+  const soHasUnlinked = new Set((bySo || []).filter(r => !r.dispatch_id).map(r => r.dist_order_id));
+  const cancelled = new Set((sos || []).filter(o => o.status === "cancelled").map(o => o.id));
+
+  for (const d of list) {
+    if (haveDispatch.has(d.id) || soHasUnlinked.has(d.so_id) || cancelled.has(d.so_id)) continue;
+    if (await _isCkSalesOrder(d.so_id)) continue;          // the kitchen has its own receiving
+    const problem = await _storeLinkProblem(d.so_id);
+    if (problem) { out.problems.push({ soId: d.so_id, reason: problem }); continue; }
+    const { data: dl } = await supabase.from("dist_dispatch_lines")
+      .select("item_id, qty, unit_price").eq("dispatch_id", d.id);
+    // One line per item (a dispatch splits an item across batches).
+    const agg = new Map();
+    (dl || []).forEach(l => {
+      if (!l.item_id || !(Number(l.qty) > 0)) return;
+      const a = agg.get(l.item_id) || { itemId: l.item_id, qty: 0, unitPrice: l.unit_price != null ? Number(l.unit_price) : null };
+      a.qty += Number(l.qty) || 0;
+      agg.set(l.item_id, a);
+    });
+    if (!agg.size) continue;
+    const when = d.dispatch_date ? `${d.dispatch_date}T08:00:00Z` : (d.created_at || null);
+    const id = await createStoreDeliveryFromDispatch(d.so_id, d.id, [...agg.values()], { dispatchedAt: when, silent: !soId });
+    if (id) out.created.push(id);
+    else if (soId) out.problems.push({ soId: d.so_id, reason: "Everything on this order is fresh produce, which reaches the store on the driver's fresh delivery instead." });
+  }
+  return out;
+}
+
 async function _storeIdForSalesOrder(soId) {
   try {
     const { data: so } = await supabase.from("dist_sales_orders")
@@ -18055,8 +18166,16 @@ async function _storeIdForSalesOrder(soId) {
 // Create a store_delivery from a set of dispatched lines. Resolves each dist
 // item to its store item via cogs_store_items.dist_item_id (Phase 1 link).
 // Best-effort: logs and returns null on failure so it never breaks the dispatch.
-export async function createStoreDeliveryFromDispatch(soId, dispatchId, dispatchLines) {
+export async function createStoreDeliveryFromDispatch(soId, dispatchId, dispatchLines, opts = {}) {
   try {
+    // INCOMING 2026-10-24 — one delivery per dispatch. postDistDispatch now
+    // mirrors every dispatch itself, and the store's Incoming list repairs
+    // recent gaps, so the same dispatch can be offered twice; never duplicate.
+    if (dispatchId) {
+      const { data: existing } = await supabase.from("store_deliveries")
+        .select("id").eq("dispatch_id", dispatchId).limit(1);
+      if (existing && existing.length) return existing[0].id;
+    }
     const storeId = await _storeIdForSalesOrder(soId);
     if (!storeId) { console.warn("store delivery: no store for SO", soId); return null; }
 
@@ -18076,9 +18195,11 @@ export async function createStoreDeliveryFromDispatch(soId, dispatchId, dispatch
     // Per-line channel from the SO wins over item type: an item overridden to
     // 'warehouse' rides the van even if fresh-typed; 'fresh'/'detached' never do.
     const { data: soLines } = await supabase.from("dist_sales_order_lines")
-      .select("item_id, fulfil_channel, line_note").eq("so_id", soId);
+      .select("item_id, fulfil_channel, line_note, unit_price").eq("so_id", soId);
     const chanByItem = new Map((soLines || []).map(x => [x.item_id, x.fulfil_channel]));
     const noteByItem = new Map((soLines || []).filter(x => x.line_note).map(x => [x.item_id, x.line_note]));
+    // The Dispatch screen's lines can arrive without a price; the order has it.
+    const priceByItem = new Map((soLines || []).filter(x => x.unit_price != null).map(x => [x.item_id, Number(x.unit_price)]));
     const rideVan = (itemId) => {
       const ch = chanByItem.get(itemId);
       if (ch) return ch === "warehouse";
@@ -18094,7 +18215,7 @@ export async function createStoreDeliveryFromDispatch(soId, dispatchId, dispatch
     // Header
     const { data: deliv, error: hErr } = await supabase.from("store_deliveries")
       .insert({ store_id: storeId, dist_order_id: soId, dispatch_id: dispatchId || null,
-                status: "incoming", dispatched_at: new Date().toISOString() })
+                status: "incoming", dispatched_at: opts.dispatchedAt || new Date().toISOString() })
       .select().single();
     if (hErr) { console.error("store delivery header failed:", hErr.message); return null; }
 
@@ -18108,7 +18229,7 @@ export async function createStoreDeliveryFromDispatch(soId, dispatchId, dispatch
         item_name: (si && si.name) || distById.get(l.itemId) || "Item",
         qty_dispatched: Number(l.qty) || 0,
         qty_received: null,
-        unit_cost: l.unitPrice != null ? Number(l.unitPrice) : null,
+        unit_cost: l.unitPrice != null && l.unitPrice !== "" ? Number(l.unitPrice) : (priceByItem.has(l.itemId) ? priceByItem.get(l.itemId) : null),
         line_note: noteByItem.get(l.itemId) || null,
       };
     });
@@ -18116,6 +18237,10 @@ export async function createStoreDeliveryFromDispatch(soId, dispatchId, dispatch
       const { error: lErr } = await supabase.from("store_delivery_lines").insert(lineRows);
       if (lErr) console.error("store delivery lines failed:", lErr.message);
     }
+    // INCOMING 2026-10-24 — tell the store it's on its way, so nobody has to
+    // remember to look. Fire-and-forget; a failed notification never undoes
+    // the delivery.
+    if (!opts.silent) notifyStoreIncoming(storeId, soId, lineRows.length).catch(() => {});
     return deliv.id;
   } catch (e) {
     console.error("createStoreDeliveryFromDispatch error:", e.message);
@@ -18125,6 +18250,10 @@ export async function createStoreDeliveryFromDispatch(soId, dispatchId, dispatch
 
 // The store's incoming / in-progress deliveries (what's on the way).
 export async function fetchIncomingDeliveries(storeId) {
+  // INCOMING 2026-10-24 — first put any recent dispatch for this store that
+  // never made it onto the list (see ensureStoreDeliveries). Never blocks.
+  try { await ensureStoreDeliveries({ storeId, days: 7 }); }
+  catch (e) { console.error("incoming repair failed:", e?.message || e); }
   const { data, error } = await supabase.from("store_deliveries")
     .select("*").eq("store_id", storeId).in("status", ["incoming", "receiving"])
     .order("dispatched_at", { ascending: false });
@@ -18159,13 +18288,15 @@ export async function fetchIncomingDeliveries(storeId) {
   const orderIds = [...new Set(deliveries.map(d => d.dist_order_id).filter(Boolean))];
   if (orderIds.length) {
     const { data: sos } = await supabase.from("dist_sales_orders")
-      .select("id, created_at, order_date, reference").in("id", orderIds);
+      .select("id, created_at, order_date, reference, so_number").in("id", orderIds);
     const byOrder = {};
     (sos || []).forEach(o => { byOrder[o.id] = o; });
     deliveries.forEach(d => {
       const o = d.dist_order_id ? byOrder[d.dist_order_id] : null;
       d.orderedAt = o ? (o.order_date || o.created_at || null) : null;
       d.orderRef = o ? (o.reference || null) : null;
+      // INCOMING 2026-10-24 — the number on the paperwork that comes with it.
+      d.soNumber = o ? (o.so_number || null) : null;
     });
   }
   return deliveries;
@@ -18189,6 +18320,13 @@ export async function fetchStoreDeliveryDetail(deliveryId) {
       const p = packById.get(l.dist_item_id);
       if (p) { l.pack_count = p.pack_count; l.pack_size = p.pack_size; l.pack_unit = p.pack_unit; }
     });
+  }
+  // INCOMING 2026-10-24 — SO number for the receiving screen's header.
+  if (head && head.dist_order_id) {
+    try {
+      const { data: so } = await supabase.from("dist_sales_orders").select("so_number").eq("id", head.dist_order_id).maybeSingle();
+      head.so_number = so?.so_number || null;
+    } catch { /* display only */ }
   }
   return { head, lines: rows };
 }
@@ -18566,6 +18704,12 @@ export function ckLineEquivalent(line) {
 export async function createCkDeliveryFromDispatch(soId, dispatchId, dispatchLines) {
   try {
     if (!(await _isCkSalesOrder(soId))) return null;
+    // INCOMING 2026-10-24 — one CK delivery per dispatch (see the store mirror).
+    if (dispatchId) {
+      const { data: existing } = await supabase.from("ck_deliveries")
+        .select("id").eq("dispatch_id", dispatchId).limit(1);
+      if (existing && existing.length) return existing[0].id;
+    }
     const siteId = await _ckSiteId();
     const distIds = [...new Set((dispatchLines || []).map(l => l.itemId).filter(Boolean))];
     const distById = new Map();
