@@ -188,7 +188,7 @@ import {
   fetchDistCollections, upsertDistCollection, deleteDistCollection, fetchDistCollectionItems, setDistCollectionItems, fetchDistCollectionsWithItems,
   fetchDistItemTransactions, fetchDistItemHistory, fetchDistCustomerDetail, fetchDistReceivablesByCustomer, fetchDistSalesOrderDetail,
   fetchDistFulfilmentBoard, advanceDistOrderToPick, advanceDistOrderToDispatch, advanceDistOrderToInvoice, shipAndInvoiceDistOrder, fetchFreshLinesNeedingCost, fetchDistOrdersByItemType, setDistFulfilCheck, setDistFulfilOrderChecks, setDistFulfilItemChecks,
-  updateDistSalesOrder, deleteDistSalesOrder, updateDistPick, deleteDistPick, deleteDistDispatch, fetchDistPickDetail, fetchDistDispatchDetail,
+  updateDistSalesOrder, deleteDistSalesOrder, describeDistOrderUnwind, deleteDistOrderAndUnwind, updateDistPick, deleteDistPick, deleteDistDispatch, fetchDistPickDetail, fetchDistDispatchDetail,
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
@@ -12271,11 +12271,30 @@ function DistSalesOrderView({ currentUser, setActiveView }) {
     }
     catch (e) { setErr(e.message); } setBusy(false);
   };
+  // DELETEORDER 2026-10-24 — a shipped/invoiced order is undone in one go
+  // (invoice → dispatch → pick → order); there are no separate Pick/Dispatch
+  // screens to do it by hand any more.
   const removeSO = async (so) => {
-    if (!window.confirm(`Delete sales order ${so.soNumber}? This frees its committed stock and can't be undone.`)) return;
     setBusy(true); setErr("");
-    try { await deleteDistSalesOrder(so.id); setDetail(null); await load(); }
-    catch (e) { setErr(e.message); } setBusy(false);
+    try {
+      const plan = await describeDistOrderUnwind(so.id);
+      if (plan.blockers.length) { setErr(`Can't delete ${so.soNumber}: ${plan.blockers.join(" ")}`); setBusy(false); return; }
+      const steps = [
+        plan.invoices && `reverse its invoice (sales, VAT and money owed)`,
+        plan.dispatches && `put its stock back in the warehouse and reverse the cost of sales`,
+        plan.dispatches && `take it off the store's Incoming Orders`,
+        plan.picks && `remove its pick`,
+      ].filter(Boolean);
+      const msg = steps.length
+        ? `Delete ${so.soNumber}?\n\nThis will:\n• ${steps.join("\n• ")}\n• delete the order\n\nThis can't be undone.`
+        : `Delete sales order ${so.soNumber}? This frees its committed stock and can't be undone.`;
+      if (!window.confirm(msg)) { setBusy(false); return; }
+      if (steps.length) await deleteDistOrderAndUnwind(so.id);
+      else await deleteDistSalesOrder(so.id);
+      setDetail(null); await load();
+    }
+    catch (e) { setErr(e.message); await load().catch(() => {}); }
+    setBusy(false);
   };
   const editSO = (so) => setCreating({ ...so, lines: (so.lines || []).map(l => ({ ...l })) });
   const cName = (id) => customers.find(c => c.id === id)?.displayName || "—";

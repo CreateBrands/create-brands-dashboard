@@ -14081,6 +14081,50 @@ export async function deleteDistSalesOrder(soId) {
   return true;
 }
 
+// DELETEORDER 2026-10-24 — delete an order that's already been shipped and
+// invoiced, undoing it in reverse: invoice (reverses the sale), dispatch (puts
+// the stock back, reverses cost of sales, takes it off the store's Incoming
+// list), pick, then the order. The Pick and Dispatch screens were folded into
+// Ship & invoice, so there was no longer anywhere to delete those by hand and
+// a shipped order couldn't be deleted at all.
+// Refuses, before touching anything, when the invoice has a payment or the
+// store has started checking the delivery in.
+export async function describeDistOrderUnwind(soId) {
+  const detail = await fetchDistSalesOrderDetail(soId);
+  const invoices = detail.invoices || [];
+  const paidMap = invoices.length ? await fetchDistInvoicePaidMap(invoices.map(i => i.id)).catch(() => new Map()) : new Map();
+  const paid = invoices.filter(i => (paidMap.get(i.id) || 0) > 0.005);
+  const [{ data: sd }, { data: cd }] = await Promise.all([
+    supabase.from("store_deliveries").select("id, status").eq("dist_order_id", soId),
+    supabase.from("ck_deliveries").select("id, status").eq("dist_order_id", soId),
+  ]);
+  let started = [...(sd || []), ...(cd || [])].filter(d => d.status !== "incoming");
+  // An "incoming" delivery with any quantity already entered also counts.
+  const incomingIds = (sd || []).filter(d => d.status === "incoming").map(d => d.id);
+  if (incomingIds.length) {
+    const { data: rl } = await supabase.from("store_delivery_lines").select("delivery_id")
+      .in("delivery_id", incomingIds).not("qty_received", "is", null).limit(1);
+    if (rl && rl.length) started = started.concat([{ id: rl[0].delivery_id, status: "receiving" }]);
+  }
+  const blockers = [];
+  if (paid.length) blockers.push(`${paid.map(i => i.invoiceNumber).join(", ")} ${paid.length === 1 ? "has a payment" : "have payments"} recorded. Remove the payment first.`);
+  if (started.length) blockers.push("The store has already started checking this delivery in, so its stock has moved. Sort it out with the store first.");
+  return {
+    invoices: invoices.length, dispatches: (detail.dispatches || []).length, picks: (detail.picks || []).length,
+    blockers,
+  };
+}
+
+export async function deleteDistOrderAndUnwind(soId) {
+  const plan = await describeDistOrderUnwind(soId);
+  if (plan.blockers.length) throw new Error(`Can't delete this order: ${plan.blockers.join(" ")}`);
+  const detail = await fetchDistSalesOrderDetail(soId);
+  for (const inv of (detail.invoices || [])) await deleteDistInvoice(inv.id);
+  for (const d of (detail.dispatches || [])) await deleteDistDispatch(d.id);
+  for (const p of (detail.picks || [])) await deleteDistPick(p.id);
+  return deleteDistSalesOrder(soId);
+}
+
 // Manager edits a pending order's lines before approving. Records an amendment
 // note so the change is auditable (who edited, when). Lines: [{itemId, qty, uom, unitPrice, taxRateId}].
 export async function editPendingOrderLines(soId, lines, editorName) {
