@@ -14555,12 +14555,18 @@ export async function fetchDistFulfilmentBoard() {
 // invoiced for less than it shipped. Pick and dispatch rows are still written
 // (the stock ledger and COGS hang off them) but no one has to touch them.
 export async function shipAndInvoiceDistOrder(soId, createdBy, freshCosts = {}) {
+  return _onePerOrder(`ship:${soId}`, () => _shipAndInvoice(soId, createdBy, freshCosts));
+}
+async function _shipAndInvoice(soId, createdBy, freshCosts = {}) {
   const so = (await fetchDistSalesOrders({})).find(s => s.id === soId);
   if (!so) throw new Error("Order not found.");
   const picks = (await fetchDistPicks({})).filter(p => p.soId === soId && p.status !== "cancelled");
   if (!picks.length) await advanceDistOrderToPick(soId, createdBy);
   const dispatches = (await fetchDistDispatches({})).filter(d => d.soId === soId);
-  if (!dispatches.length) await advanceDistOrderToDispatch(soId, createdBy, freshCosts);
+  // DISPATCHSAVE 2026-10-24 — a dispatch that stopped part-way used to be
+  // treated as done here, so the order went straight to the invoice with half
+  // its stock still "in" the warehouse and no cost of sales. Finish it first.
+  if (!dispatches.length || dispatches.some(d => !d.posted)) await advanceDistOrderToDispatch(soId, createdBy, freshCosts);
   const invoices = (await fetchDistInvoices({})).filter(i => i.soId === soId);
   if (invoices.length) throw new Error("This order has already been invoiced.");
   const inv = await advanceDistOrderToInvoice(soId, createdBy);
@@ -14621,28 +14627,37 @@ export async function advanceDistOrderToPick(soId, createdBy) {
 // Advance: picked → dispatched. Ships the order's pick (reduces stock, posts COGS).
 // Guarded: throws if already dispatched, or if no pick exists.
 export async function advanceDistOrderToDispatch(soId, createdBy, freshCosts = {}) {
+  return _onePerOrder(`dispatch:${soId}`, () => _advanceToDispatch(soId, createdBy, freshCosts));
+}
+// DISPATCHSAVE 2026-10-24 — one dispatch per order at a time from this
+// device. Two taps a moment apart made two dispatches for SO-923091 on
+// 17 Oct and took its stock out twice.
+const _inFlight = new Map();
+function _onePerOrder(key, fn) {
+  if (_inFlight.has(key)) return _inFlight.get(key);
+  const p = (async () => { try { return await fn(); } finally { _inFlight.delete(key); } })();
+  _inFlight.set(key, p);
+  return p;
+}
+async function _advanceToDispatch(soId, createdBy, freshCosts = {}) {
   const picks = (await fetchDistPicks({})).filter(p => p.soId === soId);
   const pick = picks.find(p => p.status === "picked") || picks[0];
   if (!pick) throw new Error("This order hasn't been picked yet.");
   const existing = (await fetchDistDispatches({})).filter(d => d.soId === soId);
+  // A dispatch that stopped part-way is finished, not skipped or duplicated.
+  const stopped = existing.find(d => !d.posted);
+  if (stopped) {
+    const res = await resumeDistDispatch(stopped.id, { freshCosts, createdBy });
+    await advanceSoStatus(soId, "dispatched");
+    try {
+      await createStoreDeliveryFromDispatch(soId, stopped.id, res.lines || []);
+      await createCkDeliveryFromDispatch(soId, stopped.id, res.lines || []);
+    } catch (e) { console.error("delivery mirror failed:", e?.message || e); }
+    return stopped.id;
+  }
   if (existing.length) throw new Error("This order has already been dispatched.");
-  const allItems = await fetchDistItems().catch(() => []);
-  const typeById = new Map(allItems.map(i => [i.id, i.itemType || "warehouse"]));
-  // Build dispatch lines. Fresh (non-stocked) lines are charged AT COST — the
-  // store pays exactly what the driver paid — so their unit price is set from
-  // freshCosts[itemId] (the actual supermarket cost captured at dispatch).
-  const lines = (pick.lines || []).map(l => {
-    const isFresh = (typeById.get(l.itemId) || "warehouse") === "fresh";
-    const cost = isFresh && freshCosts[l.itemId] != null && freshCosts[l.itemId] !== "" ? Number(freshCosts[l.itemId]) : null;
-    return {
-      itemId: l.itemId, batchId: l.batchId, qty: l.qty,
-      unitPrice: isFresh ? (cost != null ? cost : (Number(l.unitPrice) || 0)) : (Number(l.unitPrice) || 0),
-      // Batchless = nothing to draw down: fresh items by design, or a stocked
-      // item dispatched beyond available batches (negative-stock override).
-      // Either way: dispatch + invoice at full qty, no stock movement.
-      taxRateId: l.taxRateId || null, nonStock: isFresh,   // STOCK 2026-09-20a: batchless stocked lines now hit the UNRECEIVED batch
-    };
-  });
+  // Fresh (non-stocked) lines are charged AT COST — see _dispatchLinesFromPick.
+  const lines = await _dispatchLinesFromPick(pick, freshCosts);
   if (!lines.length) throw new Error("This pick has no lines to dispatch.");
   // PHASE 3b / INCOMING 2026-10-24: postDistDispatch now mirrors the dispatch
   // into the store's (or kitchen's) incoming delivery itself, for every path.
@@ -14703,59 +14718,7 @@ export async function postDistDispatch(dispatch, lines = []) {
   };
   const { error } = await supabase.from("dist_dispatches").insert(head);
   if (error) throw error;
-
-  let cogsValue = 0;
-  // STOCK 2026-09-20a: a stocked line with no batch (nothing received yet) no
-  // longer vanishes from the ledger — it issues against the item's UNRECEIVED
-  // batch so on-hand goes negative and the gap shows. Only explicitly
-  // non-stocked lines (fresh / CK, nonStock: true) skip the ledger.
-  const stockedNoBatch = lines.filter(x => x.itemId && Number(x.qty) > 0 && !x.batchId && !x.nonStock);
-  let costById = new Map();
-  if (stockedNoBatch.length) {
-    const allItems = await fetchDistItems().catch(() => []);
-    costById = new Map(allItems.map(i => [i.id, Number(i.purchaseRate) || 0]));
-  }
-  for (const l of lines.filter(x => x.itemId && Number(x.qty) > 0)) {
-    const nonStock = !!l.nonStock;
-    let batchId = nonStock ? null : (l.batchId || null);
-    let landedCost = nonStock ? 0 : (Number(l.landedCost) || 0);
-    if (!nonStock && !batchId) {
-      try {
-        const fb = await getDistUnreceivedBatch(l.itemId, costById.get(l.itemId) || 0);
-        batchId = fb.id; landedCost = landedCost || Number(fb.landedCost) || 0;
-      } catch (e) { console.error("unreceived batch failed:", l.itemId, e?.message || e); }
-    }
-    await supabase.from("dist_dispatch_lines").insert({
-      id: distId("ddispl"), dispatch_id: id, item_id: l.itemId, batch_id: batchId, qty: Number(l.qty) || 0,
-      landed_cost: landedCost, unit_price: Number(l.unitPrice) || 0, tax_rate_id: l.taxRateId || null,
-    });
-    // Non-stocked (fresh produce / CK) lines: no stock movement, no stock-based
-    // COGS — the driver sourced them to order; their cost is the purchase itself.
-    if (!nonStock && batchId) {
-      await addDistMovement({
-        itemId: l.itemId, batchId, qty: -Math.abs(Number(l.qty) || 0), type: "issue",
-        sourceKind: "dispatch", sourceRef: `distdisp:${id}:${l.itemId}:${batchId}`, createdBy: dispatch.createdBy,
-      });
-      cogsValue += (Number(l.qty) || 0) * landedCost;
-    }
-  }
-
-  // Journal: Dr COGS 5000 / Cr Stock 1200 at landed cost.
-  if (cogsValue > 0) {
-    const [cogs, stock] = await Promise.all([
-      resolveAccountForEntity(DIST_ENTITY, "5000"), resolveAccountForEntity(DIST_ENTITY, "1200"),
-    ]);
-    if (cogs && stock) {
-      try {
-        await postJournalEntry({
-          entityId: DIST_ENTITY, entryDate: dispatchDate, memo: `Dispatch ${head.dispatch_number}`,
-          sourceKind: "dist_dispatch", sourceRef: `distdisp:${id}`, createdBy: dispatch.createdBy,
-          lines: [{ accountId: cogs, amount: +cogsValue.toFixed(2) }, { accountId: stock, amount: -cogsValue.toFixed(2) }],
-        });
-      } catch (e) { /* best-effort: stock already moved; journal retryable */ }
-    }
-  }
-  await supabase.from("dist_dispatches").update({ posted: true }).eq("id", id);
+  await _postDispatchBody(head, lines, { createdBy: dispatch.createdBy });
   await advanceSoStatus(dispatch.soId, "dispatched");
   if (dispatch.soId) await logSoEvent(dispatch.soId, "dispatched", { note: "Dispatched" });
   if (dispatch.pickId) await supabase.from("dist_picks").update({ status: "dispatched" }).eq("id", dispatch.pickId);
@@ -14770,6 +14733,161 @@ export async function postDistDispatch(dispatch, lines = []) {
     } catch (e) { console.error("delivery mirror failed:", e?.message || e); }
   }
   return id;
+}
+
+// DISPATCHSAVE 2026-10-24 — the body of a dispatch: its lines, the stock that
+// leaves the warehouse, and the cost of sales. It used to save one line at a
+// time (300–400 requests on a big order, several minutes). When the device
+// locked or lost signal part-way, the dispatch stopped: later lines never
+// saved or left stock, the cost of sales (booked only at the very end) was
+// never booked, and a retry skipped straight to the invoice. 24 orders were
+// left like that between 31 Aug and 24 Oct 2026.
+//
+// Now it's a handful of bulk writes, and it can be run again on the same
+// dispatch to finish one that stopped (resumeDistDispatch): lines are replaced
+// as a set, stock movements are keyed per item+batch so nothing moves twice,
+// and the journal is keyed per dispatch. `posted` flips only when all of it
+// is in.
+async function _postDispatchBody(head, lines, { createdBy = null, journalDate = null } = {}) {
+  const id = head.id;
+  const valid = (lines || []).filter(x => x.itemId && Number(x.qty) > 0);
+  // STOCK 2026-09-20a: a stocked line with no batch (nothing received yet)
+  // issues against the item's UNRECEIVED batch, so on-hand goes negative and
+  // the gap shows. Only non-stocked lines (fresh / CK, nonStock) skip stock.
+  const needUnreceived = [...new Set(valid.filter(x => !x.batchId && !x.nonStock).map(x => x.itemId))];
+  const unreceived = new Map();
+  if (needUnreceived.length) {
+    const allItems = await fetchDistItems().catch(() => []);
+    const costById = new Map(allItems.map(i => [i.id, Number(i.purchaseRate) || 0]));
+    for (const itemId of needUnreceived) {
+      try { unreceived.set(itemId, await getDistUnreceivedBatch(itemId, costById.get(itemId) || 0)); }
+      catch (e) { console.error("unreceived batch failed:", itemId, e?.message || e); }
+    }
+  }
+  // Landed cost for batched lines the caller didn't price.
+  const batchIds = [...new Set(valid.map(x => x.batchId).filter(Boolean))];
+  const batchCost = new Map();
+  if (batchIds.length) {
+    const { data: bs } = await supabase.from("dist_batches").select("id, landed_cost").in("id", batchIds);
+    (bs || []).forEach(b => batchCost.set(b.id, Number(b.landed_cost) || 0));
+  }
+  // One line per item + batch + price: the stock key and the reversal in
+  // deleteDistDispatch are per item + batch, so two lines sharing one would
+  // move stock once but be reversed once per line.
+  const merged = new Map();
+  valid.forEach(l => {
+    const k = [l.itemId, l.batchId || "", !!l.nonStock, Number(l.unitPrice) || 0, l.taxRateId || ""].join("|");
+    const m = merged.get(k);
+    if (m) m.qty = (Number(m.qty) || 0) + (Number(l.qty) || 0);
+    else merged.set(k, { ...l, qty: Number(l.qty) || 0 });
+  });
+  const rows = [...merged.values()].map(l => {
+    const nonStock = !!l.nonStock;
+    let batchId = nonStock ? null : (l.batchId || null);
+    let landedCost = nonStock ? 0 : (Number(l.landedCost) || (batchId ? batchCost.get(batchId) || 0 : 0));
+    if (!nonStock && !batchId) {
+      const fb = unreceived.get(l.itemId);
+      if (fb) { batchId = fb.id; landedCost = landedCost || Number(fb.landedCost) || 0; }
+    }
+    return { line: {
+      id: distId("ddispl"), dispatch_id: id, item_id: l.itemId, batch_id: batchId, qty: Number(l.qty) || 0,
+      landed_cost: landedCost, unit_price: Number(l.unitPrice) || 0, tax_rate_id: l.taxRateId || null,
+    }, nonStock };
+  });
+
+  // 1. Lines — replaced as a set, so a rerun leaves exactly one copy.
+  const { error: dErr } = await supabase.from("dist_dispatch_lines").delete().eq("dispatch_id", id);
+  if (dErr) throw dErr;
+  if (rows.length) {
+    const { error: lErr } = await supabase.from("dist_dispatch_lines").insert(rows.map(r => r.line));
+    if (lErr) throw lErr;
+  }
+
+  // 2. Stock out — one movement per item + batch. The key is the same one the
+  // old line-by-line save used, so a stopped dispatch's movements are kept and
+  // only the missing ones are added.
+  const moveByRef = new Map();
+  let cogsValue = 0;
+  rows.forEach(({ line, nonStock }) => {
+    if (nonStock || !line.batch_id) return;
+    const ref = `distdisp:${id}:${line.item_id}:${line.batch_id}`;
+    const m = moveByRef.get(ref) || { item_id: line.item_id, batch_id: line.batch_id, qty: 0 };
+    m.qty -= Math.abs(line.qty);
+    moveByRef.set(ref, m);
+    cogsValue += line.qty * line.landed_cost;
+  });
+  if (moveByRef.size) {
+    const refs = [...moveByRef.keys()];
+    const { data: have, error: hErr } = await supabase.from("dist_stock_movements").select("source_ref").in("source_ref", refs);
+    if (hErr) throw hErr;
+    const done = new Set((have || []).map(h => h.source_ref));
+    const fresh = refs.filter(r => !done.has(r)).map(r => ({
+      id: distId("dm"), ...moveByRef.get(r), type: "issue",
+      source_kind: "dispatch", source_ref: r, created_by: createdBy || null,
+    }));
+    if (fresh.length) {
+      const { error: mErr } = await supabase.from("dist_stock_movements")
+        .upsert(fresh, { onConflict: "source_ref", ignoreDuplicates: true });
+      if (mErr) throw mErr;
+    }
+  }
+
+  // 3. Cost of sales: Dr COGS 5000 / Cr Stock 1200 at landed cost (keyed per
+  // dispatch, so it's booked once).
+  if (cogsValue > 0) {
+    const [cogs, stock] = await Promise.all([
+      resolveAccountForEntity(DIST_ENTITY, "5000"), resolveAccountForEntity(DIST_ENTITY, "1200"),
+    ]);
+    if (!cogs || !stock) console.error("dispatch: Distribution account 5000 or 1200 missing — cost of sales not booked for", head.dispatch_number);
+    else await postJournalEntry({
+      entityId: DIST_ENTITY, entryDate: journalDate || head.dispatch_date, memo: `Dispatch ${head.dispatch_number}`,
+      sourceKind: "dist_dispatch", sourceRef: `distdisp:${id}`, createdBy,
+      lines: [{ accountId: cogs, amount: +cogsValue.toFixed(2) }, { accountId: stock, amount: -cogsValue.toFixed(2) }],
+    });
+  }
+
+  const { error: pErr } = await supabase.from("dist_dispatches").update({ posted: true }).eq("id", id);
+  if (pErr) throw pErr;
+  return { lines: rows.length, movements: moveByRef.size, cogsValue: +cogsValue.toFixed(2) };
+}
+
+// DISPATCHSAVE 2026-10-24 — the dispatch lines an order's pick turns into.
+// Fresh (non-stocked) lines are charged AT COST — what the driver paid
+// (freshCosts[itemId]), else the pick's price.
+async function _dispatchLinesFromPick(pick, freshCosts = {}) {
+  const allItems = await fetchDistItems().catch(() => []);
+  const typeById = new Map(allItems.map(i => [i.id, i.itemType || "warehouse"]));
+  return (pick.lines || []).map(l => {
+    const isFresh = (typeById.get(l.itemId) || "warehouse") === "fresh";
+    const cost = isFresh && freshCosts[l.itemId] != null && freshCosts[l.itemId] !== "" ? Number(freshCosts[l.itemId]) : null;
+    return {
+      itemId: l.itemId, batchId: l.batchId, qty: l.qty,
+      unitPrice: isFresh ? (cost != null ? cost : (Number(l.unitPrice) || 0)) : (Number(l.unitPrice) || 0),
+      taxRateId: l.taxRateId || null, nonStock: isFresh,
+    };
+  });
+}
+
+// DISPATCHSAVE 2026-10-24 — finish a dispatch that stopped part-way. Rebuilds
+// its lines from the order's pick and adds only what's missing (see
+// _postDispatchBody). journalDate: when to book the cost of sales (defaults to
+// the dispatch's own date). Fresh lines already saved keep the price they had.
+export async function resumeDistDispatch(dispatchId, { journalDate = null, freshCosts = null, createdBy = null } = {}) {
+  const { data: head } = await supabase.from("dist_dispatches").select("*").eq("id", dispatchId).maybeSingle();
+  if (!head) throw new Error("Dispatch not found.");
+  if (head.posted) return { alreadyPosted: true };
+  const pick = head.pick_id ? (await fetchDistPicks({})).find(p => p.id === head.pick_id) : null;
+  if (!pick) throw new Error(`${head.dispatch_number}: its pick is missing, so the full list of what shipped can't be rebuilt.`);
+  let costs = freshCosts && Object.keys(freshCosts).length ? freshCosts : null;
+  if (!costs) {
+    const { data: saved } = await supabase.from("dist_dispatch_lines").select("item_id, unit_price").eq("dispatch_id", dispatchId);
+    costs = Object.fromEntries((saved || []).map(l => [l.item_id, l.unit_price]));
+  }
+  const lines = await _dispatchLinesFromPick(pick, costs);
+  if (!lines.length) throw new Error(`${head.dispatch_number}: its pick has no lines.`);
+  const res = await _postDispatchBody(head, lines, { createdBy: createdBy || head.created_by, journalDate });
+  if (head.pick_id) await supabase.from("dist_picks").update({ status: "dispatched" }).eq("id", head.pick_id);
+  return { ...res, soId: head.so_id, lines };
 }
 
 // Delete (reverse) a dispatch. Because dispatch posted stock-OUT movements + a
