@@ -14763,9 +14763,9 @@ export async function postDistDispatch(dispatch, lines = []) {
   // This used to live only in advanceDistOrderToDispatch, so dispatches made
   // or edited on the Dispatch screen never appeared on the store's Incoming
   // list and sat at "Awaiting store" for ever. Best-effort; never blocks.
-  if (dispatch.soId) {
+  if (dispatch.soId && !dispatch.skipMirror) {
     try {
-      await createStoreDeliveryFromDispatch(dispatch.soId, id, lines);
+      await createStoreDeliveryFromDispatch(dispatch.soId, id, lines, { silent: !!dispatch.mirrorSilent });
       await createCkDeliveryFromDispatch(dispatch.soId, id, lines);
     } catch (e) { console.error("delivery mirror failed:", e?.message || e); }
   }
@@ -14823,9 +14823,13 @@ export async function deleteDistDispatch(dispatchId) {
   // and the new one creates a fresh delivery. Older deliveries saved without a
   // dispatch id are matched by order.
   try {
+    // A delivery saved without a dispatch id only counts as this dispatch's
+    // when the order has no other dispatch left.
+    const { data: others } = await supabase.from("dist_dispatches").select("id").eq("so_id", head.so_id);
+    const onlyDispatch = !(others || []).length;
     const { data: dels } = await supabase.from("store_deliveries").select("id, dispatch_id, status")
       .eq("dist_order_id", head.so_id).eq("status", "incoming");
-    for (const d of (dels || []).filter(x => x.dispatch_id === dispatchId || !x.dispatch_id)) {
+    for (const d of (dels || []).filter(x => x.dispatch_id === dispatchId || (!x.dispatch_id && onlyDispatch))) {
       const { data: started } = await supabase.from("store_delivery_lines").select("id")
         .eq("delivery_id", d.id).not("qty_received", "is", null).limit(1);
       if (started && started.length) continue;
@@ -14835,6 +14839,9 @@ export async function deleteDistDispatch(dispatchId) {
     const { data: ckd } = await supabase.from("ck_deliveries").select("id")
       .eq("dispatch_id", dispatchId).eq("status", "incoming");
     for (const d of (ckd || [])) {
+      const { data: started } = await supabase.from("ck_delivery_lines").select("id")
+        .eq("delivery_id", d.id).not("qty_received", "is", null).limit(1);
+      if (started && started.length) continue;
       await supabase.from("ck_delivery_lines").delete().eq("delivery_id", d.id);
       await supabase.from("ck_deliveries").delete().eq("id", d.id);
     }
@@ -14852,10 +14859,25 @@ export async function updateDistDispatch(dispatch, lines = []) {
   const { data: head } = await supabase.from("dist_dispatches").select("*").eq("id", dispatch.id).maybeSingle();
   if (!head) throw new Error("Dispatch not found.");
   await deleteDistDispatch(dispatch.id); // guards invoices + reverses stock/journal
-  return postDistDispatch({
+  // INCOMING 2026-10-24 — deleteDistDispatch removed the store's delivery only
+  // if nobody had started receiving it. If one survived (being received or
+  // received), keep it and point it at the new dispatch rather than sending
+  // the store a second copy of the same goods.
+  const [{ data: keptStore }, { data: keptCk }] = await Promise.all([
+    supabase.from("store_deliveries").select("id").eq("dispatch_id", dispatch.id),
+    supabase.from("ck_deliveries").select("id").eq("dispatch_id", dispatch.id),
+  ]);
+  const kept = (keptStore || []).length || (keptCk || []).length;
+  const newId = await postDistDispatch({
     soId: head.so_id, pickId: head.pick_id, customerId: head.customer_id,
     dispatchDate: dispatch.dispatchDate || head.dispatch_date, note: dispatch.note ?? head.note, createdBy: head.created_by,
+    skipMirror: !!kept, mirrorSilent: true,
   }, lines);
+  if (kept) {
+    if ((keptStore || []).length) await supabase.from("store_deliveries").update({ dispatch_id: newId }).eq("dispatch_id", dispatch.id);
+    if ((keptCk || []).length) await supabase.from("ck_deliveries").update({ dispatch_id: newId }).eq("dispatch_id", dispatch.id);
+  }
+  return newId;
 }
 
 // ── INVOICES (Dr AR / Cr Sales + VAT) ──
@@ -18094,60 +18116,124 @@ async function _storeLinkProblem(soId) {
   return null;
 }
 
+// INCOMING 2026-10-24 — does this order's dispatch belong on a store's Incoming
+// list? { kind: "store" } yes; "ck" the kitchen receives it; "fresh" nothing
+// rides the van (fresh reaches the store on the driver's delivery); "unlinked"
+// the customer isn't linked to a store (reason says how to fix it).
+export async function checkStoreDeliveryFor(soId) {
+  if (await _isCkSalesOrder(soId)) return { kind: "ck" };
+  const problem = await _storeLinkProblem(soId);
+  if (problem) return { kind: "unlinked", reason: problem };
+  const { data: disp } = await supabase.from("dist_dispatches").select("id").eq("so_id", soId).eq("posted", true);
+  const ids = (disp || []).map(d => d.id);
+  if (!ids.length) return { kind: "store" };
+  const { data: dl } = await supabase.from("dist_dispatch_lines").select("dispatch_id, item_id, qty").in("dispatch_id", ids);
+  const van = await _vanLinesByDispatch(dl || [], [soId], new Map(ids.map(i => [i, soId])));
+  return [...van.values()].some(v => v.length) ? { kind: "store" } : { kind: "fresh" };
+}
+
+// Which dispatched lines ride the van to the store — the same rule the
+// delivery mirror uses (SO line channel wins; otherwise fresh items don't).
+// Batched lookups so the store screen doesn't pay a query per dispatch.
+async function _vanLinesByDispatch(dispatchLines, soIds, soByDispatch) {
+  const itemIds = [...new Set(dispatchLines.map(l => l.item_id).filter(Boolean))];
+  const [{ data: items }, { data: soLines }] = await Promise.all([
+    itemIds.length ? supabase.from("dist_items").select("id, item_type").in("id", itemIds) : Promise.resolve({ data: [] }),
+    soIds.length ? supabase.from("dist_sales_order_lines").select("so_id, item_id, fulfil_channel").in("so_id", soIds) : Promise.resolve({ data: [] }),
+  ]);
+  const typeById = new Map((items || []).map(i => [i.id, i.item_type || "warehouse"]));
+  const chan = new Map((soLines || []).filter(x => x.fulfil_channel).map(x => [`${x.so_id}:${x.item_id}`, x.fulfil_channel]));
+  const out = new Map();
+  dispatchLines.forEach(l => {
+    if (!out.has(l.dispatch_id)) out.set(l.dispatch_id, []);
+    if (!l.item_id || !(Number(l.qty) > 0)) return;
+    const ch = chan.get(`${soByDispatch.get(l.dispatch_id)}:${l.item_id}`);
+    const rides = ch ? ch === "warehouse" : typeById.get(l.item_id) !== "fresh";
+    if (rides) out.get(l.dispatch_id).push(l);
+  });
+  return out;
+}
+
 // INCOMING 2026-10-24 — put dispatched orders that never reached a store's
 // Incoming list onto it. Two ways in:
 //   { soId }            one order (the "Send to store" button on the order)
-//   { storeId, days }   every dispatch to that store in the last `days` days
-//                       (run each time the store opens Incoming Orders)
-// Skips any dispatch that already has a delivery (by dispatch, or for older
-// deliveries saved without a dispatch id, by order). Returns
-// { created: [deliveryId], problems: [{ soId, reason }] }.
-export async function ensureStoreDeliveries({ soId = null, storeId = null, days = 7 } = {}) {
+//   { storeId, days }   recent dispatches to that store (run each time the
+//                       store opens Incoming Orders)
+// SAFETY: an order that already has ANY store delivery — incoming, being
+// received or received, under any dispatch id — is never given another one
+// here. Receiving twice would double the store's stock and purchases, so the
+// repair only ever fills a complete gap. Only fully posted dispatches count.
+// Returns { created: [deliveryId], problems: [{ soId, reason }] }.
+export async function ensureStoreDeliveries({ soId = null, storeId = null, days = 3 } = {}) {
   const out = { created: [], problems: [] };
-  let q = supabase.from("dist_dispatches").select("id, so_id, customer_id, dispatch_date, created_at");
-  if (soId) q = q.eq("so_id", soId);
-  else if (storeId) {
-    const { data: contacts } = await supabase.from("dist_contacts").select("id").eq("store_id", storeId);
-    const ids = (contacts || []).map(c => c.id);
-    if (!ids.length) return out;
+  let dispatches = [];
+  if (soId) {
+    const { data, error } = await supabase.from("dist_dispatches")
+      .select("id, so_id, dispatch_date, created_at").eq("so_id", soId).eq("posted", true);
+    if (error) throw error;
+    dispatches = data || [];
+  } else if (storeId) {
     const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
-    q = q.in("customer_id", ids).gte("dispatch_date", since);
+    const { data, error } = await supabase.from("dist_dispatches")
+      .select("id, so_id, dispatch_date, created_at").gte("dispatch_date", since).eq("posted", true);
+    if (error) throw error;
+    dispatches = data || [];
   } else return out;
-  const { data: dispatches, error } = await q;
-  if (error) throw error;
-  const list = (dispatches || []).filter(d => d.so_id);
-  if (!list.length) return out;
+  dispatches = dispatches.filter(d => d.so_id);
+  if (!dispatches.length) return out;
 
-  const soIds = [...new Set(list.map(d => d.so_id))];
-  const [{ data: byDispatch }, { data: bySo }, { data: sos }] = await Promise.all([
-    supabase.from("store_deliveries").select("dispatch_id").in("dispatch_id", list.map(d => d.id)),
-    supabase.from("store_deliveries").select("dist_order_id, dispatch_id").in("dist_order_id", soIds),
-    supabase.from("dist_sales_orders").select("id, status").in("id", soIds),
+  const soIds = [...new Set(dispatches.map(d => d.so_id))];
+  const [{ data: sos }, { data: existing }] = await Promise.all([
+    supabase.from("dist_sales_orders").select("id, status, customer_id").in("id", soIds),
+    supabase.from("store_deliveries").select("dist_order_id").in("dist_order_id", soIds),
   ]);
-  const haveDispatch = new Set((byDispatch || []).map(r => r.dispatch_id));
-  const soHasUnlinked = new Set((bySo || []).filter(r => !r.dispatch_id).map(r => r.dist_order_id));
-  const cancelled = new Set((sos || []).filter(o => o.status === "cancelled").map(o => o.id));
+  const custIds = [...new Set((sos || []).map(o => o.customer_id).filter(Boolean))];
+  const { data: contacts } = custIds.length
+    ? await supabase.from("dist_contacts").select("id, store_id, is_central_kitchen").in("id", custIds)
+    : { data: [] };
+  const contactById = new Map((contacts || []).map(c => [c.id, c]));
+  const soById = new Map((sos || []).map(o => [o.id, o]));
+  const hasDelivery = new Set((existing || []).map(r => r.dist_order_id));
 
-  for (const d of list) {
-    if (haveDispatch.has(d.id) || soHasUnlinked.has(d.so_id) || cancelled.has(d.so_id)) continue;
-    if (await _isCkSalesOrder(d.so_id)) continue;          // the kitchen has its own receiving
-    const problem = await _storeLinkProblem(d.so_id);
-    if (problem) { out.problems.push({ soId: d.so_id, reason: problem }); continue; }
-    const { data: dl } = await supabase.from("dist_dispatch_lines")
-      .select("item_id, qty, unit_price").eq("dispatch_id", d.id);
+  const candidates = dispatches.filter(d => {
+    const so = soById.get(d.so_id);
+    if (!so || so.status === "cancelled" || hasDelivery.has(d.so_id)) return false;
+    const c = contactById.get(so.customer_id);
+    if (c?.is_central_kitchen) return false;                 // the kitchen has its own receiving
+    if (storeId) return !!c && c.store_id === storeId;        // same lookup the mirror uses: the ORDER's customer
+    return true;
+  });
+  if (!candidates.length) return out;
+  // Only one delivery per order from the repair (an order normally ships once).
+  const firstPerSo = new Map();
+  candidates.forEach(d => { if (!firstPerSo.has(d.so_id)) firstPerSo.set(d.so_id, d); });
+  const picked = [...firstPerSo.values()];
+
+  const { data: dl } = await supabase.from("dist_dispatch_lines")
+    .select("dispatch_id, item_id, qty, unit_price").in("dispatch_id", picked.map(d => d.id));
+  const van = await _vanLinesByDispatch(dl || [], picked.map(d => d.so_id), new Map(picked.map(d => [d.id, d.so_id])));
+
+  for (const d of picked) {
+    const lines = van.get(d.id) || [];
+    if (!lines.length) {
+      if (soId) out.problems.push({ soId: d.so_id, reason: "Everything on this order is fresh produce, which reaches the store on the driver's fresh delivery instead." });
+      continue;
+    }
+    if (soId) {
+      const problem = await _storeLinkProblem(d.so_id);
+      if (problem) { out.problems.push({ soId: d.so_id, reason: problem }); continue; }
+    }
     // One line per item (a dispatch splits an item across batches).
     const agg = new Map();
-    (dl || []).forEach(l => {
-      if (!l.item_id || !(Number(l.qty) > 0)) return;
+    lines.forEach(l => {
       const a = agg.get(l.item_id) || { itemId: l.item_id, qty: 0, unitPrice: l.unit_price != null ? Number(l.unit_price) : null };
       a.qty += Number(l.qty) || 0;
       agg.set(l.item_id, a);
     });
-    if (!agg.size) continue;
     const when = d.dispatch_date ? `${d.dispatch_date}T08:00:00Z` : (d.created_at || null);
     const id = await createStoreDeliveryFromDispatch(d.so_id, d.id, [...agg.values()], { dispatchedAt: when, silent: !soId });
     if (id) out.created.push(id);
-    else if (soId) out.problems.push({ soId: d.so_id, reason: "Everything on this order is fresh produce, which reaches the store on the driver's fresh delivery instead." });
+    else if (soId) out.problems.push({ soId: d.so_id, reason: "Couldn't add it to the store's list. Try again, or check the order's dispatch has items on it." });
   }
   return out;
 }
@@ -18175,6 +18261,22 @@ export async function createStoreDeliveryFromDispatch(soId, dispatchId, dispatch
       const { data: existing } = await supabase.from("store_deliveries")
         .select("id").eq("dispatch_id", dispatchId).limit(1);
       if (existing && existing.length) return existing[0].id;
+    }
+    // A delivery the store already started or finished, whose dispatch has since
+    // been deleted, is the same goods — re-point it at this dispatch instead of
+    // creating a second one the store could receive again.
+    if (dispatchId) {
+      const { data: started } = await supabase.from("store_deliveries")
+        .select("id, dispatch_id").eq("dist_order_id", soId).in("status", ["receiving", "confirmed"]);
+      if (started && started.length) {
+        const { data: live } = await supabase.from("dist_dispatches").select("id").eq("so_id", soId);
+        const liveIds = new Set((live || []).map(d => d.id).filter(id => id !== dispatchId));
+        const orphan = started.find(d => !d.dispatch_id || !liveIds.has(d.dispatch_id));
+        if (orphan) {
+          await supabase.from("store_deliveries").update({ dispatch_id: dispatchId }).eq("id", orphan.id);
+          return orphan.id;
+        }
+      }
     }
     const storeId = await _storeIdForSalesOrder(soId);
     if (!storeId) { console.warn("store delivery: no store for SO", soId); return null; }
@@ -18217,7 +18319,14 @@ export async function createStoreDeliveryFromDispatch(soId, dispatchId, dispatch
       .insert({ store_id: storeId, dist_order_id: soId, dispatch_id: dispatchId || null,
                 status: "incoming", dispatched_at: opts.dispatchedAt || new Date().toISOString() })
       .select().single();
-    if (hErr) { console.error("store delivery header failed:", hErr.message); return null; }
+    if (hErr) {
+      // Another device created it a moment ago (unique index on dispatch_id).
+      if (hErr.code === "23505" && dispatchId) {
+        const { data: again } = await supabase.from("store_deliveries").select("id").eq("dispatch_id", dispatchId).limit(1);
+        if (again && again.length) return again[0].id;
+      }
+      console.error("store delivery header failed:", hErr.message); return null;
+    }
 
     // Lines
     const lineRows = deliverable.map(l => {
@@ -18252,7 +18361,7 @@ export async function createStoreDeliveryFromDispatch(soId, dispatchId, dispatch
 export async function fetchIncomingDeliveries(storeId) {
   // INCOMING 2026-10-24 — first put any recent dispatch for this store that
   // never made it onto the list (see ensureStoreDeliveries). Never blocks.
-  try { await ensureStoreDeliveries({ storeId, days: 7 }); }
+  try { await ensureStoreDeliveries({ storeId, days: 3 }); }
   catch (e) { console.error("incoming repair failed:", e?.message || e); }
   const { data, error } = await supabase.from("store_deliveries")
     .select("*").eq("store_id", storeId).in("status", ["incoming", "receiving"])
@@ -18726,7 +18835,13 @@ export async function createCkDeliveryFromDispatch(soId, dispatchId, dispatchLin
       .insert({ site_id: siteId, dist_order_id: soId, dispatch_id: dispatchId || null,
                 status: "incoming", dispatched_at: new Date().toISOString() })
       .select().single();
-    if (hErr) { console.error("ck delivery header failed:", hErr.message); return null; }
+    if (hErr) {
+      if (hErr.code === "23505" && dispatchId) {
+        const { data: again } = await supabase.from("ck_deliveries").select("id").eq("dispatch_id", dispatchId).limit(1);
+        if (again && again.length) return again[0].id;
+      }
+      console.error("ck delivery header failed:", hErr.message); return null;
+    }
 
     const lineRows = (dispatchLines || []).map(l => {
       const di = distById.get(l.itemId) || {};

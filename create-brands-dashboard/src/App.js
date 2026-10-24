@@ -192,7 +192,7 @@ import {
   deleteDistInvoice, fetchDistInvoiceDetail, updateDistDispatch,
   updateDistPurchaseOrder, deleteDistPurchaseOrder, deleteDistGoodsReceipt, updateDistGoodsReceipt, deleteDistBill, deleteDistBillPayment,
   fetchDistPODetail, fetchDistGRNDetail, fetchDistBillDetail, fetchDistVendorDetail, fetchDistPaymentDetail,
-  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, ensureStoreDeliveries, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, fetchStoreOrderPrefs, saveStoreOrderPrefs, fetchChatGroups, createChatGroup, updateChatGroup, deleteChatGroup, deleteChatThread, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment, editPendingOrderLines, mergePendingOrders, fetchDeliverySourceReceipt, synthesizeInvoiceFromItems, normalizeReceiptDescription,
+  fetchIncomingDeliveries, fetchStoreDeliveryDetail, saveDeliveryReceipt, confirmStoreDelivery, fetchDeliveryShortfalls, fetchOrderStoreReceipt, ensureStoreDeliveries, checkStoreDeliveryFor, fetchFreshClaims, setFreshClaim, fetchBreakAudits, fetchAmendmentsForOrders, fetchOrderLinesLight, fetchCkClaims, setCkClaim, applyExpenseLineCorrections, fetchAliasFor, detachSoLines, enqueueCkLabelJob, enqueueDistDocPrint, fetchStoreItemName, fetchRecentFreshDeliveries, fetchPendingApprovalSos, fetchStoreOrderPrefs, saveStoreOrderPrefs, fetchChatGroups, createChatGroup, updateChatGroup, deleteChatGroup, deleteChatThread, requestOrderAmendment, cancelOrderAmendment, decideOrderAmendment, fetchOrderAmendment, editPendingOrderLines, mergePendingOrders, fetchDeliverySourceReceipt, synthesizeInvoiceFromItems, normalizeReceiptDescription,
   fetchRecipeCards, fetchRecipeCard, saveRecipeCard, deleteRecipeCard, duplicateRecipeCard, renameRecipeCard,
   renameRecipeMainCategory, renameRecipeCategory, moveRecipeCard, deleteRecipeMainCategory, deleteRecipeCategory, createRecipeInCategory,
   fetchFreshOrderCustomers, saveFreshOrderCustomers, freshAccessActive, setSoFreshAttached, deletePayPeriod, setSoTeamNotes, uploadIssuePhoto,
@@ -11669,12 +11669,18 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
   const [freshPrompt, setFreshPrompt] = useState(null); // { lines:[{itemId,name,qty}], costs:{} } before dispatch
   const [sendBusy, setSendBusy] = useState(false);      // INCOMING 2026-10-24 — "Send to store"
   const [sendMsg, setSendMsg] = useState("");
+  const [storeExpect, setStoreExpect] = useState(null); // { kind: store|ck|fresh|unlinked, reason }
   const [freshScan, setFreshScan] = useState(""); // scan status message
   const freshScanRef = useRef(null);
   useEffect(() => {
     let alive = true;
     fetchDistSalesOrderDetail(so.id).then(d => { if (alive) setDetail(d); }).catch(e => { if (alive) setErr(e.message); });
-    fetchOrderStoreReceipt(so.id).then(r => { if (alive) setReceipt(r); }).catch(() => {});
+    fetchOrderStoreReceipt(so.id).then(r => {
+      if (!alive) return;
+      setReceipt(r);
+      // INCOMING 2026-10-24 — only work out why there's no store delivery when there isn't one.
+      if (!r) checkStoreDeliveryFor(so.id).then(x => { if (alive) setStoreExpect(x); }).catch(() => {});
+    }).catch(() => {});
     fetchOrderAmendment(so.id).then(x => { if (alive) setAmendment(x); }).catch(() => {});
     return () => { alive = false; };
   }, [so.id]);
@@ -11876,11 +11882,14 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
                   order was dispatched, even when no delivery existed, so the store
                   had nothing to receive and nobody could tell. Now: on the store's
                   list = "Awaiting store"; not on it = say so and offer to send it. */}
-              <StatusRow label="Store receipt" value={!receipt ? (detail?.status.dispatched ? "Not on store's list" : "—") : receipt.status === "confirmed" ? (receipt.lines.some(l=>l.short) ? `Received · ${receipt.lines.filter(l=>l.short).length} short` : "Received in full") : receipt.lines.some(l => l.qtyReceived != null) ? "Receiving…" : "Awaiting store"} tone={!receipt ? (detail?.status.dispatched ? "text-amber-300" : "text-slate-400") : receipt.status === "confirmed" ? (receipt.lines.some(l=>l.short) ? "text-red-300" : "text-emerald-300") : "text-amber-300"}/>
+              <StatusRow label="Store receipt" value={!receipt ? (!detail?.status.dispatched ? "—" : storeExpect?.kind === "ck" ? "Kitchen receives it" : storeExpect?.kind === "fresh" ? "Fresh — on driver's delivery" : "Not on store's list") : receipt.status === "confirmed" ? (receipt.lines.some(l=>l.short) ? `Received · ${receipt.lines.filter(l=>l.short).length} short` : "Received in full") : receipt.lines.some(l => l.qtyReceived != null) ? "Receiving…" : "Awaiting store"} tone={!receipt ? (detail?.status.dispatched && !["ck", "fresh"].includes(storeExpect?.kind) ? "text-amber-300" : "text-slate-400") : receipt.status === "confirmed" ? (receipt.lines.some(l=>l.short) ? "text-red-300" : "text-emerald-300") : "text-amber-300"}/>
             </div>
-            {!receipt && detail?.status.dispatched && (
+            {!receipt && detail?.status.dispatched && storeExpect && !["ck", "fresh"].includes(storeExpect.kind) && (
               <div className="mt-2 rounded-lg border border-amber-800/60 bg-amber-950/30 p-2.5 space-y-2">
                 <div className="text-[11px] text-amber-200">This order was dispatched but isn't on the store's Incoming Orders, so they can't check it in.</div>
+                {storeExpect.kind === "unlinked" ? (
+                  <div className="text-[11px] text-red-300">{storeExpect.reason}</div>
+                ) : (<>
                 <button disabled={sendBusy} onClick={async () => {
                   setSendBusy(true); setSendMsg("");
                   try {
@@ -11894,6 +11903,7 @@ function DistSalesOrderDetail({ so, customer, items, taxRates, onClose, onEdit, 
                   {sendBusy ? "Sending…" : "Send to store"}
                 </button>
                 {sendMsg && <div className="text-[11px] text-red-300">{sendMsg}</div>}
+                </>)}
               </div>
             )}
 
