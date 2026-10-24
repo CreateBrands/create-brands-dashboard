@@ -18124,12 +18124,12 @@ export async function checkStoreDeliveryFor(soId) {
   if (await _isCkSalesOrder(soId)) return { kind: "ck" };
   const problem = await _storeLinkProblem(soId);
   if (problem) return { kind: "unlinked", reason: problem };
-  const { data: disp } = await supabase.from("dist_dispatches").select("id").eq("so_id", soId).eq("posted", true);
-  const ids = (disp || []).map(d => d.id);
-  if (!ids.length) return { kind: "store" };
-  const { data: dl } = await supabase.from("dist_dispatch_lines").select("dispatch_id, item_id, qty").in("dispatch_id", ids);
-  const van = await _vanLinesByDispatch(dl || [], [soId], new Map(ids.map(i => [i, soId])));
-  return [...van.values()].some(v => v.length) ? { kind: "store" } : { kind: "fresh" };
+  // Judge by the order's lines: they're what was invoiced, and a dispatch that
+  // stopped part-way may hold none.
+  const { data: soLines } = await supabase.from("dist_sales_order_lines").select("item_id, qty").eq("so_id", soId);
+  const rows = (soLines || []).map(l => ({ dispatch_id: "order", item_id: l.item_id, qty: l.qty }));
+  const van = await _vanLinesByDispatch(rows, [soId], new Map([["order", soId]]));
+  return (van.get("order") || []).length ? { kind: "store" } : { kind: "fresh" };
 }
 
 // Which dispatched lines ride the van to the store — the same rule the
@@ -18166,20 +18166,31 @@ async function _vanLinesByDispatch(dispatchLines, soIds, soByDispatch) {
 // Returns { created: [deliveryId], problems: [{ soId, reason }] }.
 export async function ensureStoreDeliveries({ soId = null, storeId = null, days = 3 } = {}) {
   const out = { created: [], problems: [] };
+  // INCOMING 2026-10-24c — a dispatch that's still saving (posted = false,
+  // under 15 minutes old) is left alone. One that stopped part-way and never
+  // finished (posted = false, older) is real: the order was still invoiced from
+  // its own lines, so the store's copy is built from those lines instead.
+  const STUCK_MS = 15 * 60000;
+  const isStuck = d => !d.posted && d.created_at && (Date.now() - Date.parse(d.created_at)) > STUCK_MS;
   let dispatches = [];
   if (soId) {
     const { data, error } = await supabase.from("dist_dispatches")
-      .select("id, so_id, dispatch_date, created_at").eq("so_id", soId).eq("posted", true);
+      .select("id, so_id, dispatch_date, created_at, posted").eq("so_id", soId);
     if (error) throw error;
     dispatches = data || [];
+    if (!dispatches.length) { out.problems.push({ soId, reason: "This order hasn't been dispatched yet." }); return out; }
+    if (!dispatches.some(d => d.posted || isStuck(d))) {
+      out.problems.push({ soId, reason: "The dispatch is still saving. Try again in a minute." });
+      return out;
+    }
   } else if (storeId) {
     const since = new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
     const { data, error } = await supabase.from("dist_dispatches")
-      .select("id, so_id, dispatch_date, created_at").gte("dispatch_date", since).eq("posted", true);
+      .select("id, so_id, dispatch_date, created_at, posted").gte("dispatch_date", since);
     if (error) throw error;
     dispatches = data || [];
   } else return out;
-  dispatches = dispatches.filter(d => d.so_id);
+  dispatches = dispatches.filter(d => d.so_id && (d.posted || isStuck(d)));
   if (!dispatches.length) return out;
 
   const soIds = [...new Set(dispatches.map(d => d.so_id))];
@@ -18205,13 +18216,31 @@ export async function ensureStoreDeliveries({ soId = null, storeId = null, days 
   });
   if (!candidates.length) return out;
   // Only one delivery per order from the repair (an order normally ships once).
+  // Prefer a finished dispatch over a stuck one.
   const firstPerSo = new Map();
-  candidates.forEach(d => { if (!firstPerSo.has(d.so_id)) firstPerSo.set(d.so_id, d); });
+  candidates.forEach(d => {
+    const cur = firstPerSo.get(d.so_id);
+    if (!cur || (!cur.posted && d.posted)) firstPerSo.set(d.so_id, d);
+  });
   const picked = [...firstPerSo.values()];
 
-  const { data: dl } = await supabase.from("dist_dispatch_lines")
+  // Lines: the dispatch's own for a finished dispatch; the ORDER's for a stuck
+  // one (or a finished one that saved no lines) — that's what was invoiced.
+  const { data: dlRaw } = await supabase.from("dist_dispatch_lines")
     .select("dispatch_id, item_id, qty, unit_price").in("dispatch_id", picked.map(d => d.id));
-  const van = await _vanLinesByDispatch(dl || [], picked.map(d => d.so_id), new Map(picked.map(d => [d.id, d.so_id])));
+  const dlByDispatch = new Map();
+  (dlRaw || []).forEach(l => { if (!dlByDispatch.has(l.dispatch_id)) dlByDispatch.set(l.dispatch_id, []); dlByDispatch.get(l.dispatch_id).push(l); });
+  const fromOrder = picked.filter(d => !d.posted || !(dlByDispatch.get(d.id) || []).length);
+  if (fromOrder.length) {
+    const { data: soLines } = await supabase.from("dist_sales_order_lines")
+      .select("so_id, item_id, qty, unit_price").in("so_id", fromOrder.map(d => d.so_id));
+    fromOrder.forEach(d => {
+      dlByDispatch.set(d.id, (soLines || []).filter(l => l.so_id === d.so_id)
+        .map(l => ({ dispatch_id: d.id, item_id: l.item_id, qty: l.qty, unit_price: l.unit_price })));
+    });
+  }
+  const dl = picked.flatMap(d => dlByDispatch.get(d.id) || []);
+  const van = await _vanLinesByDispatch(dl, picked.map(d => d.so_id), new Map(picked.map(d => [d.id, d.so_id])));
 
   for (const d of picked) {
     const lines = van.get(d.id) || [];
